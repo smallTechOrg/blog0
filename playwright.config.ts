@@ -1,8 +1,11 @@
 import { loadEnvConfig } from '@next/env';
 import { defineConfig, devices } from '@playwright/test';
 
+import { E2E_STORAGE_DIR } from './tests/e2e/helpers/upload';
+
 // E2E runs the SAME `pnpm start` as production, on port 3411, against blog0_test.
 // `pnpm build` must have run first. BLOG0_E2E_BASE_URL points at an already-running server instead.
+// Uploaded media go to var/storage-e2e (wiped by global-setup.ts), never the dev server's var/storage.
 
 loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
 
@@ -41,6 +44,7 @@ export default defineConfig({
           BLOG0_DATABASE_URL: testDatabaseUrl,
           BLOG0_PUBLIC_BASE_URL: `http://localhost:${E2E_PORT}`,
           BLOG0_LOG_FILE: 'test-results/e2e-server.log',
+          BLOG0_STORAGE_DIR: E2E_STORAGE_DIR,
         },
         reuseExistingServer: false,
         timeout: 120_000,

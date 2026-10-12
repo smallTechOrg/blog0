@@ -24,7 +24,7 @@ import {
 // Latest), card TLDR → deck over the list, Archive + topic filter, About, newsletter →
 // Admin → Subscribers, Admin → Site → About text, paragraph / article / deck share (desktop menu
 // and stubbed native sheet on mobile), deep links, theme persistence, legacy hash links, OG tags,
-// sitemap, and the Listen stub.
+// sitemap, and Listen without a recording (disabled; the Phase 3 walk is phase3-listen.spec.ts).
 //
 // phase1-tldr.spec.ts runs before this file and publishes one more Op-Ed article, so counts that
 // depend on "every published article" are read from blog0_test rather than hard-coded.
@@ -568,17 +568,20 @@ test.describe('Phase 2 reader site (blog0)', () => {
     expect(locs).toHaveLength(published.length + 3);
   });
 
-  test('Listen stays a labelled stub: the capsule’s Listen opens "Coming in a later phase"', async ({ page }) => {
+  // Phase 3 replaced the Listen stub (S3.5); the real walk is phase3-listen.spec.ts. A seeded
+  // article has no recording: Listen is disabled with its reason, and /listen falls back to Read.
+  test('without a recording the capsule’s Listen is disabled ("No recording yet") and /listen falls back to Read', async ({ page }) => {
     await page.goto(`/p/${SEEDED.humans.slug}`);
-    const listen = page.locator('.modedock').getByRole('tab', { name: 'Listen — coming in a later phase' });
+    const listen = page.locator('.modedock').getByRole('tab', { name: 'Listen — no recording yet' });
     await expect(listen).toBeVisible();
+    await expect(listen).toBeDisabled();
+    await expect(listen).toHaveAttribute('title', 'No recording yet');
 
-    await listen.click();
+    await page.goto(`/p/${SEEDED.humans.slug}/listen`);
 
-    const stub = page.locator('.listenview');
-    await expect(stub).toBeVisible();
-    await expect(stub.locator('.stub')).toContainText('Coming in a later phase');
-    await expect(stub.locator('.stub')).toContainText('Listen arrives in Phase 3');
+    await expect(page).toHaveURL(new RegExp(`/p/${SEEDED.humans.slug}$`));
+    await expect(page.locator('.listenview')).toHaveCount(0);
+    await expect(page.locator('.readbody')).toBeVisible();
   });
 
   test('See More: with more than 5 non-featured posts, Latest shows 5, then all of them', async ({ page }, testInfo) => {

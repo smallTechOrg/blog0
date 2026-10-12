@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { expect, test } from '@playwright/test';
 
 import { signInThroughForm } from './helpers/admin';
+import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
 import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGNER_ENV } from './designer.global-setup';
 
 // Designer mode end to end (S2.10, spec/capabilities/designer-mode.md → Success Criteria): the site
@@ -21,6 +23,8 @@ const SEED_TITLES = [
 ];
 const EDITORS_DISCLOSURE = 'Lines selected by the editors, verbatim from the article.';
 const NO_KEY_NOTICE = 'No OpenRouter key configured';
+/** Designer mode sets no BLOG0_STORAGE_DIR: uploads land in the default ./var/storage. */
+const DEFAULT_STORAGE_DIR = 'var/storage';
 
 interface DeckFixture {
   slug: string;
@@ -158,5 +162,34 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     });
     expect(res.status()).toBe(503);
     expect(await res.json()).toMatchObject({ ok: false, error: { code: 'LLM_NOT_CONFIGURED' } });
+  });
+
+  test('an mp3 upload streams back from /media/<key> (206) on PGlite; the file lands in ./var/storage and Remove deletes it', async ({ page }) => {
+    const origin = `http://localhost:${DESIGN_E2E_PORT}`;
+    const audioMeta = audioFixtureMeta();
+    await page.goto('/admin/login');
+    await signInThroughForm(page, designer());
+    const list = await page.request.get('/api/admin/articles');
+    expect(list.status()).toBe(200);
+    const articles = ((await list.json()) as { data: { articles: { id: string; slug: string }[] } }).data.articles;
+    const article = articles.find((a) => a.slug === SLUG);
+    expect(article, `seeded article ${SLUG}`).toBeTruthy();
+
+    const uploaded = await uploadSampleMp3(page.request, article!.id, origin);
+
+    expect(uploaded.status).toBe('needs_sync');
+    expect(uploaded.audio).toMatchObject({ mimeType: 'audio/mpeg', bytes: audioMeta.mp3.bytes, url: `/media/${uploaded.audio.key}` });
+    expect(Math.abs(uploaded.audio.durationMs - audioMeta.mp3.durationMs)).toBeLessThanOrEqual(500);
+    const stored = path.join(DEFAULT_STORAGE_DIR, uploaded.audio.key);
+    expect(existsSync(stored), `${stored} exists`).toBe(true);
+    const head = await expectRange206(page.request, uploaded.audio.url, audioMeta.mp3.bytes);
+    expect(head.equals(readFileSync(stored).subarray(0, 2))).toBe(true);
+
+    // Clean up the designer's storage dir: removing the (never published) recording deletes the file.
+    const removed = await page.request.delete(`/api/admin/articles/${article!.id}/audio`, { headers: { origin } });
+    expect(removed.status(), await removed.text()).toBe(200);
+    expect(((await removed.json()) as { data: { listen: { status: string } } }).data.listen.status).toBe('missing');
+    expect(existsSync(stored)).toBe(false);
+    expect((await page.request.get(uploaded.audio.url)).status()).toBe(404);
   });
 });
