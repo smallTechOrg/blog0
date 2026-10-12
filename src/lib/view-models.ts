@@ -23,6 +23,15 @@ export interface DeckViewModel {
   shareUrl: string; // absolute …/p/<slug>/tldr
 }
 
+/** The published Listen (spec/architecture.md §3; Phase 3): the recording + its paragraph marks. */
+export interface ListenViewModel {
+  audioUrl: string; // '/media/' + key (same-origin)
+  mimeType: 'audio/mpeg' | 'audio/mp4';
+  durationMs: number;
+  marks: Array<{ pid: string; tMs: number }>; // published marks over the published revision
+  shareUrl: string; // absolute …/p/<slug>/listen
+}
+
 export interface ArticleViewModel {
   slug: string;
   title: string;
@@ -35,7 +44,7 @@ export interface ArticleViewModel {
   blocks: Block[]; // from RenderedArticle
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null; // published deck only
-  listen: null; // Phase 3 widens this type
+  listen: ListenViewModel | null; // published Listen only; null without one
   correctionsHtml: string | null; // Phase 4
   next: { slug: string; title: string } | null;
   articleUrl: string; // absolute

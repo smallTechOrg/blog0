@@ -6,16 +6,20 @@ import { createPortal } from 'react-dom';
 
 import { TldrDeck } from '@/components/reader/TldrDeck';
 import type { PublicTldrDto } from '@/lib/api/dto-phase2';
+import type { PublicListenDto } from '@/lib/api/dto-phase3';
 import { buildDeckSlides } from '@/lib/deck/timing';
 
+import { ListenOverlay } from './ListenOverlay';
+
 /* ============================================================
-   Summary overlay host — TLDR straight from a list page (design
-   `App` → `summary.mode === 'tldr'` → TldrDeck). The deck opens over
-   the list without changing the address; X / Escape close it and the
-   deck itself puts the page back exactly where the reader left it.
+   Summary overlay host — TLDR or Listen straight from a list page (design
+   `App` → `summary.mode`): the deck or the compact player opens over the
+   list without changing the address; X / Escape close it and the page is
+   put back exactly where the reader left it. The two hand over to each
+   other for the same post (deck's Listen ↔ overlay's TLDR) through
+   `onSwitch`; the card loads whichever payload is still missing.
    Rendered into the site root (a portal) so a transformed ancestor —
-   the featured stack — can never trap the fixed-position deck.
-   Listen from a card is Phase 3: the deck's Listen stays disabled.
+   the featured stack — can never trap the fixed-position sheet.
    ============================================================ */
 
 /** Endpoint for a card's deck (spec/api.md Phase 2). */
@@ -23,8 +27,23 @@ export function publicTldrUrl(slug: string): string {
   return '/api/public/articles/' + encodeURIComponent(slug) + '/tldr';
 }
 
+/** Endpoint for a card's recording (spec/api.md Phase 3). */
+export function publicListenUrl(slug: string): string {
+  return '/api/public/articles/' + encodeURIComponent(slug) + '/listen';
+}
+
+export type SummaryMode = 'tldr' | 'listen';
+
 export interface SummaryHostProps {
-  deck: PublicTldrDto;
+  mode: SummaryMode;
+  slug: string;
+  /** Required in `tldr` mode. */
+  deck?: PublicTldrDto | null;
+  /** Required in `listen` mode. */
+  listen?: PublicListenDto | null;
+  /** The other mode is available for this post (the capsule button is enabled). */
+  canSwitch: { tldr: boolean; listen: boolean };
+  onSwitch: (mode: SummaryMode) => void;
   onClose: () => void;
   /** The site record's wordmark for the deck's share text; omitted → read from the masthead. */
   brand?: string;
@@ -44,19 +63,38 @@ export function siteBrandFromDocument(doc: Pick<Document, 'querySelector'>): str
   return brand || null;
 }
 
-export function SummaryHost({ deck, onClose, brand }: SummaryHostProps) {
+export function SummaryHost({ mode, slug, deck, listen, canSwitch, onSwitch, onClose, brand }: SummaryHostProps) {
   const router = useRouter();
   const slides = useMemo(
-    () => buildDeckSlides(deck.title, deck.dek, deck.slides.map((s) => s.text)),
-    [deck.title, deck.dek, deck.slides],
+    () => (deck ? buildDeckSlides(deck.title, deck.dek, deck.slides.map((s) => s.text)) : []),
+    [deck],
   );
   if (typeof document === 'undefined') return null;
   const host = document.getElementById('blog0-root') ?? document.body;
   const siteBrand = brand || siteBrandFromDocument(document) || undefined;
+  const openArticle = () => {
+    onClose();
+    router.push('/p/' + slug);
+  };
 
+  if (mode === 'listen') {
+    if (!listen) return null;
+    return createPortal(
+      <ListenOverlay
+        key={slug + '-listen'}
+        listen={listen}
+        onClose={onClose}
+        onRead={openArticle}
+        onTldr={canSwitch.tldr ? () => onSwitch('tldr') : undefined}
+      />,
+      host,
+    );
+  }
+
+  if (!deck) return null;
   return createPortal(
     <TldrDeck
-      key={deck.slug + '-deck'}
+      key={slug + '-deck'}
       slides={slides}
       title={deck.title}
       tag={deck.topic}
@@ -66,10 +104,8 @@ export function SummaryHost({ deck, onClose, brand }: SummaryHostProps) {
       brand={siteBrand}
       times={deck.times}
       onClose={onClose}
-      onRead={() => {
-        onClose();
-        router.push('/p/' + deck.slug);
-      }}
+      onRead={openArticle}
+      onListen={canSwitch.listen ? () => onSwitch('listen') : undefined}
     />,
     host,
   );

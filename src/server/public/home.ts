@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
 import { fmtDate } from '@/lib/format-date';
@@ -11,7 +12,7 @@ import { getDb } from '../db/client';
 import { article, articleFormat, articleRevision } from '../db/schema';
 import { getCurrentSite } from '../site/current';
 
-import { parsePublishedDeck } from './articles';
+import { parsePublishedDeck, publishedListenMinutes } from './articles';
 
 // Home page data (spec/ui.md §3 "Home"; spec/capabilities/reader-site.md "Business Rules"):
 // Featured = published articles flagged featured, by rank (then newest), max FEATURED_MAX;
@@ -73,6 +74,9 @@ export async function isAdminSignedIn(token: string | null | undefined): Promise
   return (await validateSessionToken(token, site.id)) !== null;
 }
 
+/** The `listen` format row joined beside the `tldr` one (two rows of the same table). */
+const listenFormat = alias(articleFormat, 'listen_format');
+
 /** Every published article of the current site as a card row (newest first). */
 async function publishedHomeRows(): Promise<HomeRow<PostCardViewModel>[]> {
   const site = await getCurrentSite();
@@ -88,10 +92,12 @@ async function publishedHomeRows(): Promise<HomeRow<PostCardViewModel>[]> {
       title: articleRevision.title,
       dek: articleRevision.dek,
       deckPayload: articleFormat.publishedPayload,
+      listenPayload: listenFormat.publishedPayload,
     })
     .from(article)
     .innerJoin(articleRevision, eq(articleRevision.id, article.publishedRevisionId))
     .leftJoin(articleFormat, and(eq(articleFormat.articleId, article.id), eq(articleFormat.kind, 'tldr')))
+    .leftJoin(listenFormat, and(eq(listenFormat.articleId, article.id), eq(listenFormat.kind, 'listen')))
     .where(
       and(
         eq(article.siteId, site.id),
@@ -120,7 +126,8 @@ async function publishedHomeRows(): Promise<HomeRow<PostCardViewModel>[]> {
         times: {
           // the design's formula over the whole deck (intro slide included), as on the article page
           tldr: payload ? tldrMinutes(buildDeckSlides(r.title, r.dek, payload.slides.map((s) => s.text))) : null,
-          listen: null, // Phase 3
+          // the published recording's minutes — never the draft's (spec/capabilities/listen-audio.md)
+          listen: publishedListenMinutes(r.listenPayload, { articleId: r.id }),
         },
       },
     };

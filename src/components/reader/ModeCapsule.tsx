@@ -10,7 +10,7 @@ export type ReaderMode = 'read' | 'tldr' | 'listen';
 export interface ModeCapsuleProps {
   /** Which mode is lit (`tldr` while the deck is open). */
   active: ReaderMode;
-  /** Minutes; `tldr: null` disables TLDR ("No summary yet"), `listen: null` shows "—". */
+  /** Minutes; `tldr: null` disables TLDR ("No summary yet"), `listen: null` disables Listen ("No recording yet"). */
   times: { read: number; tldr: number | null; listen: number | null };
   onPick: (mode: ReaderMode) => void;
 }
@@ -21,6 +21,13 @@ const MODES: Array<[ReaderMode, string, IconName]> = [
   ['listen', 'Listen', 'headphones'],
 ];
 
+/** The disabled reason per mode (design: "Audio is not recorded yet"; divergence 9 resolved). */
+const MISSING: Record<ReaderMode, { title: string; aria: string }> = {
+  read: { title: '', aria: 'Read' },
+  tldr: { title: 'No summary yet', aria: 'TLDR — no summary yet' },
+  listen: { title: 'No recording yet', aria: 'Listen — no recording yet' },
+};
+
 /** The Read / TLDR / Listen capsule (design `.modes.modes--timed`). Place inside `.modedock`. */
 export function ModeCapsule({ active, times, onPick }: ModeCapsuleProps) {
   return (
@@ -28,13 +35,7 @@ export function ModeCapsule({ active, times, onPick }: ModeCapsuleProps) {
       {MODES.map(([key, label, icon]) => {
         const on = active === key;
         const min = times[key];
-        const noDeck = key === 'tldr' && min == null;
-        const aria =
-          min != null
-            ? label + ' — ' + min + ' min'
-            : key === 'tldr'
-              ? 'TLDR — no summary yet'
-              : label + ' — coming in a later phase';
+        const missing = min == null;
         return (
           <button
             key={key}
@@ -42,9 +43,9 @@ export function ModeCapsule({ active, times, onPick }: ModeCapsuleProps) {
             className={cx('mode', on && 'is-on')}
             role="tab"
             aria-selected={on ? 'true' : 'false'}
-            aria-label={aria}
-            disabled={noDeck}
-            title={noDeck ? 'No summary yet' : undefined}
+            aria-label={missing ? MISSING[key].aria : label + ' — ' + min + ' min'}
+            disabled={missing}
+            title={missing ? MISSING[key].title : undefined}
             onClick={() => onPick(key)}
           >
             <Icon name={icon} size={14} />

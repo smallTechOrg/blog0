@@ -23,6 +23,12 @@ describe('slugFromArticlePath', () => {
     expect(slugFromArticlePath('/p/measure-the-work/tldr')).toBe('measure-the-work');
   });
 
+  it('extracts the slug from the /listen share path (Phase 3)', () => {
+    expect(slugFromArticlePath('/p/measure-the-work/listen')).toBe('measure-the-work');
+    expect(slugFromArticlePath('/p/measure-the-work/listen/')).toBe('measure-the-work');
+    expect(slugFromArticlePath('/p/a/listen/extra')).toBeNull();
+  });
+
   it('accepts a trailing slash on both shapes', () => {
     expect(slugFromArticlePath('/p/measure-the-work/')).toBe('measure-the-work');
     expect(slugFromArticlePath('/p/measure-the-work/tldr/')).toBe('measure-the-work');
@@ -50,8 +56,8 @@ describe('slugFromArticlePath', () => {
 });
 
 describe('proxy config', () => {
-  it('matches only the article and TLDR share routes', () => {
-    expect(config.matcher).toEqual(['/p/:slug', '/p/:slug/tldr']);
+  it('matches only the article, TLDR and Listen share routes', () => {
+    expect(config.matcher).toEqual(['/p/:slug', '/p/:slug/tldr', '/p/:slug/listen']);
   });
 
   it('rewrites to an internal path no route matches', () => {

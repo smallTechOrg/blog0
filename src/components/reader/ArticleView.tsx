@@ -9,7 +9,7 @@ import type { ArticleViewModel } from '@/lib/view-models';
 
 import { ArticleBody } from './ArticleBody';
 import { ArticleFoot } from './ArticleFoot';
-import { ListenStub } from './ListenStub';
+import { ListenView } from './ListenView';
 import { ModeBar } from './ModeBar';
 import { ModeCapsule, type ReaderMode } from './ModeCapsule';
 import { ParagraphShare } from './ParagraphShare';
@@ -21,38 +21,45 @@ import { TldrDeck } from './TldrDeck';
    modebar strip, readhead, readbody, artfoot, and the capsule docked at the
    base of the viewport. TLDR opens the deck over the article; the tab
    underneath stays on Read, so closing the deck puts the reader back
-   exactly where they were. */
+   exactly where they were. Listen replaces the Read column with the player
+   and the synced text; both are part of the address (/tldr, /listen). */
+export type ArticleInitialMode = 'read' | 'tldr' | 'listen';
+
 export interface ArticleViewProps {
   article: ArticleViewModel;
-  /** `'tldr'` when the page was loaded at /p/<slug>/tldr (ignored without a published deck). */
-  initialMode?: 'read' | 'tldr';
+  /** `'tldr'` at /p/<slug>/tldr (ignored without a published deck); `'listen'` at /p/<slug>/listen
+      (ignored without a published Listen). */
+  initialMode?: ArticleInitialMode;
   /** The site record's wordmark — the brand in every outgoing share text (spec/capabilities/paragraph-share.md). */
   brand?: string;
 }
 
 export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK_BRAND }: ArticleViewProps) {
   const router = useRouter();
-  const [mode, setMode] = useState<'read' | 'listen'>('read');
+  const [mode, setMode] = useState<'read' | 'listen'>(initialMode === 'listen' && a.listen != null ? 'listen' : 'read');
   /* the deck is part of the address: /p/<slug>/tldr opens it, closing returns to /p/<slug> */
   const [deck, setDeck] = useState(initialMode === 'tldr' && a.deck != null);
 
+  const listening = mode === 'listen';
   const base = '/p/' + a.slug;
   const firstRun = useRef(true);
   useEffect(() => {
+    const want = deck ? base + '/tldr' : listening ? base + '/listen' : base;
     if (firstRun.current) {
       firstRun.current = false;
-      // A /tldr load without a published deck falls back to Read at the plain address.
-      if (deck || !window.location.pathname.endsWith('/tldr')) return;
+      // A /tldr or /listen load without the published format falls back to Read at the plain
+      // address; a plain load never rewrites anything.
+      const path = window.location.pathname.replace(/\/$/, '');
+      if (path === want || !/\/(tldr|listen)$/.test(path)) return;
     }
     try {
-      const want = deck ? base + '/tldr' : base;
       if (window.location.pathname !== want) {
         window.history.replaceState(window.history.state, '', want + window.location.search);
       }
     } catch {
-      /* history unavailable (sandboxed frames) — the deck still works */
+      /* history unavailable (sandboxed frames) — the deck and the player still work */
     }
-  }, [deck, base]);
+  }, [deck, listening, base]);
 
   /* one share surface for the page: paragraphs, selections and Share article */
   const sharing = useShare(brand);
@@ -68,10 +75,9 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
       if (a.deck) setDeck(true);
       return;
     }
+    if (k === 'listen' && !a.listen) return;
     setMode(k);
   }
-
-  const listening = mode === 'listen';
 
   return (
     <main className="modeframe">
@@ -85,9 +91,19 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
           }}
         />
 
-        {/* Listen: the title and the player, nothing else on screen. Read comes
-            back with the capsule or the X. */}
-        {listening ? <ListenStub topic={a.topic} title={a.title} /> : null}
+        {/* Listen: the title and the player beside the text, the paragraph being read lit.
+            Read comes back with the capsule, Escape or the X. */}
+        {listening && a.listen ? (
+          <ListenView
+            key={a.slug + '-listen'}
+            topic={a.topic}
+            title={a.title}
+            bylineName={a.bylineName}
+            blocks={a.blocks}
+            listen={a.listen}
+            onClose={() => setMode('read')}
+          />
+        ) : null}
 
         {/* Read: tag and author/date across the top, then title, dek, body */}
         {!listening ? (
@@ -119,10 +135,14 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
               setDeck(false);
               setMode('read');
             }}
-            onListen={() => {
-              setDeck(false);
-              setMode('listen');
-            }}
+            onListen={
+              a.listen
+                ? () => {
+                    setDeck(false);
+                    setMode('listen');
+                  }
+                : undefined
+            }
           />
         ) : null}
 

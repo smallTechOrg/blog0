@@ -14,14 +14,14 @@ import { publishedSlugExists } from '@/server/public/articles';
 // The page's own notFound() stays as the fallback (e.g. an article unpublished between the two reads).
 
 export const config = {
-  matcher: ['/p/:slug', '/p/:slug/tldr'],
+  matcher: ['/p/:slug', '/p/:slug/tldr', '/p/:slug/listen'],
 };
 
 /** An internal path no route matches, so the root not-found renders with a 404 status. */
 export const ARTICLE_NOT_FOUND_PATH = '/_blog0/article-not-found';
 
 export function slugFromArticlePath(pathname: string): string | null {
-  const m = /^\/p\/([^/]+)(?:\/tldr)?\/?$/.exec(pathname);
+  const m = /^\/p\/([^/]+)(?:\/tldr|\/listen)?\/?$/.exec(pathname);
   if (!m) return null;
   try {
     return decodeURIComponent(m[1]);
@@ -40,6 +40,13 @@ export function errorCode(err: unknown): string {
   return 'unknown';
 }
 
+/** The matched route shape for the failure log (never the slug itself). */
+function routeShape(pathname: string): string {
+  if (/\/tldr\/?$/.test(pathname)) return '/p/:slug/tldr';
+  if (/\/listen\/?$/.test(pathname)) return '/p/:slug/listen';
+  return '/p/:slug';
+}
+
 export async function proxy(request: NextRequest): Promise<NextResponse> {
   const slug = slugFromArticlePath(request.nextUrl.pathname);
   if (slug === null) return NextResponse.next();
@@ -53,7 +60,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     // connection details) — only the matched route shape and a machine error code.
     log.warn('proxy.slug_check_failed', {
       msg: 'Published-slug pre-check failed; falling through to the page',
-      path: /\/tldr\/?$/.test(request.nextUrl.pathname) ? '/p/:slug/tldr' : '/p/:slug',
+      path: routeShape(request.nextUrl.pathname),
       err_code: errorCode(err),
     });
     return NextResponse.next();
