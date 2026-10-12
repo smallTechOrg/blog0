@@ -13,8 +13,9 @@ import { AUDIO_FIXTURE, IMAGE_FIXTURE, audioFixtureMeta, expectRange206, pngFixt
 // view: player beside the text, highlight follows currentTime, the seek bar and a paragraph click
 // jump it → /media/<key> answers 206 to a byte range → edit a synced paragraph + Save → Listen
 // stale with the re-sync warning, publish blocked with "Go to Listen", the live page keeps the old
-// Listen → home card Listen opens the compact overlay. Listen never calls the LLM: zero new
-// ai_generation rows.
+// Listen → home card Listen opens the compact overlay → removing a synced paragraph leaves only
+// orphan marks: Save sync stays enabled, saves the kept marks → Synced → Publish allowed → ← Desk
+// confirms with unsaved text. Listen never calls the LLM: zero new ai_generation rows.
 //
 // Runs after phase1-tldr and phase2-reader (file order), so the home card and the Listen quick
 // button for this article cannot disturb their assertions.
@@ -372,6 +373,84 @@ test.describe('Phase 3 Listen walk: upload → tap-sync → image → publish �
 
     await page.keyboard.press('Escape');
     await expect(overlay).toBeHidden();
+  });
+
+  test('removing a synced paragraph → stale with only orphan marks; Save sync is enabled → saves the kept marks → Synced → Publish allowed', async () => {
+    const { page, articleId, slug, marks, audio } = journey();
+    await page.goto(`/admin/articles/${articleId}`);
+    const textarea = page.getByLabel('Markdown', { exact: true });
+    const before = await textarea.inputValue();
+    // Put paragraph 2 back as recorded and remove paragraph 4: every remaining paragraph keeps its
+    // mark, only paragraph 4's mark is orphaned.
+    const after = before.replace(EDITED_PARA_1, PARAS[1]).replace(`${PARAS[3]}\n\n`, '');
+    expect(after).not.toContain(PARAS[3]);
+    await textarea.fill(after);
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 4');
+    await expect(page.getByTestId('listen-tabchip')).toHaveText('stale');
+
+    const stale = (await (await page.request.get(`/api/admin/articles/${articleId}/listen`)).json()).data as {
+      status: string;
+      missingPids: string[];
+      orphanPids: string[];
+    };
+    expect(stale).toMatchObject({ status: 'stale', missingPids: [], orphanPids: [marks[3].pid] });
+
+    await page.getByRole('tab', { name: /^Listen/ }).click();
+    const panel = page.locator('#panel-listen');
+    await expect(panel.getByTestId('listen-status')).toHaveText('Listen · Text changed — re-sync');
+    await expect(panel.locator('.listentab__stale')).toContainText('0 paragraphs are new or edited and have no mark; 1 mark belongs to paragraphs that were removed');
+    await expect(panel.locator('.marklist__row')).toHaveCount(3);
+    // Nothing to re-tap: the banner offers to save the kept marks, and Save sync is enabled.
+    await expect(panel.getByTestId('stale-action')).toHaveText('Save kept marks');
+    await expect(panel.getByTestId('stale-action')).toBeEnabled();
+    const saveSync = panel.getByTestId('save-sync');
+    await expect(saveSync).toBeEnabled();
+    await expect(panel.getByTestId('save-summary')).toHaveCount(0);
+    await expect(panel.getByText('Marks are saved')).toHaveCount(0);
+
+    await saveSync.click();
+    await expect(panel.getByTestId('listen-status')).toHaveText('Listen · Synced');
+    await expect(panel.getByText('Sync saved — 3 paragraphs marked.')).toBeVisible();
+    await expect(page.getByTestId('listen-tabchip')).toHaveText('ready');
+    await expect(panel.locator('.listentab__stale')).toHaveCount(0);
+    await expect(saveSync).toBeDisabled();
+    await expect(panel.getByTestId('save-summary')).toHaveText('Marks are saved');
+
+    const ready = (await (await page.request.get(`/api/admin/articles/${articleId}/listen`)).json()).data as {
+      status: string;
+      marks: Mark[];
+      orphanPids: string[];
+    };
+    expect(ready.status).toBe('ready');
+    expect(ready.orphanPids).toEqual([]);
+    expect(ready.marks).toEqual(marks.slice(0, 3));
+
+    // Publish is no longer blocked by LISTEN_STALE; the live Listen now carries the kept marks.
+    await page.getByRole('button', { name: 'Publish changes' }).click();
+    await expect(page.getByRole('alertdialog', { name: 'Can’t publish yet' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Publish changes' })).toBeDisabled();
+    const live = await page.request.get(`/api/public/articles/${slug}/listen`);
+    expect(live.status()).toBe(200);
+    expect((await live.json()).data).toMatchObject({ audio: { url: audio.url }, marks: marks.slice(0, 3) });
+  });
+
+  test('← Desk asks before leaving with unsaved text; cancel stays in the editor', async () => {
+    const { page, articleId } = journey();
+    await page.goto(`/admin/articles/${articleId}`);
+    const textarea = page.getByLabel('Markdown', { exact: true });
+    await textarea.fill((await textarea.inputValue()) + '\nunsaved words');
+    await expect(page.locator('.pubbar__state')).toHaveText('Unsaved changes');
+    const dialogs: string[] = [];
+    page.once('dialog', (d) => {
+      dialogs.push(d.message());
+      void d.dismiss();
+    });
+    await page.getByRole('link', { name: '← Desk' }).click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    expect(dialogs[0]).toContain('unsaved changes');
+    await expect(page).toHaveURL(new RegExp(`/admin/articles/${articleId}$`));
+    await expect(textarea).toHaveValue(/unsaved words$/);
   });
 
   test('Listen never calls the LLM: zero ai_generation rows for this article and none added overall', async () => {

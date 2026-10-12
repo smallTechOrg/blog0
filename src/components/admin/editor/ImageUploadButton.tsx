@@ -9,8 +9,10 @@ import { ALT_MAX, CAPTION_MAX, IMAGES_ONLY_NOTICE, altFromFilename, imageSnippet
 // Editor Image button (spec/ui.md §4 Editor → Image; capability media-images). Lives in the
 // MarkdownEditor's `.mdedit__tools` slot. Picked or dropped files queue in order; each opens the
 // "Add image" dialog (thumbnail, Alt text pre-filled from the filename, optional Caption), then
-// uploads by XHR with progress on the button label. Success hands the Markdown snippet to
-// `onInsert` (the editor inserts it at the caret); errors show inline with Try again.
+// uploads by XHR with progress on the button label. When the upload starts, `onBegin` marks the
+// caret (the editor tracks it through edits); success hands the snippet and that mark to
+// `onInsert`, so the image lands where the cursor was when the upload started; errors show
+// inline with Try again (same mark); Skip releases it.
 
 export const ACCEPT_IMAGES = 'image/png,image/jpeg,image/webp,image/gif';
 export const EMPTY_ALT_NOTE = 'Empty alt marks the image decorative';
@@ -22,16 +24,20 @@ export interface ImageUploadHandle {
 
 export interface ImageUploadButtonProps {
   articleId: string;
-  onInsert: (snippet: string) => void;
+  /** An upload is starting: remember the caret; returns the mark handed back to onInsert / onRelease. */
+  onBegin?: () => number;
+  onInsert: (snippet: string, mark: number | null) => void;
+  /** The upload was abandoned (Skip after a failure): forget its mark. */
+  onRelease?: (mark: number) => void;
   disabled?: boolean;
   ref?: Ref<ImageUploadHandle>;
 }
 
 type Queued = { file: File; /** Object URL for the dialog thumbnail (revoked when the item leaves the queue). */ thumb: string | null };
-type Pending = { item: Queued; alt: string; caption: string };
+type Pending = { item: Queued; alt: string; caption: string; /** Caret mark taken when the upload first started. */ mark?: number | null };
 type Failure = { message: string; job: Pending };
 
-export function ImageUploadButton({ articleId, onInsert, disabled, ref }: ImageUploadButtonProps) {
+export function ImageUploadButton({ articleId, onBegin, onInsert, onRelease, disabled, ref }: ImageUploadButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [queue, setQueue] = useState<Queued[]>([]);
@@ -61,9 +67,10 @@ export function ImageUploadButton({ articleId, onInsert, disabled, ref }: ImageU
 
   useImperativeHandle(ref, () => ({ addFiles }));
 
-  async function send(job: Pending): Promise<void> {
+  async function send(pending: Pending): Promise<void> {
     if (inFlight.current) return;
     inFlight.current = true;
+    const job: Pending = pending.mark === undefined ? { ...pending, mark: onBegin ? onBegin() : null } : pending;
     setFailure(null);
     setProgress(0);
     const res = await uploadImage(
@@ -76,7 +83,7 @@ export function ImageUploadButton({ articleId, onInsert, disabled, ref }: ImageU
     if (res.ok) {
       const snippet = res.data.markdown || imageSnippet(job.alt, res.data.asset.url, job.caption);
       drop(job.item);
-      onInsert(snippet);
+      onInsert(snippet, job.mark ?? null);
       return;
     }
     setFailure({ message: res.error.message, job });
@@ -90,6 +97,7 @@ export function ImageUploadButton({ articleId, onInsert, disabled, ref }: ImageU
   function dismissFailure(): void {
     if (!failure) return;
     setFailure(null);
+    if (failure.job.mark !== undefined && failure.job.mark !== null) onRelease?.(failure.job.mark);
     drop(failure.job.item);
   }
 

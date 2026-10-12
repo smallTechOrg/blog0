@@ -43,8 +43,15 @@ type Upload = { file: File; loaded: number; total: number; controller: AbortCont
 export const CONFIRM_REPLACE = (n: number) => `Replace the recording? Your ${n} ${n === 1 ? 'mark' : 'marks'} will be cleared.`;
 export const CONFIRM_REMOVE = 'Remove the recording and its marks? The published Listen keeps serving until you publish again.';
 
-function looksLikeAudio(file: File): boolean {
-  if (file.type) return file.type === 'audio/mpeg' || file.type === 'audio/mp4' || file.type === 'audio/x-m4a' || file.type === 'audio/mp3';
+const AUDIO_TYPES: ReadonlySet<string> = new Set(['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/x-aac']);
+
+/**
+ * Client-side pre-filter only (the server content-probes every upload): a known audio MIME, or —
+ * since browsers report m4a as audio/m4a, audio/aac, audio/x-m4a or nothing at all — an .mp3 /
+ * .m4a name whatever the reported type.
+ */
+export function looksLikeAudio(file: { type: string; name: string }): boolean {
+  if (file.type && AUDIO_TYPES.has(file.type.toLowerCase())) return true;
   return /\.(mp3|m4a)$/i.test(file.name);
 }
 

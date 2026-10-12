@@ -152,7 +152,20 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             onChange={(v) => onField('bodyMd', v)}
             maxLength={LIMITS.body}
             onDropFiles={(files) => imageRef.current?.addFiles(files)}
-            tools={<ImageUploadButton ref={imageRef} articleId={id} onInsert={(snippet) => editorRef.current?.insertAtCursor(snippet)} />}
+            tools={
+              <ImageUploadButton
+                ref={imageRef}
+                articleId={id}
+                onBegin={() => editorRef.current?.markInsertion() ?? 0}
+                onInsert={(snippet, mark) => {
+                  const editor = editorRef.current;
+                  if (!editor) return;
+                  if (mark !== null) editor.insertAtMark(mark, snippet);
+                  else editor.insertAtCursor(snippet);
+                }}
+                onRelease={(mark) => editorRef.current?.releaseMark(mark)}
+              />
+            }
           />
         </div>
         <div className="split__preview">

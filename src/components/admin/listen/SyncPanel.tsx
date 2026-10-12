@@ -82,11 +82,13 @@ export function SyncPanel(props: SyncPanelProps) {
         </div>
       ) : (
         <div className="syncpanel__live">
-          <div className="syncpanel__status" aria-live="polite" aria-atomic="true">
+          <div className="syncpanel__status">
+            {/* The clock ticks every frame — outside the live region so it is never announced. */}
             <span className="syncpanel__clock mono" data-testid="sync-clock">
               {fmtClockMs(currentMs)}
             </span>
-            <span className="syncpanel__next">
+            {/* Changes only when a tap (or undo) moves the next paragraph: one announcement per tap. */}
+            <span className="syncpanel__next" aria-live="polite" aria-atomic="true">
               Next: paragraph {k} of {n}
             </span>
           </div>

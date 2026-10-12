@@ -70,3 +70,36 @@ export function isAcceptedImage(file: { type: string; name: string }): boolean {
   const ext = file.name.toLowerCase().replace(/^.*\./, '');
   return ext in ACCEPTED_IMAGE_EXT;
 }
+
+/** A caret / selection in the Markdown text, as `[start, end)` offsets. */
+export interface TextRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Moves an offset of `prev` to the same place in `next` (spec/capabilities/media-images.md:
+ * the snippet goes where the cursor was when the upload started, tracked through edits by offset
+ * shift). The edit is the span between the common prefix and the common suffix: an offset before
+ * it stays, one after it shifts by the length change, one inside it lands at the end of the
+ * replacement (the start, for a pure deletion). An edit right at the offset counts as after it.
+ */
+export function shiftOffset(pos: number, prev: string, next: string): number {
+  if (prev === next) return pos;
+  const max = Math.min(prev.length, next.length);
+  let p = 0;
+  while (p < max && prev.charCodeAt(p) === next.charCodeAt(p)) p++;
+  let s = 0;
+  while (s < max - p && prev.charCodeAt(prev.length - 1 - s) === next.charCodeAt(next.length - 1 - s)) s++;
+  const at = clamp(pos, 0, prev.length);
+  if (at <= p) return at;
+  if (at >= prev.length - s) return at + (next.length - prev.length);
+  return next.length - s;
+}
+
+/** `shiftOffset` for both ends of a range (end never before start). */
+export function shiftRange(range: TextRange, prev: string, next: string): TextRange {
+  const start = shiftOffset(range.start, prev, next);
+  const end = Math.max(start, shiftOffset(range.end, prev, next));
+  return { start, end };
+}

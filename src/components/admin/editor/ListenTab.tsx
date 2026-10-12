@@ -9,8 +9,9 @@ import { fmtDate } from '@/lib/format-date';
 import { activeMarkIndex, listenMinutes, validateMarks } from '@/lib/listen/marks';
 
 import { AudioUploader } from '../listen/AudioUploader';
-import { deleteAudio, getListen, saveListen } from '../listen/listen-api';
+import { deleteAudio, getListen, getPublishedAudioKey, saveListen } from '../listen/listen-api';
 import { MarkList } from '../listen/MarkList';
+import { publishedDiffers, saveSyncState, staleAction } from '../listen/save-sync';
 import { SyncPanel } from '../listen/SyncPanel';
 import { marksOf, unmarkedCount, useTapSync } from '../listen/useTapSync';
 import { relativeTime } from '../relative-time';
@@ -33,6 +34,8 @@ export interface ListenTabProps {
   onSelectTab: (tab: 'write' | 'tldr' | 'listen' | 'history') => void;
   /** Unsaved marks exist → the editor guards tab switches and page leave. */
   onMarksDirty: (dirty: boolean) => void;
+  /** The tab is showing. Hidden (but still mounted) → the player pauses and tap mode stops. */
+  active?: boolean;
 }
 
 type Load = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready' };
@@ -67,7 +70,7 @@ function listenKey(l: ListenStateDto): string {
 }
 
 export function ListenTab(props: ListenTabProps) {
-  const { article, editorDirty, timeZone, saveFirst, onArticleChanged, onSelectTab, onMarksDirty } = props;
+  const { article, editorDirty, timeZone, saveFirst, onArticleChanged, onSelectTab, onMarksDirty, active = true } = props;
   const articleId = article.id;
   const revisionId = article.currentRevision.id;
 
@@ -151,6 +154,31 @@ export function ListenTab(props: ListenTabProps) {
   useEffect(() => {
     onMarksDirty(dirty);
   }, [dirty, onMarksDirty]);
+
+  // Hidden tab (still mounted to keep unsaved marks): no playback, no tap mode — a Space press on
+  // another tab must never record a mark. The marks tapped so far are kept (as Stop does).
+  useEffect(() => {
+    if (active) return;
+    audioRef.current?.pause();
+    if (tapRef.current.state.phase === 'syncing') tapRef.current.stop();
+  }, [active]);
+
+  // "· differs from the draft" compares recordings by storage key; the published key comes from
+  // the public Listen endpoint (undefined while loading, null when the article isn't public).
+  const [publishedKey, setPublishedKey] = useState<{ for: string; key: string | null } | null>(null);
+  const publishedFor = listen?.published ? `${article.slug}:${article.status}:${listen.published.publishedAt}` : null;
+  useEffect(() => {
+    if (!publishedFor) return;
+    let live = true;
+    const slug = article.slug;
+    const pending = article.status === 'published' ? getPublishedAudioKey(slug) : Promise.resolve(null);
+    void pending.then((key) => {
+      if (live) setPublishedKey({ for: publishedFor, key });
+    });
+    return () => {
+      live = false;
+    };
+  }, [publishedFor, article.slug, article.status]);
   useEffect(() => () => onMarksDirty(false), [onMarksDirty]);
 
   // Player clock: rAF while playing, snap on seek.
@@ -280,10 +308,11 @@ export function ListenTab(props: ListenTabProps) {
     }
   }
 
-  function resyncFromFirstChange(): void {
+  function runStaleAction(): void {
     if (!listen) return;
-    const first = listen.missingPids.length ? pids.indexOf(listen.missingPids[0]) : -1;
-    tap.redoFrom(first >= 0 ? first : 0);
+    const action = staleAction(listen.missingPids, pids);
+    if (action.kind === 'redo') tap.redoFrom(action.index);
+    else void save();
   }
 
   if (load.kind === 'loading' && !listen) {
@@ -308,18 +337,17 @@ export function ListenTab(props: ListenTabProps) {
   const status = listen.status;
   const syncing = tapState.phase === 'syncing';
   const missingSet = new Set(listen.missingPids);
-  const saveDisabled = busy !== null || syncing || !dirty || !validation.ok || !listen.audio;
-  const saveSummary = !listen.audio
-    ? null
-    : unmarked > 0
-      ? `${unmarked} ${unmarked === 1 ? 'paragraph still needs' : 'paragraphs still need'} a mark`
-      : !validation.ok
-        ? 'Some marks are out of order — nudge or redo them'
-        : !dirty
-          ? 'Marks are saved'
-          : null;
-  const publishedDiffers =
-    listen.published && (!listen.published.matchesCurrentText || (listen.audio ? listen.audio.durationMs !== listen.published.durationMs : true));
+  const { disabled: saveDisabled, summary: saveSummary } = saveSyncState({
+    status,
+    dirty,
+    busy: busy !== null,
+    syncing,
+    valid: validation.ok,
+    hasAudio: Boolean(listen.audio),
+    unmarked,
+  });
+  const staleNext = staleAction(listen.missingPids, pids);
+  const liveDiffers = publishedDiffers(listen, publishedKey && publishedKey.for === publishedFor ? publishedKey.key : undefined);
   let publishedDate = '';
   if (listen.published) {
     try {
@@ -341,7 +369,7 @@ export function ListenTab(props: ListenTabProps) {
         {listen.published ? (
           <span className="admin-hint listentab__live">
             Live: {listenMinutes(listen.published.durationMs)} min recording, published {publishedDate}
-            {publishedDiffers ? ' · differs from the draft' : ''}
+            {liveDiffers ? ' · differs from the draft' : ''}
           </span>
         ) : null}
       </div>
@@ -360,8 +388,14 @@ export function ListenTab(props: ListenTabProps) {
             </p>
           </div>
           <div className="listentab__staleactions">
-            <button type="button" className="admin-btn admin-btn--small admin-btn--primary" disabled={editorDirty || !listen.audio} onClick={resyncFromFirstChange}>
-              Re-sync from the first change
+            <button
+              type="button"
+              className="admin-btn admin-btn--small admin-btn--primary"
+              disabled={editorDirty || !listen.audio || syncing || busy !== null || (staleNext.kind === 'save' && saveDisabled)}
+              onClick={runStaleAction}
+              data-testid="stale-action"
+            >
+              {staleNext.kind === 'save' && busy === 'save' ? 'Saving…' : staleNext.label}
             </button>
             <button type="button" className="admin-btn admin-btn--small" onClick={() => uploaderFocus.current?.focus()}>
               Upload a new recording

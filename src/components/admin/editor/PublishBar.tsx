@@ -18,6 +18,8 @@ export interface PublishBarProps {
   article: ArticleDetailDto;
   title: string;
   dirty: boolean;
+  /** Unsaved Listen marks (the ← Desk link confirms before leaving, like the tab switch). */
+  marksDirty?: boolean;
   saveState: SaveState;
   busy: null | 'publish' | 'unpublish' | 'delete';
   blocked: PublishBlockedDetails['reasons'] | null;
@@ -30,6 +32,14 @@ export interface PublishBarProps {
   onDismissBlocked: () => void;
   /** LISTEN_STALE reason → "Go to Listen" selects the Listen tab (and closes the popover). */
   onGoToListen?: () => void;
+}
+
+export const LEAVE_EDITOR_CONFIRM = 'You have unsaved changes. Leave the editor anyway? They will be lost.';
+
+/** The ← Desk link's leave guard: confirm only when text or Listen marks are unsaved. */
+export function confirmLeave(unsaved: { dirty: boolean; marksDirty?: boolean }, confirm: (message: string) => boolean): boolean {
+  if (!unsaved.dirty && !unsaved.marksDirty) return true;
+  return confirm(LEAVE_EDITOR_CONFIRM);
 }
 
 export function hasThingsToPublish(article: ArticleDetailDto): boolean {
@@ -74,7 +84,13 @@ export function PublishBar(props: PublishBarProps) {
   return (
     <div className="pubbar">
       <div className="pubbar__in">
-        <Link href="/admin" className="pubbar__back">
+        <Link
+          href="/admin"
+          className="pubbar__back"
+          onClick={(e) => {
+            if (!confirmLeave({ dirty, marksDirty: props.marksDirty }, (m) => window.confirm(m))) e.preventDefault();
+          }}
+        >
           ← Desk
         </Link>
         <span className="pubbar__sep" aria-hidden="true" />

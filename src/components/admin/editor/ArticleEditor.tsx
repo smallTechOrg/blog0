@@ -300,6 +300,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
         article={article}
         title={fields.title}
         dirty={dirty}
+        marksDirty={marksDirty}
         saveState={saveState}
         busy={busy}
         blocked={blocked}
@@ -382,6 +383,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
               onArticleChanged={() => void refreshArticle()}
               onSelectTab={selectTab}
               onMarksDirty={setMarksDirty}
+              active={tab === 'listen'}
             />
           ) : null}
         </section>

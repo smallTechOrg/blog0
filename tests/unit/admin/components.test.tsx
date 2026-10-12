@@ -135,6 +135,16 @@ describe('SyncPanel', () => {
     expect(html).toContain('aria-keyshortcuts="Space"');
     expect(html).toContain('Space = tap · Backspace = undo');
   });
+
+  it('announces only "Next: paragraph k of n" — the per-frame clock is outside the live region', () => {
+    const html = renderToStaticMarkup(
+      <SyncPanel {...props} state={{ phase: 'syncing', times: [0, null, null], nextIndex: 1, lastTapAt: 1 }} hasAudio editorDirty={false} busy={false} />,
+    );
+    const live = [...html.matchAll(/<(\w+)[^>]*aria-live="polite"[^>]*>(.*?)<\/\1>/g)];
+    expect(live).toHaveLength(1);
+    expect(live[0][2]).toBe('Next: paragraph 2 of 3');
+    expect(live[0][2]).not.toContain('1:01.250');
+  });
 });
 
 describe('MarkList', () => {

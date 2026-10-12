@@ -2,7 +2,7 @@
 // the cursor insertion that pads with blank lines only where the neighbours are not blank.
 import { describe, expect, it } from 'vitest';
 
-import { altFromFilename, imageSnippet, insertAtCursor, isAcceptedImage } from '@/components/admin/editor/insert-image';
+import { altFromFilename, imageSnippet, insertAtCursor, isAcceptedImage, shiftOffset, shiftRange } from '@/components/admin/editor/insert-image';
 
 describe('imageSnippet', () => {
   it('yields ![a](u) without a caption and ![a](u "c") with one', () => {
@@ -72,5 +72,42 @@ describe('isAcceptedImage', () => {
   it('falls back to the extension when the browser gives no type', () => {
     expect(isAcceptedImage({ type: '', name: 'photo.JPG' })).toBe(true);
     expect(isAcceptedImage({ type: '', name: 'photo.svg' })).toBe(false);
+  });
+});
+
+describe('shiftOffset / shiftRange (snippet goes where the cursor was when the upload started)', () => {
+  it('an edit after the offset leaves it in place', () => {
+    expect(shiftOffset(3, 'abc def', 'abc defXYZ')).toBe(3);
+    expect(shiftOffset(3, 'abc def', 'abc d')).toBe(3);
+  });
+  it('an edit before the offset shifts it by the length change', () => {
+    expect(shiftOffset(4, 'abc def', 'XXabc def')).toBe(6);
+    expect(shiftOffset(4, 'abc def', 'bc def')).toBe(3);
+    expect(shiftOffset(7, 'abc def', 'a def')).toBe(5);
+  });
+  it('typing right at the offset keeps the insertion point before the typed text', () => {
+    expect(shiftOffset(3, 'abc', 'abcz')).toBe(3);
+  });
+  it('a deletion spanning the offset collapses it to the deletion point; a replacement puts it after the new text', () => {
+    expect(shiftOffset(4, 'abc def ghi', 'abc ghi')).toBe(4);
+    expect(shiftOffset(5, 'abc def ghi', 'abc ghi')).toBe(4);
+    expect(shiftOffset(5, 'abc def ghi', 'abc XY ghi')).toBe(6);
+  });
+  it('shiftRange shifts both ends and never inverts', () => {
+    expect(shiftRange({ start: 4, end: 7 }, 'abc def ghi', '__abc def ghi')).toEqual({ start: 6, end: 9 });
+    expect(shiftRange({ start: 4, end: 7 }, 'abc def ghi', 'abc ghi')).toEqual({ start: 4, end: 4 });
+  });
+  it('end to end: caret marked at upload start, the writer types above it, the snippet lands at the shifted caret', () => {
+    const atStart = 'Intro.\n\nSecond paragraph.';
+    const caret = atStart.indexOf('Second'); // the cursor when the upload started
+    // While uploading, the writer edits the first paragraph, then appends at the end — each
+    // change reaches the editor as its own value update, and the mark shifts through each.
+    const steps = [atStart, 'Intro, now.\n\nSecond paragraph.', 'Intro, now longer.\n\nSecond paragraph.', 'Intro, now longer.\n\nSecond paragraph. More at the end.'];
+    let at = caret;
+    for (let i = 1; i < steps.length; i += 1) at = shiftOffset(at, steps[i - 1], steps[i]);
+    const typed = steps[steps.length - 1];
+    expect(typed.slice(at)).toBe('Second paragraph. More at the end.');
+    const r = insertAtCursor(typed, at, at, '![a](/media/x.png)');
+    expect(r.value).toBe('Intro, now longer.\n\n![a](/media/x.png)\n\nSecond paragraph. More at the end.');
   });
 });
