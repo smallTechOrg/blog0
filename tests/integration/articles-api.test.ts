@@ -1,4 +1,4 @@
-// Articles API (S1.6) against real blog0_test: create → save (revisions) → conflict → slug rules →
+// Articles API against real blog0_test: create → save (revisions) → conflict → slug rules →
 // publish rules → public view model → unpublish/republish → delete rules → desk list + chips.
 // No LLM is involved anywhere in this file (publishing never calls the AI).
 import { readFileSync } from 'node:fs';
@@ -9,7 +9,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { GET as listRoute, POST as createRoute } from '@/app/api/admin/articles/route';
 import { DELETE as deleteRoute, GET as getRoute, PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
-import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
 import { POST as unpublishRoute } from '@/app/api/admin/articles/[id]/unpublish/route';
 import { POST as previewRoute } from '@/app/api/admin/preview/route';
 import type {
@@ -20,7 +19,6 @@ import type {
   PublishBlockedDetails,
   UpdateArticleResponse,
 } from '@/lib/api/dto';
-import type { Envelope, Err } from '@/lib/api/envelope';
 import { createArticle as serviceCreateArticle, publishArticle as servicePublishArticle, type ActorContext } from '@/server/articles/service';
 import { slugify, uniqueSlug } from '@/server/articles/slug';
 import { getDb } from '@/server/db/client';
@@ -28,10 +26,10 @@ import { aiGeneration, appUser, article, articleRevision, site } from '@/server/
 import { getPublishedArticle } from '@/server/public/articles';
 import { siteSeedFor } from '@/server/site/defaults';
 
+import { actAs, call, data, err, ORIGIN, publish } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { loginAs, type TestLogin } from '../helpers/session';
 
-const ORIGIN = 'http://localhost:3410';
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const HARD_CASES = readFileSync(path.join(ROOT, 'tests', 'fixtures', 'articles', 'hard-cases.md'), 'utf8');
 
@@ -43,57 +41,16 @@ const BODY = [
   'Writers pick the lines by hand when the model is unavailable. That keeps publishing moving on a bad day.',
 ].join('\n');
 
-type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
-
-interface CallOptions {
-  cookie?: string | null;
-  body?: unknown;
-  origin?: string | null;
-  id?: string;
-}
-
-async function call<T>(handler: Handler, method: string, url: string, opts: CallOptions = {}): Promise<{ status: number; env: Envelope<T>; res: Response }> {
-  const headers: Record<string, string> = { host: 'localhost:3410' };
-  if (opts.cookie) headers.cookie = opts.cookie;
-  if (opts.origin !== null && method !== 'GET') headers.origin = opts.origin ?? ORIGIN;
-  if (opts.body !== undefined) headers['content-type'] = 'application/json';
-  const request = new Request(`${ORIGIN}${url}`, {
-    method,
-    headers,
-    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-  });
-  const res = await handler(request, { params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}) });
-  return { status: res.status, env: (await res.json()) as Envelope<T>, res };
-}
-
-function data<T>(env: Envelope<T>): T {
-  if (!env.ok) throw new Error(`expected ok envelope, got ${env.error.code}: ${env.error.message}`);
-  return env.data;
-}
-
-function err(env: Envelope<unknown>): Err['error'] {
-  if (env.ok) throw new Error('expected an error envelope');
-  return env.error;
-}
-
 let writer: TestLogin;
 
 async function create(body: Record<string, unknown>, who: TestLogin = writer): Promise<ArticleDetailDto> {
-  const { status, env } = await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', { cookie: who.cookie, body });
+  const { status, env } = await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', { who, body });
   expect(status).toBe(201);
   return data(env).article;
 }
 
 async function patch(id: string, body: Record<string, unknown>, who: TestLogin = writer) {
   return call<UpdateArticleResponse>(patchRoute, 'PATCH', `/api/admin/articles/${id}`, { cookie: who.cookie, body, id });
-}
-
-async function publish(id: string, revisionId: string) {
-  return call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${id}/publish`, {
-    cookie: writer.cookie,
-    body: { revisionId },
-    id,
-  });
 }
 
 async function revisionsOf(articleId: string): Promise<number> {
@@ -103,7 +60,7 @@ async function revisionsOf(articleId: string): Promise<number> {
 
 beforeEach(async () => {
   await resetDb();
-  writer = await loginAs({ displayName: 'Asha Writer' });
+  writer = actAs(await loginAs({ displayName: 'Asha Writer' }));
 });
 
 describe('auth and origin guards', () => {
@@ -116,7 +73,6 @@ describe('auth and origin guards', () => {
 
   it('rejects a cross-origin create with 403 FORBIDDEN_ORIGIN and creates nothing', async () => {
     const { status, env } = await call(createRoute, 'POST', '/api/admin/articles', {
-      cookie: writer.cookie,
       origin: 'https://evil.example',
       body: { title: 'Nope' },
     });
@@ -131,7 +87,6 @@ describe('auth and origin guards', () => {
 describe('POST /api/admin/preview', () => {
   it('renders the hard-cases fixture with blocks, warnings, stats and the eligible sentence count', async () => {
     const { status, env } = await call<PreviewResultDto>(previewRoute, 'POST', '/api/admin/preview', {
-      cookie: writer.cookie,
       body: { title: 'Hard cases', dek: '', bodyMd: HARD_CASES },
     });
 
@@ -151,7 +106,6 @@ describe('POST /api/admin/preview', () => {
 
   it('returns an empty-body warning and zero sentences for an empty body', async () => {
     const { env } = await call<PreviewResultDto>(previewRoute, 'POST', '/api/admin/preview', {
-      cookie: writer.cookie,
       body: { title: '', dek: '', bodyMd: '' },
     });
 
@@ -162,7 +116,6 @@ describe('POST /api/admin/preview', () => {
 
   it('rejects a body over 200 000 characters with 400 VALIDATION_FAILED', async () => {
     const { status, env } = await call(previewRoute, 'POST', '/api/admin/preview', {
-      cookie: writer.cookie,
       body: { title: 't', dek: '', bodyMd: 'a'.repeat(200_001) },
     });
 
@@ -199,7 +152,7 @@ describe('create and save', () => {
   });
 
   it('rejects a create without a title with 400 VALIDATION_FAILED', async () => {
-    const { status, env } = await call(createRoute, 'POST', '/api/admin/articles', { cookie: writer.cookie, body: { title: '   ' } });
+    const { status, env } = await call(createRoute, 'POST', '/api/admin/articles', { body: { title: '   ' } });
 
     expect(status).toBe(400);
     expect(err(env).code).toBe('VALIDATION_FAILED');
@@ -233,7 +186,7 @@ describe('create and save', () => {
     expect(status).toBe(409);
     expect(err(env).code).toBe('CONFLICT');
     expect(err(env).message).toContain('Ravi Editor');
-    const reread = data((await call<ArticleResponse>(getRoute, 'GET', `/api/admin/articles/${created.id}`, { cookie: writer.cookie, id: created.id })).env);
+    const reread = data((await call<ArticleResponse>(getRoute, 'GET', `/api/admin/articles/${created.id}`, { id: created.id })).env);
     expect(reread.article.currentRevision.id).toBe(saved.article.currentRevision.id);
     expect(reread.article.currentRevision.bodyMd).toBe(`${BODY}\n\nRavi added this line here.`);
     expect(await revisionsOf(created.id)).toBe(2);
@@ -266,9 +219,8 @@ describe('create and save', () => {
   });
 
   it('answers 404 NOT_FOUND for a malformed id and for an unknown uuid', async () => {
-    const malformed = await call(getRoute, 'GET', '/api/admin/articles/not-a-uuid', { cookie: writer.cookie, id: 'not-a-uuid' });
+    const malformed = await call(getRoute, 'GET', '/api/admin/articles/not-a-uuid', { id: 'not-a-uuid' });
     const unknown = await call(getRoute, 'GET', '/api/admin/articles/00000000-0000-4000-8000-000000000000', {
-      cookie: writer.cookie,
       id: '00000000-0000-4000-8000-000000000000',
     });
 
@@ -333,7 +285,7 @@ describe('publish, public view, unpublish, delete', () => {
     const published = data((await publish(created.id, created.currentRevision.id)).env).article;
     const view1 = await getPublishedArticle(published.slug);
     const saved = data((await patch(created.id, { baseRevisionId: published.currentRevision.id, bodyMd: `${BODY}\n\nA brand new closing paragraph for readers.` })).env).article;
-    const list = data((await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles', { cookie: writer.cookie })).env).articles;
+    const list = data((await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles')).env).articles;
     const view2 = await getPublishedArticle(published.slug);
     const republished = data((await publish(created.id, saved.currentRevision.id)).env).article;
     const view3 = await getPublishedArticle(published.slug);
@@ -372,7 +324,7 @@ describe('publish, public view, unpublish, delete', () => {
     const published = data((await publish(created.id, created.currentRevision.id)).env).article;
 
     const unpublished = data(
-      (await call<ArticleResponse>(unpublishRoute, 'POST', `/api/admin/articles/${created.id}/unpublish`, { cookie: writer.cookie, id: created.id })).env,
+      (await call<ArticleResponse>(unpublishRoute, 'POST', `/api/admin/articles/${created.id}/unpublish`, { id: created.id })).env,
     ).article;
     const hidden = await getPublishedArticle('toggle');
     const again = data((await publish(created.id, created.currentRevision.id)).env).article;
@@ -390,9 +342,9 @@ describe('publish, public view, unpublish, delete', () => {
   it('refuses to delete a once-published article with 409 NOT_DELETABLE', async () => {
     const created = await create({ title: 'Keep me', topic: 'Analysis', bodyMd: BODY });
     await publish(created.id, created.currentRevision.id);
-    await call(unpublishRoute, 'POST', `/api/admin/articles/${created.id}/unpublish`, { cookie: writer.cookie, id: created.id });
+    await call(unpublishRoute, 'POST', `/api/admin/articles/${created.id}/unpublish`, { id: created.id });
 
-    const { status, env } = await call(deleteRoute, 'DELETE', `/api/admin/articles/${created.id}`, { cookie: writer.cookie, id: created.id });
+    const { status, env } = await call(deleteRoute, 'DELETE', `/api/admin/articles/${created.id}`, { id: created.id });
 
     expect(status).toBe(409);
     expect(err(env).code).toBe('NOT_DELETABLE');
@@ -419,10 +371,9 @@ describe('publish, public view, unpublish, delete', () => {
     });
 
     const { status, env } = await call<{ deleted: true }>(deleteRoute, 'DELETE', `/api/admin/articles/${created.id}`, {
-      cookie: writer.cookie,
       id: created.id,
     });
-    const after = await call(getRoute, 'GET', `/api/admin/articles/${created.id}`, { cookie: writer.cookie, id: created.id });
+    const after = await call(getRoute, 'GET', `/api/admin/articles/${created.id}`, { id: created.id });
 
     expect(status).toBe(200);
     expect(data(env)).toEqual({ deleted: true });
@@ -435,7 +386,7 @@ describe('publish, public view, unpublish, delete', () => {
 
 describe('GET /api/admin/articles (desk)', () => {
   it('returns an empty list on an empty desk', async () => {
-    const { env } = await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles', { cookie: writer.cookie });
+    const { env } = await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles');
 
     expect(data(env).articles).toEqual([]);
   });
@@ -446,7 +397,7 @@ describe('GET /api/admin/articles (desk)', () => {
     const other = await loginAs({ displayName: 'Ravi Editor' });
     await patch(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: `${BODY}\n\nRavi touched this one most recently.` }, other);
 
-    const { env } = await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles', { cookie: writer.cookie });
+    const { env } = await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles');
     const list = data(env).articles;
 
     expect(list.map((x) => x.title)).toEqual(['Older', 'Newer']);
@@ -500,7 +451,7 @@ describe('cross-site isolation', () => {
         .where(eq(article.siteId, otherCtx.siteId))
         .orderBy(article.createdAt);
     const before = await snapshot();
-    const opts = (id: string, body?: unknown) => ({ cookie: writer.cookie, id, body });
+    const opts = (id: string, body?: unknown) => ({ id, body });
 
     const results = [
       await call(getRoute, 'GET', `/api/admin/articles/${foreign.id}`, opts(foreign.id)),
@@ -517,7 +468,7 @@ describe('cross-site isolation', () => {
     expect(await snapshot()).toEqual(before);
     expect(await revisionsOf(foreign.id)).toBe(1);
     expect(await getPublishedArticle(foreignPublished.slug)).toBeNull(); // the public view is site-scoped too
-    const desk = data((await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles', { cookie: writer.cookie })).env);
+    const desk = data((await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles')).env);
     expect(desk.articles).toEqual([]);
   });
 

@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from '@/components/design/Icon';
 import { cx } from '@/components/design/motion';
 import { AudioPlayer } from '@/components/reader/AudioPlayer';
-import type { PublicListenDto } from '@/lib/api/dto-phase3';
+import type { PublicListenDto } from '@/lib/api/dto';
 
 /* ============================================================
    Listen from a card (design SummaryOverlay, listen mode): a full sheet

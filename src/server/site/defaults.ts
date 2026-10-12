@@ -3,7 +3,7 @@ import 'server-only';
 import type { NewSiteRow } from '../db/schema';
 
 // Seed values for the `site` row (spec/data.md → site; design constants from spec/design/design-app.js).
-// Shared by the test helper (resetDb) and S1.1's `pnpm db:seed`. The brand is blog0 everywhere
+// Shared by the test helper (resetDb) and `pnpm db:seed`. The brand is blog0 everywhere
 // (spec/architecture.md divergence 25); rows seeded with the design's "log0" are upgraded by
 // `upgradeLegacyBrand` (src/server/site/service.ts) during `pnpm db:seed`.
 

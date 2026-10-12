@@ -9,7 +9,7 @@ import { generateTldr, saveDeck } from '../articles/tldr';
 import { renderRevision } from '../articles/views';
 import type { Db } from '../db/client';
 import { aiGeneration, appUser, article, articleFormat, articleRevision } from '../db/schema';
-import { readTldrPayload } from '../formats';
+import { readTldrPayload } from '../formats/payload';
 import { ApiError } from '../http/api';
 import { isLlmConfigured } from '../llm';
 import { log } from '../log';

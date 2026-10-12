@@ -1,6 +1,6 @@
 // loginAs(): creates an admin user + a real DB session and returns the Cookie header to send.
 // The user's password_hash is a placeholder (not a valid argon2 hash) — it signs in by session
-// only; S1.1's auth tests exercise the real login path.
+// only; the auth tests exercise the real login path.
 import { appUser } from '@/server/db/schema';
 import { getDb } from '@/server/db/client';
 import { createSession, SESSION_COOKIE_NAME } from '@/server/auth/session';

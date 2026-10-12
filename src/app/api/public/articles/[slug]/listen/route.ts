@@ -1,8 +1,8 @@
-import type { PublicListenDto } from '@/lib/api/dto-phase3';
-import { ApiError, withApi, type RouteContext } from '@/server/http/api';
+import type { PublicListenDto } from '@/lib/api/dto';
+import { ApiError, withApi } from '@/server/http/api';
 import { loadPublishedArticle } from '@/server/public/articles';
 
-// GET /api/public/articles/:slug/listen (spec/api.md Phase 3 + fix) — the published recording +
+// GET /api/public/articles/:slug/listen (spec/api.md) — the published recording +
 // paragraph marks resolved per request over the PUBLISHED revision's paragraphs (stored marks that
 // cover the text → timing 'synced', else estimated from word counts). Public, read-only,
 // published-only: unknown, malformed and unpublished slugs and articles without a PUBLISHED Listen
@@ -15,9 +15,10 @@ export const dynamic = 'force-dynamic';
 
 const NOT_FOUND_MESSAGE = 'That article has no published recording.';
 
-const handler = withApi(
+export const GET = withApi(
   {
     auth: 'none',
+    cacheControl: 'public, max-age=60',
     summarizeOutput: (d) => ({ marks: (d as PublicListenDto).marks.length, timing: (d as PublicListenDto).timing }),
   },
   async ({ params }): Promise<PublicListenDto> => {
@@ -40,9 +41,3 @@ const handler = withApi(
     };
   },
 );
-
-export async function GET(request: Request, context: RouteContext): Promise<Response> {
-  const res = await handler(request, context);
-  if (res.status === 200) res.headers.set('cache-control', 'public, max-age=60');
-  return res;
-}

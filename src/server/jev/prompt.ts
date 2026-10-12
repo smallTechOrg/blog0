@@ -43,7 +43,3 @@ export function renderPrompt(template: string, vars: PromptVars): string {
 export function loadPrompt(vars: PromptVars): { version: string; text: string } {
   return { version: JEV_PROMPT_VERSION, text: renderPrompt(loadPromptTemplate(), vars) };
 }
-
-export function resetPromptCacheForTests(): void {
-  cache.clear();
-}

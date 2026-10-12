@@ -1,17 +1,17 @@
-import type { HealthPhase2Dto } from '@/lib/api/dto-phase2';
+import type { HealthDto } from '@/lib/api/dto';
 import { APP_VERSION } from '@/server/config';
 import { getDbHandle } from '@/server/db/client';
 import { ApiError, withApi } from '@/server/http/api';
 import { log } from '@/server/log';
 
 // GET /api/health — proves the process is up and the database answers (spec/api.md → Scaffold;
-// `dbEngine` since Phase 2: 'postgres' or 'pglite' in designer mode).
+// `dbEngine`: 'postgres', or 'pglite' in designer mode).
 
 export const dynamic = 'force-dynamic';
 
 const DB_TIMEOUT_MS = 3000;
 
-async function pingDb(): Promise<{ latencyMs: number; engine: HealthPhase2Dto['dbEngine'] }> {
+async function pingDb(): Promise<{ latencyMs: number; engine: HealthDto['dbEngine'] }> {
   const started = performance.now();
   const handle = getDbHandle();
   let timer: NodeJS.Timeout | undefined;
@@ -26,7 +26,7 @@ async function pingDb(): Promise<{ latencyMs: number; engine: HealthPhase2Dto['d
   return { latencyMs: Math.round(performance.now() - started), engine: handle.engine };
 }
 
-export const GET = withApi({ auth: 'none' }, async ({ requestId }): Promise<HealthPhase2Dto> => {
+export const GET = withApi({ auth: 'none' }, async ({ requestId }): Promise<HealthDto> => {
   let ping: Awaited<ReturnType<typeof pingDb>>;
   try {
     ping = await pingDb();

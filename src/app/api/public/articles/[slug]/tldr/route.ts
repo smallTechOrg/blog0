@@ -1,8 +1,8 @@
-import type { PublicTldrDto } from '@/lib/api/dto-phase2';
-import { ApiError, withApi, type RouteContext } from '@/server/http/api';
+import type { PublicTldrDto } from '@/lib/api/dto';
+import { ApiError, withApi } from '@/server/http/api';
 import { loadPublishedArticle } from '@/server/public/articles';
 
-// GET /api/public/articles/:slug/tldr (spec/api.md Phase 2) — the published deck for a card's
+// GET /api/public/articles/:slug/tldr (spec/api.md) — the published deck for a card's
 // TLDR overlay. Public, read-only, published-only: unknown, malformed, unpublished slugs and
 // articles without a published deck are 404 NOT_FOUND. Only reader-facing deck data leaves the
 // server — slide texts, the AI disclosure, times — never sids, Jev reasons, generation ids or
@@ -12,9 +12,10 @@ export const dynamic = 'force-dynamic';
 
 const NOT_FOUND_MESSAGE = 'That article has no published summary.';
 
-const handler = withApi(
+export const GET = withApi(
   {
     auth: 'none',
+    cacheControl: 'public, max-age=60',
     summarizeOutput: (d) => ({ slides: (d as PublicTldrDto).slides.length }),
   },
   async ({ params }): Promise<PublicTldrDto> => {
@@ -35,9 +36,3 @@ const handler = withApi(
     };
   },
 );
-
-export async function GET(request: Request, context: RouteContext): Promise<Response> {
-  const res = await handler(request, context);
-  if (res.status === 200) res.headers.set('cache-control', 'public, max-age=60');
-  return res;
-}

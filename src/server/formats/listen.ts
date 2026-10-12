@@ -1,14 +1,11 @@
 import 'server-only';
 
-import { and, eq } from 'drizzle-orm';
-
-import { articleFormat } from '../db/schema';
 import { listenBaseline, readListenPayload, type ListenPayload } from './payload';
-import type { FormatAdapter } from './types';
+import { publishDraft, type FormatAdapter } from './types';
 
-// Listen adapter (spec/architecture.md §5, revised by the Phase 3 fix; spec/capabilities/
-// listen-audio.md). Status: missing (no draft) → ready (audio uploaded) → text_changed (the current
-// paragraphs fingerprint differs from the draft's baseline = uploadFingerprint ?? syncFingerprint).
+// Listen adapter (spec/architecture.md §5; spec/capabilities/listen-audio.md). Status: missing (no
+// draft) → ready (audio uploaded) → text_changed (the current paragraphs fingerprint differs from
+// the draft's baseline = uploadFingerprint ?? syncFingerprint).
 // text_changed is a warning only: Listen NEVER blocks publishing, and publishing copies the draft
 // whatever its status (reader timing is resolved per request from the published text, so it can
 // never go stale). Stored marks never affect the status. No generating / failed.
@@ -39,21 +36,11 @@ export const listenAdapter: FormatAdapter = {
     return !samePayload(readListenPayload(row?.draftPayload), readListenPayload(row?.publishedPayload));
   },
 
-  /** Listen never blocks publishing (the Phase 3 stale-sync guard is gone). */
-  validateForPublish() {
-    return { ok: true };
-  },
+  /** Listen never blocks publishing. */
+  validateForPublish: () => ({ ok: true }),
 
-  async publish(tx, { row, revision, now }) {
-    if (!row) return;
-    const draft = readListenPayload(row.draftPayload);
-    await tx
-      .update(articleFormat)
-      .set(
-        draft
-          ? { publishedPayload: draft, publishedRevisionId: revision.id, publishedFingerprint: listenBaseline(draft), publishedAt: now }
-          : { publishedPayload: null, publishedRevisionId: null, publishedFingerprint: null, publishedAt: null },
-      )
-      .where(and(eq(articleFormat.id, row.id), eq(articleFormat.siteId, row.siteId)));
+  publish(tx, { row, revision, now }) {
+    const draft = readListenPayload(row?.draftPayload);
+    return publishDraft(tx, row, draft, { revisionId: revision.id, fingerprint: draft && listenBaseline(draft), now });
   },
 };

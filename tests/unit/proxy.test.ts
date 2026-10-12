@@ -23,7 +23,7 @@ describe('slugFromArticlePath', () => {
     expect(slugFromArticlePath('/p/measure-the-work/tldr')).toBe('measure-the-work');
   });
 
-  it('extracts the slug from the /listen share path (Phase 3)', () => {
+  it('extracts the slug from the /listen share path', () => {
     expect(slugFromArticlePath('/p/measure-the-work/listen')).toBe('measure-the-work');
     expect(slugFromArticlePath('/p/measure-the-work/listen/')).toBe('measure-the-work');
     expect(slugFromArticlePath('/p/a/listen/extra')).toBeNull();

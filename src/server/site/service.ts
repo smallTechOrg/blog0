@@ -3,7 +3,7 @@ import 'server-only';
 import { and, eq, or } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { SITE_SETTINGS_LIMITS, type SiteSettingsDto, type SiteSettingsPatch } from '@/lib/api/dto-phase2';
+import { SITE_SETTINGS_LIMITS, type SiteSettingsDto, type SiteSettingsPatch } from '@/lib/api/dto';
 
 import type { Db } from '../db/client';
 import { getDb } from '../db/client';

@@ -15,17 +15,16 @@ import { PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
 import { POST as generateRoute } from '@/app/api/admin/articles/[id]/tldr/generate/route';
 import { POST as previewRoute } from '@/app/api/admin/preview/route';
 import type { ArticleResponse } from '@/lib/api/dto';
-import type { Envelope } from '@/lib/api/envelope';
 import { resetJevDepsForTests, setJevDepsForTests } from '@/server/articles/tldr';
 import { resetConfigForTests, Secret } from '@/server/config';
 import { resetLoggerForTests } from '@/server/log';
 import { OpenRouterClient } from '@/server/llm/openrouter';
 
+import { actAs, call, ORIGIN } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
 
-const ORIGIN = 'http://localhost:3410';
 const CANARY_TITLE = 'Canary Title Zebra Quokka';
 const CANARY_SENTENCE = 'The marmalade lighthouse hums seven secret songs tonight.';
 const BODY = [
@@ -37,28 +36,13 @@ const BODY = [
 ].join('\n');
 const FAKE_KEY = 'fake-transport-key-sk-or-v1-0000';
 
-type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
-
-async function call<T>(handler: Handler, method: string, url: string, opts: { body?: unknown; id?: string; headers?: Record<string, string>; cookie?: string | null } = {}) {
-  const headers: Record<string, string> = { host: 'localhost:3410', ...opts.headers };
-  const cookie = opts.cookie === undefined ? writer.cookie : opts.cookie;
-  if (cookie) headers.cookie = cookie;
-  if (method !== 'GET') headers.origin = ORIGIN;
-  if (opts.body !== undefined) headers['content-type'] = 'application/json';
-  const res = await handler(
-    new Request(`${ORIGIN}${url}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }),
-    { params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}) },
-  );
-  return { res, env: (await res.json()) as Envelope<T> };
-}
-
 let writer: TestLogin;
 let logs: CapturedLogs;
 
 beforeEach(async () => {
   await resetDb();
   resetJevDepsForTests();
-  writer = await loginAs({ email: 'asha.writer@smalltech.in', displayName: 'Asha Writer' });
+  writer = actAs(await loginAs({ email: 'asha.writer@smalltech.in', displayName: 'Asha Writer' }));
   logs = captureLogs();
 });
 

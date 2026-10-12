@@ -4,13 +4,11 @@ import { and, eq } from 'drizzle-orm';
 
 import type { UserDto } from '@/lib/api/dto';
 
-import { getDb, type Db, type Tx } from '../db/client';
+import { getDb, type Executor } from '../db/client';
 import { appUser, type AppUserRow } from '../db/schema';
 
 // app_user access. Every query filters by site id; emails are stored lower-cased (unique per site).
 // Functions take an optional `db` so scripts (pnpm db:seed / admin:create) can pass their own client.
-
-type Executor = Db | Tx;
 
 export function normalizeUserEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -25,15 +23,6 @@ export async function findUserByEmail(siteId: string, email: string, db: Executo
     .select()
     .from(appUser)
     .where(and(eq(appUser.siteId, siteId), eq(appUser.email, normalizeUserEmail(email))))
-    .limit(1);
-  return row ?? null;
-}
-
-export async function findUserById(siteId: string, id: string, db: Executor = getDb()): Promise<AppUserRow | null> {
-  const [row] = await db
-    .select()
-    .from(appUser)
-    .where(and(eq(appUser.siteId, siteId), eq(appUser.id, id)))
     .limit(1);
   return row ?? null;
 }

@@ -1,4 +1,4 @@
-import type { SiteSettingsResponse } from '@/lib/api/dto-phase2';
+import type { SiteSettingsResponse } from '@/lib/api/dto';
 import { withApi } from '@/server/http/api';
 import { getSiteSettings, siteSettingsPatchBody, updateSiteSettings } from '@/server/site/service';
 

@@ -3,8 +3,10 @@ import 'server-only';
 import type { RenderedArticle } from '@/lib/content/types';
 import type { FormatKind, FormatStatus } from '@/lib/formats/registry';
 
+import { and, eq } from 'drizzle-orm';
+
 import type { Tx } from '../db/client';
-import type { AiGenerationRow, ArticleFormatRow, ArticleRow, RevisionRow } from '../db/schema';
+import { articleFormat, type AiGenerationRow, type ArticleFormatRow, type ArticleRow, type RevisionRow } from '../db/schema';
 
 // Format adapter contract (spec/architecture.md §5). One adapter per kind in FORMAT_KINDS,
 // registered in src/server/formats/index.ts. Status is computed, never stored.
@@ -39,4 +41,22 @@ export const GENERATION_STALE_MS = 3 * 60 * 1000;
 
 export function isGenerationActive(gen: Pick<AiGenerationRow, 'status' | 'startedAt'> | null | undefined, now: Date): boolean {
   return !!gen && gen.status === 'running' && now.getTime() - gen.startedAt.getTime() < GENERATION_STALE_MS;
+}
+
+/** Publish: copy the draft payload to the published side (or clear it when there is no draft). */
+export async function publishDraft(
+  tx: Tx,
+  row: ArticleFormatRow | null,
+  draft: unknown,
+  published: { revisionId: string; fingerprint: string | null; now: Date },
+): Promise<void> {
+  if (!row) return;
+  await tx
+    .update(articleFormat)
+    .set(
+      draft
+        ? { publishedPayload: draft, publishedRevisionId: published.revisionId, publishedFingerprint: published.fingerprint, publishedAt: published.now }
+        : { publishedPayload: null, publishedRevisionId: null, publishedFingerprint: null, publishedAt: null },
+    )
+    .where(and(eq(articleFormat.id, row.id), eq(articleFormat.siteId, row.siteId)));
 }

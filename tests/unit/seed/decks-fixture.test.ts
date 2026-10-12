@@ -1,4 +1,4 @@
-// The committed TLDR deck fixtures (src/server/seed/decks/<slug>.json, S2.7) must stay valid:
+// The committed TLDR deck fixtures (src/server/seed/decks/<slug>.json) must stay valid:
 // one per seed post, the right shape, 4–8 lines, every line byte-identical to an ELIGIBLE sentence
 // of that seed post as rendered by the content pipeline. A fixture drifting from its article fails
 // here (the unit gate) rather than silently losing lines at seed time.

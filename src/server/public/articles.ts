@@ -2,83 +2,73 @@ import 'server-only';
 
 import { and, desc, eq, isNotNull } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import { z } from 'zod';
 
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
 import { fmtDate } from '@/lib/format-date';
 import type { RenderedArticle } from '@/lib/content/types';
 import { resolveMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { listenMinutes } from '@/lib/listen/marks';
-import { deckDisclosure, type ArticleViewModel, type DeckViewModel, type ListenViewModel, type PostCardViewModel } from '@/lib/view-models';
+import {
+  deckDisclosure,
+  type ArticleViewModel,
+  type ListenViewModel,
+  type PostCardViewModel,
+} from '@/lib/view-models';
 
+import { isValidSlug } from '../articles/slug';
 import { getConfig } from '../config';
 import { getRenderedRevision } from '../content';
 import { getDb } from '../db/client';
 import { article, articleFormat, articleRevision } from '../db/schema';
-import { readListenPayload, type ListenPayload } from '../formats/payload';
+import { readListenPayload, readTldrPayload, type ListenPayload, type TldrPayload } from '../formats/payload';
 import { log } from '../log';
 import { getCurrentSite } from '../site/current';
 
-// Published-only reads for the reader site (spec/architecture.md §3 "Public article", S1.7).
-// Every query filters by the current site AND `status = 'published'` AND a non-null published
-// revision, so drafts, submitted/approved pieces and unpublished articles (status back to
+// Published-only reads for the reader site (spec/architecture.md §3 "Public article"). Every
+// query filters by the current site AND `status = 'published'` AND a non-null published revision
+// (publishedWhere), so drafts, submitted/approved pieces and unpublished articles (status back to
 // 'draft', pointers kept) are invisible. Readers get the PUBLISHED revision and the PUBLISHED
-// TLDR / Listen payloads only — never the current revision, the draft deck or the draft
-// recording. No AI call happens here.
+// TLDR / Listen payloads only — never the current revision, the draft deck or the draft recording.
+// No AI call happens here.
 
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SLUG_MAX = 80;
-
-/** Minutes for the capsule/card Listen badge: the published recording's length (design `audioMinutes`). */
-export function publishedListenMinutes(raw: unknown, ctx: { articleId: string }): number | null {
-  const listen = parsePublishedListen(raw, ctx);
-  return listen ? listenMinutes(listen.audio.durationMs) : null;
+/** The published-only filter, shared by every public query (pages, proxy, metadata, sitemap). */
+export function publishedWhere(siteId: string) {
+  return and(
+    eq(article.siteId, siteId),
+    eq(article.status, 'published'),
+    isNotNull(article.publishedRevisionId),
+    isNotNull(article.firstPublishedAt),
+  );
 }
 
-/** Published TLDR payload as stored in article_format.published_payload (spec/data.md). */
-const tldrPayloadSchema = z.object({
-  slides: z
-    .array(
-      z.object({
-        sid: z.string(),
-        text: z.string().min(1),
-        source: z.enum(['jev', 'writer']),
-        reason: z.string().nullable().optional(),
-      }),
-    )
-    .min(1)
-    .max(12),
-  generationId: z.string().nullable().optional(),
-});
-export type PublishedTldrPayload = z.infer<typeof tldrPayloadSchema>;
+/** The `listen` format row joined beside the `tldr` one (two rows of the same table). */
+const listenFormat = alias(articleFormat, 'listen_format');
 
-/** Validates a stored published deck; null (with a warning log) when absent or malformed. */
-export function parsePublishedDeck(raw: unknown, ctx: { articleId: string }): PublishedTldrPayload | null {
-  if (raw == null) return null;
-  const parsed = tldrPayloadSchema.safeParse(raw);
-  if (parsed.success) return parsed.data;
-  log.warn('public.deck_invalid', {
-    msg: 'Published TLDR payload failed validation — deck not offered to readers',
-    article_id: ctx.articleId,
-    issues: parsed.error.issues.length,
-  });
-  return null;
+/** Join conditions: the published revision, the tldr format row, the listen format row. */
+const onPublishedRevision = eq(articleRevision.id, article.publishedRevisionId);
+const onTldr = and(eq(articleFormat.articleId, article.id), eq(articleFormat.kind, 'tldr'));
+const onListen = and(eq(listenFormat.articleId, article.id), eq(listenFormat.kind, 'listen'));
+
+/** A stored published payload, validated; null (with a warning log) when malformed — readers then simply don't get that format. */
+function published<T>(read: (raw: unknown) => T | null, raw: unknown, event: string, articleId: string): T | null {
+  const payload = read(raw);
+  if (payload === null && raw != null) {
+    log.warn(event, { msg: 'Published payload failed validation — format not offered to readers', article_id: articleId });
+  }
+  return payload;
 }
 
-/**
- * Validates a stored published Listen (spec/data.md ListenPayload). Stored marks are optional
- * (Phase 3 fix: timing is resolved per request). Null (with a warning log) when absent or
- * malformed — the page then simply offers no Listen.
- */
-export function parsePublishedListen(raw: unknown, ctx: { articleId: string }): ListenPayload | null {
-  if (raw == null) return null;
-  const payload = readListenPayload(raw);
-  if (payload) return payload;
-  log.warn('public.listen_invalid', {
-    msg: 'Published Listen payload failed validation — Listen not offered to readers',
-    article_id: ctx.articleId,
-  });
-  return null;
+/** Minutes for the capsule/card TLDR badge: the design's formula over the whole deck (intro included). */
+function deckMinutes(title: string, dek: string, deck: TldrPayload | null): number | null {
+  return deck ? tldrMinutes(buildDeckSlides(title, dek, deck.slides.map((s) => s.text))) : null;
+}
+
+function absolute(path: string): string {
+  return getConfig().publicBaseUrl + path;
+}
+
+export function articlePath(slug: string): string {
+  return '/p/' + slug;
 }
 
 /**
@@ -87,11 +77,7 @@ export function parsePublishedListen(raw: unknown, ctx: { articleId: string }): 
  * recording's duration (spec/capabilities/listen-sync.md → resolveMarks): stored marks covering
  * the text are served as 'synced', otherwise estimated from word counts.
  */
-export function listenViewModel(
-  payload: ListenPayload,
-  paragraphs: RenderedArticle['paragraphs'],
-  slug: string,
-): ListenViewModel {
+function listenViewModel(payload: ListenPayload, paragraphs: RenderedArticle['paragraphs'], slug: string): ListenViewModel {
   const { marks, timing } = resolveMarks(payload.marks, toTimedParagraphs(paragraphs), payload.audio.durationMs);
   return {
     audioUrl: '/media/' + payload.audio.key,
@@ -101,36 +87,6 @@ export function listenViewModel(
     timing,
     shareUrl: absolute(articlePath(slug) + '/listen'),
   };
-}
-
-/** The `listen` format row joined beside the `tldr` one (two rows of the same table). */
-const listenFormat = alias(articleFormat, 'listen_format');
-
-export function isValidSlug(slug: string): boolean {
-  return slug.length > 0 && slug.length <= SLUG_MAX && SLUG_RE.test(slug);
-}
-
-function absolute(path: string): string {
-  return getConfig().publicBaseUrl.replace(/\/+$/, '') + path;
-}
-
-export function articlePath(slug: string): string {
-  return '/p/' + slug;
-}
-
-/** Minutes for the capsule/card TLDR badge: the design's formula over the whole deck (intro included). */
-function deckMinutes(title: string, dek: string, lines: readonly string[]): number {
-  return tldrMinutes(buildDeckSlides(title, dek, lines));
-}
-
-/** The published-only filter, shared by every public query. */
-function publishedWhere(siteId: string) {
-  return and(
-    eq(article.siteId, siteId),
-    eq(article.status, 'published'),
-    isNotNull(article.publishedRevisionId),
-    isNotNull(article.firstPublishedAt),
-  );
 }
 
 export interface NextCandidate {
@@ -153,19 +109,11 @@ export function nextArticleOf(list: readonly NextCandidate[], slug: string): { s
   return { slug: n.slug, title: n.title };
 }
 
-async function publishedCandidates(siteId: string): Promise<NextCandidate[]> {
-  const rows = await getDb()
-    .select({ slug: article.slug, title: articleRevision.title, firstPublishedAt: article.firstPublishedAt })
-    .from(article)
-    .innerJoin(articleRevision, eq(articleRevision.id, article.publishedRevisionId))
-    .where(publishedWhere(siteId));
-  return rows.map((r) => ({ slug: r.slug, title: r.title, firstPublishedAt: r.firstPublishedAt as Date }));
-}
-
 export interface PublishedArticlePage {
   article: ArticleViewModel;
   /** Instants for OG tags (`article:published_time`, `article:modified_time`). */
   publishedAt: Date;
+  /** When the article last changed for readers: the body-change date when known, else the last publish. */
   updatedAt: Date | null;
   site: { wordmark: string; timezone: string };
 }
@@ -183,6 +131,8 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       bylineName: article.bylineName,
       inProgress: article.inProgress,
       firstPublishedAt: article.firstPublishedAt,
+      lastPublishedAt: article.lastPublishedAt,
+      contentUpdatedAt: article.contentUpdatedAt,
       revisionId: articleRevision.id,
       title: articleRevision.title,
       dek: articleRevision.dek,
@@ -191,27 +141,22 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       listenPayload: listenFormat.publishedPayload,
     })
     .from(article)
-    .innerJoin(articleRevision, eq(articleRevision.id, article.publishedRevisionId))
-    .leftJoin(articleFormat, and(eq(articleFormat.articleId, article.id), eq(articleFormat.kind, 'tldr')))
-    .leftJoin(listenFormat, and(eq(listenFormat.articleId, article.id), eq(listenFormat.kind, 'listen')))
+    .innerJoin(articleRevision, onPublishedRevision)
+    .leftJoin(articleFormat, onTldr)
+    .leftJoin(listenFormat, onListen)
     .where(and(publishedWhere(site.id), eq(article.slug, slug)))
     .limit(1);
   if (!row) return null;
 
   const rendered = await getRenderedRevision(row.revisionId, { title: row.title, dek: row.dek, bodyMd: row.bodyMd });
-  const payload = parsePublishedDeck(row.deckPayload, { articleId: row.id });
-  const lines = payload ? payload.slides.map((s) => s.text) : [];
-  const deck: DeckViewModel | null = payload
-    ? {
-        slides: lines.map((text) => ({ text })),
-        disclosure: deckDisclosure(payload.slides.map((s) => s.source)),
-        shareUrl: absolute(articlePath(row.slug) + '/tldr'),
-      }
-    : null;
-  const listenPayload = parsePublishedListen(row.listenPayload, { articleId: row.id });
+  const deck = published(readTldrPayload, row.deckPayload, 'public.deck_invalid', row.id);
+  const listenPayload = published(readListenPayload, row.listenPayload, 'public.listen_invalid', row.id);
   const listen = listenPayload ? listenViewModel(listenPayload, rendered.paragraphs, row.slug) : null;
-
-  const next = nextArticleOf(await publishedCandidates(site.id), row.slug);
+  const candidates = await getDb()
+    .select({ slug: article.slug, title: articleRevision.title, firstPublishedAt: article.firstPublishedAt })
+    .from(article)
+    .innerJoin(articleRevision, onPublishedRevision)
+    .where(publishedWhere(site.id));
   const publishedAt = row.firstPublishedAt as Date;
 
   return {
@@ -222,22 +167,28 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       topic: row.topic,
       bylineName: row.bylineName,
       publishedLabel: fmtDate(publishedAt, site.timezone),
-      updatedLabel: null, // Phase 4 (content_updated_at)
+      updatedLabel: null, // revision history (content_updated_at label) is deferred
       inProgress: row.inProgress,
       blocks: rendered.blocks,
       times: {
         read: rendered.stats.readMinutes,
-        tldr: payload ? deckMinutes(row.title, row.dek, lines) : null,
+        tldr: deckMinutes(row.title, row.dek, deck),
         listen: listen ? listenMinutes(listen.durationMs) : null,
       },
-      deck,
+      deck: deck
+        ? {
+            slides: deck.slides.map((s) => ({ text: s.text })),
+            disclosure: deckDisclosure(deck.slides.map((s) => s.source)),
+            shareUrl: absolute(articlePath(row.slug) + '/tldr'),
+          }
+        : null,
       listen,
-      correctionsHtml: null, // Phase 4
-      next,
+      correctionsHtml: null, // revision history (corrections) is deferred
+      next: nextArticleOf(candidates as NextCandidate[], row.slug),
       articleUrl: absolute(articlePath(row.slug)),
     },
     publishedAt,
-    updatedAt: null,
+    updatedAt: row.contentUpdatedAt ?? row.lastPublishedAt ?? null,
     site: { wordmark: site.wordmark, timezone: site.timezone },
   };
 }
@@ -262,8 +213,17 @@ export async function getPublishedArticle(slug: string): Promise<ArticleViewMode
   return (await loadPublishedArticle(slug))?.article ?? null;
 }
 
-/** Home "Latest": every published article, newest first (first-published date). */
-export async function listPublishedPostCards(): Promise<PostCardViewModel[]> {
+/** One published article as a card, plus what the home page's Featured/Latest split needs. */
+export interface PublishedCard {
+  card: PostCardViewModel;
+  slug: string;
+  firstPublishedAt: Date;
+  isFeatured: boolean;
+  featuredRank: number | null;
+}
+
+/** Every published article of the current site as a card row, newest first (first-published date). */
+export async function publishedCards(): Promise<PublishedCard[]> {
   const site = await getCurrentSite();
   const rows = await getDb()
     .select({
@@ -271,6 +231,8 @@ export async function listPublishedPostCards(): Promise<PostCardViewModel[]> {
       slug: article.slug,
       topic: article.topic,
       inProgress: article.inProgress,
+      isFeatured: article.isFeatured,
+      featuredRank: article.featuredRank,
       firstPublishedAt: article.firstPublishedAt,
       title: articleRevision.title,
       dek: articleRevision.dek,
@@ -278,26 +240,38 @@ export async function listPublishedPostCards(): Promise<PostCardViewModel[]> {
       listenPayload: listenFormat.publishedPayload,
     })
     .from(article)
-    .innerJoin(articleRevision, eq(articleRevision.id, article.publishedRevisionId))
-    .leftJoin(articleFormat, and(eq(articleFormat.articleId, article.id), eq(articleFormat.kind, 'tldr')))
-    .leftJoin(listenFormat, and(eq(listenFormat.articleId, article.id), eq(listenFormat.kind, 'listen')))
+    .innerJoin(articleRevision, onPublishedRevision)
+    .leftJoin(articleFormat, onTldr)
+    .leftJoin(listenFormat, onListen)
     .where(publishedWhere(site.id))
     .orderBy(desc(article.firstPublishedAt), article.slug);
 
   return rows.map((r) => {
-    const payload = parsePublishedDeck(r.deckPayload, { articleId: r.id });
-    const listen = parsePublishedListen(r.listenPayload, { articleId: r.id });
+    const firstPublishedAt = r.firstPublishedAt as Date;
+    const listen = published(readListenPayload, r.listenPayload, 'public.listen_invalid', r.id);
     return {
       slug: r.slug,
-      title: r.title,
-      dek: r.dek,
-      topic: r.topic,
-      publishedLabel: fmtDate(r.firstPublishedAt as Date, site.timezone),
-      inProgress: r.inProgress,
-      times: {
-        tldr: payload ? deckMinutes(r.title, r.dek, payload.slides.map((s) => s.text)) : null,
-        listen: listen ? listenMinutes(listen.audio.durationMs) : null,
+      firstPublishedAt,
+      isFeatured: r.isFeatured,
+      featuredRank: r.featuredRank,
+      card: {
+        slug: r.slug,
+        title: r.title,
+        dek: r.dek,
+        topic: r.topic,
+        publishedLabel: fmtDate(firstPublishedAt, site.timezone),
+        inProgress: r.inProgress,
+        times: {
+          tldr: deckMinutes(r.title, r.dek, published(readTldrPayload, r.deckPayload, 'public.deck_invalid', r.id)),
+          // the published recording's minutes — never the draft's (spec/capabilities/listen-audio.md)
+          listen: listen ? listenMinutes(listen.audio.durationMs) : null,
+        },
       },
     };
   });
+}
+
+/** Home "Latest" / the archive: every published article as a card, newest first. */
+export async function listPublishedPostCards(): Promise<PostCardViewModel[]> {
+  return (await publishedCards()).map((r) => r.card);
 }

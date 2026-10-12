@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { AudioPlayerHandle } from '@/components/reader/AudioPlayer';
 import type { ArticleDetailDto } from '@/lib/api/dto';
-import type { ListenResponse, ListenStateDto, ListenStatus, ListenTiming } from '@/lib/api/dto-phase3';
+import type { ListenResponse, ListenStateDto, ListenStatus, ListenTiming } from '@/lib/api/dto';
 import { fmtDate } from '@/lib/format-date';
 import { listenMinutes } from '@/lib/listen/marks';
 

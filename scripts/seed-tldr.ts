@@ -6,15 +6,10 @@
 //   - without one (designer mode): the committed fixture src/server/seed/decks/<slug>.json, 0 calls.
 // Prints "decks: N seeded (N calls, $…)". Idempotent: a second run prints "decks: 0 seeded (0 calls)".
 // --write-fixture (real key): afterwards rewrite each <slug>.json from the post's published Jev deck.
-import './lib/allow-server-only';
-
-import { loadEnvConfig } from '@next/env';
-import { eq } from 'drizzle-orm';
+import { requireFirstAdmin, requireSiteId, runCli } from './lib/cli';
 
 import { getConfig } from '../src/server/config';
 import { closeDb, initDb } from '../src/server/db/client';
-import { site } from '../src/server/db/schema';
-import { firstAdminId } from '../src/server/seed/seed-posts';
 import { formatSeedTldrSummary, SeedTldrError, seedTldr, type SeedTldrSource } from '../src/server/seed/seed-tldr';
 
 const USAGE = 'Usage: pnpm seed:tldr [-- --write-fixture] [-- --source auto|jev|fixture]';
@@ -38,21 +33,17 @@ function parseArgs(argv: string[]): { writeFixture: boolean; source: SeedTldrSou
   return out;
 }
 
-async function main(): Promise<void> {
+runCli('seed:tldr', async () => {
   const args = parseArgs(process.argv.slice(2));
-  loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
   const config = getConfig();
 
   // The app's own handle: generateTldr/saveDeck/publishArticle use getDb(), so this run must too
   // (on PGlite a second instance on the same directory is never opened).
   const { db } = await initDb();
   try {
-    const [siteRow] = await db.select({ id: site.id }).from(site).where(eq(site.slug, config.siteSlug)).limit(1);
-    if (!siteRow) throw new SeedTldrError(`Site '${config.siteSlug}' not found — run: pnpm db:seed`);
-    const userId = await firstAdminId(db, siteRow.id);
-    if (!userId) throw new SeedTldrError(`Site '${config.siteSlug}' has no admin yet — run: pnpm db:seed`);
-
-    const result = await seedTldr(db, siteRow.id, userId, { source: args.source, writeFixture: args.writeFixture });
+    const siteId = await requireSiteId(db, config.siteSlug);
+    const userId = await requireFirstAdmin(db, siteId, config.siteSlug);
+    const result = await seedTldr(db, siteId, userId, { source: args.source, writeFixture: args.writeFixture });
     console.log(`source: ${result.source === 'jev' ? 'Jev (real OpenRouter key)' : 'committed fixture (src/server/seed/decks)'}`);
     for (const warning of result.warnings) console.warn(`warning: ${warning}`);
     if (result.skipped.length > 0) console.log(`already published (untouched): ${result.skipped.join(', ')}`);
@@ -61,9 +52,4 @@ async function main(): Promise<void> {
   } finally {
     await closeDb();
   }
-}
-
-main().catch((error: unknown) => {
-  console.error(`seed:tldr failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
 });

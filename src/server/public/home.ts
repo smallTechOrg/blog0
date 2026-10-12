@@ -1,18 +1,11 @@
 import 'server-only';
 
-import { and, desc, eq, isNotNull } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/pg-core';
-
-import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
-import { fmtDate } from '@/lib/format-date';
 import type { PostCardViewModel } from '@/lib/view-models';
 
 import { validateSessionToken } from '../auth/session';
-import { getDb } from '../db/client';
-import { article, articleFormat, articleRevision } from '../db/schema';
 import { getCurrentSite } from '../site/current';
 
-import { parsePublishedDeck, publishedListenMinutes } from './articles';
+import { publishedCards, type PublishedCard } from './articles';
 
 // Home page data (spec/ui.md §3 "Home"; spec/capabilities/reader-site.md "Business Rules"):
 // Featured = published articles flagged featured, by rank (then newest), max FEATURED_MAX;
@@ -22,12 +15,6 @@ import { parsePublishedDeck, publishedListenMinutes } from './articles';
 /** Three or four reads well as a pile; more than that is a scroll tax (design). */
 export const FEATURED_MAX = 4;
 
-export interface HomeViewModel {
-  /** Every published article, newest first (the flat list). */
-  posts: PostCardViewModel[];
-  signedIn: boolean;
-}
-
 export interface HomeSections {
   featured: PostCardViewModel[];
   latest: PostCardViewModel[];
@@ -36,13 +23,7 @@ export interface HomeSections {
 }
 
 /** One published article with what the split needs; `card` is whatever the caller renders. */
-export interface HomeRow<T> {
-  card: T;
-  slug: string;
-  firstPublishedAt: Date;
-  isFeatured: boolean;
-  featuredRank: number | null;
-}
+export type HomeRow<T> = Omit<PublishedCard, 'card'> & { card: T };
 
 function newestFirst<T>(a: HomeRow<T>, b: HomeRow<T>): number {
   return b.firstPublishedAt.getTime() - a.firstPublishedAt.getTime() || a.slug.localeCompare(b.slug);
@@ -74,78 +55,10 @@ export async function isAdminSignedIn(token: string | null | undefined): Promise
   return (await validateSessionToken(token, site.id)) !== null;
 }
 
-/** The `listen` format row joined beside the `tldr` one (two rows of the same table). */
-const listenFormat = alias(articleFormat, 'listen_format');
-
-/** Every published article of the current site as a card row (newest first). */
-async function publishedHomeRows(): Promise<HomeRow<PostCardViewModel>[]> {
-  const site = await getCurrentSite();
-  const rows = await getDb()
-    .select({
-      id: article.id,
-      slug: article.slug,
-      topic: article.topic,
-      inProgress: article.inProgress,
-      isFeatured: article.isFeatured,
-      featuredRank: article.featuredRank,
-      firstPublishedAt: article.firstPublishedAt,
-      title: articleRevision.title,
-      dek: articleRevision.dek,
-      deckPayload: articleFormat.publishedPayload,
-      listenPayload: listenFormat.publishedPayload,
-    })
-    .from(article)
-    .innerJoin(articleRevision, eq(articleRevision.id, article.publishedRevisionId))
-    .leftJoin(articleFormat, and(eq(articleFormat.articleId, article.id), eq(articleFormat.kind, 'tldr')))
-    .leftJoin(listenFormat, and(eq(listenFormat.articleId, article.id), eq(listenFormat.kind, 'listen')))
-    .where(
-      and(
-        eq(article.siteId, site.id),
-        eq(article.status, 'published'),
-        isNotNull(article.publishedRevisionId),
-        isNotNull(article.firstPublishedAt),
-      ),
-    )
-    .orderBy(desc(article.firstPublishedAt), article.slug);
-
-  return rows.map((r) => {
-    const payload = parsePublishedDeck(r.deckPayload, { articleId: r.id });
-    const publishedAt = r.firstPublishedAt as Date;
-    return {
-      slug: r.slug,
-      firstPublishedAt: publishedAt,
-      isFeatured: r.isFeatured,
-      featuredRank: r.featuredRank,
-      card: {
-        slug: r.slug,
-        title: r.title,
-        dek: r.dek,
-        topic: r.topic,
-        publishedLabel: fmtDate(publishedAt, site.timezone),
-        inProgress: r.inProgress,
-        times: {
-          // the design's formula over the whole deck (intro slide included), as on the article page
-          tldr: payload ? tldrMinutes(buildDeckSlides(r.title, r.dek, payload.slides.map((s) => s.text))) : null,
-          // the published recording's minutes — never the draft's (spec/capabilities/listen-audio.md)
-          listen: publishedListenMinutes(r.listenPayload, { articleId: r.id }),
-        },
-      },
-    };
-  });
-}
-
 /** The home page: Featured stack + Latest feed (+ whether an empty site's visitor is an admin). */
 export async function getHomeSections(sessionToken: string | null | undefined): Promise<HomeSections> {
-  const rows = await publishedHomeRows();
+  const rows = await publishedCards();
   const { featured, latest } = splitHomeSections(rows);
   const signedIn = rows.length === 0 ? await isAdminSignedIn(sessionToken) : false;
   return { featured, latest, signedIn };
-}
-
-/** The flat list: every published article newest first (Phase 1 contract, kept for callers/tests). */
-export async function getHomeViewModel(sessionToken: string | null | undefined): Promise<HomeViewModel> {
-  const rows = await publishedHomeRows();
-  // Only the empty state uses the session, so skip the lookup when there is something to list.
-  const signedIn = rows.length === 0 ? await isAdminSignedIn(sessionToken) : false;
-  return { posts: rows.map((r) => r.card), signedIn };
 }

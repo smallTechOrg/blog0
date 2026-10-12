@@ -7,7 +7,7 @@ import { getDb } from '../db/client';
 import { site, type SiteRow } from '../db/schema';
 
 // Resolves the site this process serves (BLOG0_SITE_SLUG). Every query filters by its id.
-// Cached for SITE_CACHE_MS; Phase 2's site service calls invalidateCurrentSite() after edits.
+// Cached for SITE_CACHE_MS; the site service calls invalidateCurrentSite() after edits.
 
 const SITE_CACHE_MS = 60_000;
 

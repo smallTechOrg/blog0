@@ -18,7 +18,7 @@ import { PGLITE_MEMORY } from './url';
 //   next.config.ts `serverExternalPackages`, so Next never bundles it.
 // - PGlite is ONE backend with ONE session: `db.transaction()` holds an in-process mutex for the
 //   whole callback, so a query on the outer `db` inside a transaction callback never resolves.
-//   Every call inside a transaction must use `tx` (audited in S2.8).
+//   Every call inside a transaction must use `tx` (audited).
 // - There is no directory lock: two instances on one dir can corrupt it. Exactly one instance per
 //   process (client.ts caches it on globalThis), and `pnpm dev:design` closes its own before it
 //   starts the dev server.

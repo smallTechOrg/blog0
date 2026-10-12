@@ -5,8 +5,8 @@ import { useMemo } from 'react';
 import { createPortal } from 'react-dom';
 
 import { TldrDeck } from '@/components/reader/TldrDeck';
-import type { PublicTldrDto } from '@/lib/api/dto-phase2';
-import type { PublicListenDto } from '@/lib/api/dto-phase3';
+import type { PublicTldrDto } from '@/lib/api/dto';
+import type { PublicListenDto } from '@/lib/api/dto';
 import { buildDeckSlides } from '@/lib/deck/timing';
 
 import { ListenOverlay } from './ListenOverlay';

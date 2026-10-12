@@ -10,7 +10,7 @@ import { formatAdapters } from '../formats';
 import { loadSeedPosts, type SeedPost } from './posts';
 
 // `pnpm db:seed:posts` (spec/data.md → Seed data): the 5 design articles as published articles,
-// each rendered through the Phase 1 content pipeline (revision fingerprints/stats exactly as a
+// each rendered through the content pipeline (revision fingerprints/stats exactly as a
 // save would compute them), one revision each, no format rows (no TLDR, no audio), so the
 // dashboard chips read "Read ready/published, TLDR missing". Idempotent by slug: an existing
 // slug — seeded earlier or a writer's own article — is never touched, so later edits survive.

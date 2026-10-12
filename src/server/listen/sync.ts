@@ -3,30 +3,30 @@ import 'server-only';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 
-import type { ListenAudioDto, ListenStateDto, MarksInvalidDetails } from '@/lib/api/dto-phase3';
-import { LISTEN_NO_AUDIO, MARKS_INVALID } from '@/lib/api/dto-phase3';
+import type { ListenAudioDto, ListenStateDto, MarksInvalidDetails } from '@/lib/api/dto';
 import { resolveMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { validateMarks } from '@/lib/listen/marks';
 
-import { findArticle, findFormatRow, lockArticle, userNames, type Executor } from '../articles/repo';
+import { findArticle, findFormatRow, lockArticle, requireCurrentRevision, userNames } from '../articles/repo';
 import { notFound, type ActorContext } from '../articles/service';
-import { renderRevision, requireCurrentRevision } from '../articles/views';
+import { renderRevision, UNKNOWN_USER } from '../articles/views';
 import { getConfig } from '../config';
-import { getDb } from '../db/client';
-import { articleFormat, mediaAsset, type ArticleRow } from '../db/schema';
-import { listenAdapter, listenBaseline, readListenPayload, type ListenPayload } from '../formats';
+import { getDb, type Executor } from '../db/client';
+import { articleFormat, type ArticleRow } from '../db/schema';
+import { listenAdapter } from '../formats/listen';
+import { listenBaseline, readListenPayload, type ListenPayload } from '../formats/payload';
 import { ApiError } from '../http/api';
 import { log } from '../log';
+import { findMediaAsset } from '../media/repo';
 
-// Listen sync service (spec/architecture.md §9.5, revised by the Phase 3 fix): the Listen state for
-// the editor tab, and the ALIGNER-FACING marks save (PUT …/listen — Phase 6 writes aligned marks
-// here; no admin UI calls it). Marks are validated against the CURRENT revision's paragraph list
+// Listen sync service (spec/architecture.md §9.5): the Listen state for the editor tab, the
+// route summary, and the ALIGNER-FACING marks save (PUT …/listen — the aligner writes marks here;
+// no admin UI calls it). Marks are validated against the CURRENT revision's paragraph list
 // and the draft recording's duration; a save stores them with `syncFingerprint` = that revision's
 // paragraphs fingerprint and never touches the upload baseline (uploadFingerprint /
 // draft_fingerprint), so a PUT never changes the status. Never touches storage, never calls the LLM.
 
 const LISTEN = 'listen';
-const UNKNOWN_USER = 'Unknown';
 /** Payload cap only; the real rules (one per paragraph …) are MARKS_INVALID, not VALIDATION_FAILED. */
 const MARKS_MAX = 5_000;
 
@@ -49,11 +49,7 @@ function conflict(): ApiError {
 }
 
 async function audioDto(siteId: string, audio: ListenPayload['audio'], db: Executor): Promise<ListenAudioDto> {
-  const [asset] = await db
-    .select()
-    .from(mediaAsset)
-    .where(and(eq(mediaAsset.siteId, siteId), eq(mediaAsset.id, audio.assetId)))
-    .limit(1);
+  const asset = await findMediaAsset(siteId, audio.assetId, db);
   const names = asset ? await userNames(siteId, [asset.createdBy], db) : new Map<string, string>();
   return {
     assetId: audio.assetId,
@@ -125,7 +121,7 @@ export async function saveMarks(ctx: ActorContext, id: string, body: ListenSaveB
     const formatRow = await findFormatRow(ctx.siteId, id, LISTEN, tx);
     const draft = readListenPayload(formatRow?.draftPayload);
     if (!formatRow || !draft) {
-      throw new ApiError(LISTEN_NO_AUDIO, 409, 'Upload a recording before syncing — there is no draft audio for this article.');
+      throw new ApiError('LISTEN_NO_AUDIO', 409, 'Upload a recording before syncing — there is no draft audio for this article.');
     }
 
     const pids = rendered.paragraphs.map((p) => p.pid);
@@ -133,7 +129,7 @@ export async function saveMarks(ctx: ActorContext, id: string, body: ListenSaveB
     if (!check.ok) {
       const n = check.reasons.length;
       throw new ApiError(
-        MARKS_INVALID,
+        'MARKS_INVALID',
         422,
         `The sync can't be saved: ${n} problem${n === 1 ? '' : 's'} with the marks (one mark per paragraph, in order, strictly increasing, inside the recording).`,
         { reasons: check.reasons } satisfies MarksInvalidDetails,
@@ -158,4 +154,21 @@ export async function saveMarks(ctx: ActorContext, id: string, body: ListenSaveB
     log.info('listen.sync', { article_id: row.id, revision_id: revision.id, marks: payload.marks.length, user_id: ctx.user.id });
   });
   return getListenState(ctx.siteId, id);
+}
+
+/** Output summary for the Listen routes: status + counts and ids only (spec/architecture.md §7). */
+export function summarizeListen(data: unknown): Record<string, unknown> {
+  const d = data as ({ listen?: ListenStateDto } & Partial<ListenStateDto>) | null;
+  const l = d?.listen ?? d;
+  if (!l) return {};
+  return {
+    listen_status: l.status,
+    paragraphs: l.paragraphs?.length,
+    marks: l.marks?.length,
+    timing: l.timing,
+    has_audio: !!l.audio,
+    asset_id: l.audio?.assetId ?? null,
+    duration_ms: l.audio?.durationMs ?? null,
+    bytes: l.audio?.bytes ?? null,
+  };
 }

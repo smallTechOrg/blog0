@@ -2,12 +2,12 @@ import 'server-only';
 
 import { and, eq, or, sql } from 'drizzle-orm';
 
-import { getDb } from '../db/client';
+import { getDb, type Executor } from '../db/client';
 import { articleFormat } from '../db/schema';
 import { log } from '../log';
 import { getStorage } from '../storage';
 import { StorageError } from '../storage/types';
-import { deleteMediaAssetRow, findMediaAsset, type Executor } from './repo';
+import { deleteMediaAssetRow, findMediaAsset } from './repo';
 
 // Media cleanup (spec/data.md media_asset rules; spec/architecture.md §9.5): an audio row and its
 // file go away when the recording is replaced, removed or superseded by a publish and no

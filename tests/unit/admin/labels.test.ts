@@ -36,8 +36,8 @@ describe('statusLabel / chipLabel / boundsHint', () => {
   it('labels format chips per kind and status', () => {
     expect(chipLabel({ kind: 'read', status: 'ready', published: true, hasUnpublishedChanges: false })).toBe('Read ✓');
     expect(chipLabel({ kind: 'tldr', status: 'stale', published: true, hasUnpublishedChanges: true })).toBe('TLDR stale');
-    expect(chipLabel({ kind: 'listen', status: 'unavailable', published: false, hasUnpublishedChanges: false })).toBe(
-      'Listen later phase',
+    expect(chipLabel({ kind: 'listen', status: 'text_changed', published: false, hasUnpublishedChanges: false })).toBe(
+      'Listen text changed',
     );
   });
 

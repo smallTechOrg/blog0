@@ -24,10 +24,9 @@ export const FORMAT_STATUS_LABEL: Record<FormatStatus, string> = {
   ready: 'ready',
   stale: 'stale',
   text_changed: 'text changed',
-  unavailable: 'later phase',
 };
 
-/** "Read ✓", "TLDR stale", "Listen later phase". */
+/** "Read ✓", "TLDR stale", "Listen text changed". */
 export function chipLabel(chip: FormatChipDto): string {
   const label = FORMATS[chip.kind]?.label ?? chip.kind;
   if (chip.kind === 'read') return chip.status === 'ready' ? `${label} ✓` : `${label} ${FORMAT_STATUS_LABEL[chip.status]}`;

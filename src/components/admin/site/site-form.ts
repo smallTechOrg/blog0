@@ -2,7 +2,7 @@
 // (spec/api.md PATCH /api/admin/site — any subset), client-side validation mirroring the server
 // schema (src/server/site/service.ts), and the server's VALIDATION_FAILED details → field errors.
 
-import { SITE_SETTINGS_LIMITS, type SiteSettingsDto, type SiteSettingsPatch } from '@/lib/api/dto-phase2';
+import { SITE_SETTINGS_LIMITS, type SiteSettingsDto, type SiteSettingsPatch } from '@/lib/api/dto';
 
 export type SiteField = keyof SiteSettingsDto;
 

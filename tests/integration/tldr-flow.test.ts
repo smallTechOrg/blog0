@@ -1,4 +1,4 @@
-// TLDR flow (S1.6) against real blog0_test.
+// TLDR flow against real blog0_test.
 //
 // 1. "real Jev" suite — create → save → Generate (REAL OpenRouter call) → edit deck → publish →
 //    public view model → text change ⇒ stale with no new generation row; wrong model slug ⇒
@@ -11,14 +11,10 @@
 import { and, count, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { POST as createRoute } from '@/app/api/admin/articles/route';
 import { PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
-import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
 import { DELETE as clearRoute, GET as tldrRoute, PUT as saveDeckRoute } from '@/app/api/admin/articles/[id]/tldr/route';
 import { POST as generateRoute } from '@/app/api/admin/articles/[id]/tldr/generate/route';
 import type {
-  ArticleDetailDto,
-  ArticleResponse,
   DeckInvalidDetails,
   GenerateTldrErrorDetails,
   GenerateTldrResponse,
@@ -27,7 +23,6 @@ import type {
   TldrStateDto,
   UpdateArticleResponse,
 } from '@/lib/api/dto';
-import type { Envelope, Err } from '@/lib/api/envelope';
 import { createArticle as serviceCreateArticle, type ActorContext } from '@/server/articles/service';
 import { getTldrState, resetJevDepsForTests, saveDeck as serviceSaveDeck, setJevDepsForTests } from '@/server/articles/tldr';
 import { getConfig, Secret } from '@/server/config';
@@ -41,11 +36,10 @@ import { getPublishedArticle } from '@/server/public/articles';
 import { loadSeedPosts } from '@/server/seed/posts';
 import { siteSeedFor } from '@/server/site/defaults';
 
+import { actAs, call, createArticle, data, err, ORIGIN, publish } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
-
-const ORIGIN = 'http://localhost:3410';
 
 // Real-key rule (spec/architecture.md → Conventions → Real-key tests).
 // No real key: locally the real suite is SKIPPED (visible PENDING KEY reason); under CI=true it is an
@@ -77,34 +71,8 @@ const BODY = [
   'Readers can open the deck from any article page. The published deck keeps serving until the next publish.',
 ].join('\n');
 
-type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
-
-async function call<T>(handler: Handler, method: string, url: string, opts: { body?: unknown; id?: string; who?: TestLogin } = {}) {
-  const headers: Record<string, string> = { host: 'localhost:3410', cookie: (opts.who ?? writer).cookie };
-  if (method !== 'GET') headers.origin = ORIGIN;
-  if (opts.body !== undefined) headers['content-type'] = 'application/json';
-  const res = await handler(
-    new Request(`${ORIGIN}${url}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }),
-    { params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}) },
-  );
-  return { status: res.status, env: (await res.json()) as Envelope<T> };
-}
-
-function data<T>(env: Envelope<T>): T {
-  if (!env.ok) throw new Error(`expected ok envelope, got ${env.error.code}: ${env.error.message}`);
-  return env.data;
-}
-
-function err(env: Envelope<unknown>): Err['error'] {
-  if (env.ok) throw new Error('expected an error envelope');
-  return env.error;
-}
-
 let writer: TestLogin;
 
-async function createArticle(body: Record<string, unknown>): Promise<ArticleDetailDto> {
-  return data((await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', { body })).env).article;
-}
 async function save(id: string, body: Record<string, unknown>) {
   return data((await call<UpdateArticleResponse>(patchRoute, 'PATCH', `/api/admin/articles/${id}`, { body, id })).env);
 }
@@ -116,9 +84,6 @@ async function putDeck(id: string, body: Record<string, unknown>) {
 }
 async function generate(id: string, revisionId: string) {
   return call<GenerateTldrResponse>(generateRoute, 'POST', `/api/admin/articles/${id}/tldr/generate`, { body: { revisionId }, id });
-}
-async function publish(id: string, revisionId: string) {
-  return call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${id}/publish`, { body: { revisionId }, id });
 }
 async function generationRows(articleId: string): Promise<number> {
   const [row] = await getDb().select({ n: count() }).from(aiGeneration).where(eq(aiGeneration.articleId, articleId));
@@ -181,7 +146,7 @@ beforeEach(async () => {
   await resetDb();
   resetJevDepsForTests();
   resetLlmClientForTests();
-  writer = await loginAs({ displayName: 'Asha Writer' });
+  writer = actAs(await loginAs({ displayName: 'Asha Writer' }));
 });
 
 afterEach(() => {

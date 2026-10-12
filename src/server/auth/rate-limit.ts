@@ -1,22 +1,18 @@
 import 'server-only';
 
+import { FixedWindowCounter } from '../rate-window';
+
 // Login throttling (spec/architecture.md §6; capability admin-auth):
 // - 5 failed attempts for the same (lower-cased email, client IP) within 15 minutes, and
 // - 20 failed attempts for the same lower-cased email across all IPs within 15 minutes
 // → further attempts are refused for the rest of that window. `attempt()` checks AND reserves a
 // failure synchronously, so concurrent requests cannot all pass the check before any of them is
-// counted; a correct password then calls `recordSuccess()`. Phase 1 keeps the counters in memory
-// per process (single instance — see the roadmap assumption); Phase 5 moves them to Postgres.
+// counted; a correct password then calls `recordSuccess()`. Counters live in memory per process
+// (FixedWindowCounter; single instance — see the roadmap assumption).
 
 export const LOGIN_MAX_FAILURES = 5;
 export const LOGIN_EMAIL_MAX_FAILURES = 20;
 export const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const MAX_ENTRIES = 10_000;
-
-interface Entry {
-  windowStart: number;
-  failures: number;
-}
 
 export type RateLimitCheck = { limited: false } | { limited: true; retryAfterSec: number };
 
@@ -28,70 +24,9 @@ function pairKey(email: string, ip: string): string {
   return `${normalize(email)}\u0000${ip}`;
 }
 
-/** Fixed-window failure counters keyed by string, bounded in size. */
-class WindowCounter {
-  readonly #entries = new Map<string, Entry>();
-
-  constructor(private readonly max: number) {}
-
-  /** Seconds until unlock when `key` is at its cap in the current window, else null. */
-  lockedFor(key: string, now: number): number | null {
-    const entry = this.#entries.get(key);
-    if (!entry) return null;
-    const endsAt = entry.windowStart + LOGIN_WINDOW_MS;
-    if (now >= endsAt) {
-      this.#entries.delete(key);
-      return null;
-    }
-    if (entry.failures < this.max) return null;
-    return Math.max(1, Math.ceil((endsAt - now) / 1000));
-  }
-
-  add(key: string, now: number): void {
-    const entry = this.#entries.get(key);
-    if (!entry || now >= entry.windowStart + LOGIN_WINDOW_MS) {
-      if (this.#entries.size >= MAX_ENTRIES) this.prune(now);
-      this.#entries.set(key, { windowStart: now, failures: 1 });
-      return;
-    }
-    entry.failures += 1;
-  }
-
-  /** Undo one reservation (never below zero; an emptied entry is dropped). */
-  refund(key: string): void {
-    const entry = this.#entries.get(key);
-    if (!entry) return;
-    entry.failures -= 1;
-    if (entry.failures <= 0) this.#entries.delete(key);
-  }
-
-  delete(key: string): void {
-    this.#entries.delete(key);
-  }
-
-  prune(now: number): void {
-    for (const [key, entry] of this.#entries) {
-      if (now >= entry.windowStart + LOGIN_WINDOW_MS) this.#entries.delete(key);
-    }
-    if (this.#entries.size >= MAX_ENTRIES) {
-      const overflow = this.#entries.size - MAX_ENTRIES + 1;
-      let removed = 0;
-      for (const key of this.#entries.keys()) {
-        if (removed >= overflow) break;
-        this.#entries.delete(key);
-        removed += 1;
-      }
-    }
-  }
-
-  get size(): number {
-    return this.#entries.size;
-  }
-}
-
 export class LoginRateLimiter {
-  readonly #pairs = new WindowCounter(LOGIN_MAX_FAILURES);
-  readonly #emails = new WindowCounter(LOGIN_EMAIL_MAX_FAILURES);
+  readonly #pairs = new FixedWindowCounter(LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS);
+  readonly #emails = new FixedWindowCounter(LOGIN_EMAIL_MAX_FAILURES, LOGIN_WINDOW_MS);
 
   /** Whether an attempt for (email, ip) is currently refused, and for how long. Does not count. */
   check(email: string, ip: string, now: number = Date.now()): RateLimitCheck {

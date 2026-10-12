@@ -2,7 +2,7 @@ import 'server-only';
 
 import { and, asc, count, desc, eq, inArray, like, ne, sql } from 'drizzle-orm';
 
-import { getDb, type Db, type Tx } from '../db/client';
+import { getDb, type Executor, type Tx } from '../db/client';
 import {
   aiGeneration,
   appUser,
@@ -16,8 +16,6 @@ import {
 } from '../db/schema';
 
 // Data access for articles, revisions, formats and generations. Every query filters by site id.
-
-export type Executor = Db | Tx;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -55,6 +53,13 @@ export async function findRevision(siteId: string, id: string | null, db: Execut
     .where(and(eq(articleRevision.siteId, siteId), eq(articleRevision.id, id)))
     .limit(1);
   return row ?? null;
+}
+
+/** The article's current revision (every article has one outside its creating transaction). */
+export async function requireCurrentRevision(siteId: string, row: ArticleRow, db: Executor = getDb()): Promise<RevisionRow> {
+  const rev = await findRevision(siteId, row.currentRevisionId, db);
+  if (!rev) throw new Error(`Article ${row.id} has no current revision`);
+  return rev;
 }
 
 export async function revisionCount(siteId: string, articleId: string, db: Executor = getDb()): Promise<number> {
@@ -116,6 +121,20 @@ export async function findFormatRow(siteId: string, articleId: string, kind: str
     .where(and(eq(articleFormat.siteId, siteId), eq(articleFormat.articleId, articleId), eq(articleFormat.kind, kind)))
     .limit(1);
   return row ?? null;
+}
+
+/** Insert-or-update the draft side of the article's `kind` format row. */
+export async function upsertFormatDraft(
+  tx: Tx,
+  siteId: string,
+  articleId: string,
+  kind: string,
+  draft: Partial<Pick<ArticleFormatRow, 'draftPayload' | 'draftRevisionId' | 'draftFingerprint' | 'draftUpdatedBy' | 'draftUpdatedAt' | 'updatedAt'>>,
+): Promise<void> {
+  await tx
+    .insert(articleFormat)
+    .values({ siteId, articleId, kind, ...draft })
+    .onConflictDoUpdate({ target: [articleFormat.articleId, articleFormat.kind], set: draft, setWhere: eq(articleFormat.siteId, siteId) });
 }
 
 /** Latest generation per article for a format kind. */

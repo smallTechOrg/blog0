@@ -1,6 +1,7 @@
 import type { ByteRange } from '../storage/types';
 
-// parseRange(header, size) — pure (spec/architecture.md §9.2 step 5). Exactly one of
+// HTTP helpers for /media (spec/architecture.md §9.2), pure: parseRange (step 5), etagMatches,
+// asciiFilename. parseRange(header, size): Exactly one of
 // `bytes=a-b` (b clamped to size−1), `bytes=a-`, `bytes=-n` (n ≥ 1, clamped to size).
 // Anything else (multiple ranges, non-`bytes` unit, malformed) → null = ignore the header (200).
 // `a ≥ size` or `n === 0` (or an empty object) → 'unsatisfiable' (416, `Content-Range: bytes */size`).
@@ -45,4 +46,20 @@ export function parseRange(header: string | null | undefined, size: number): Ran
   if (a >= size) return 'unsatisfiable';
   const end = b === null ? size - 1 : Math.min(b, size - 1);
   return { start: a, end };
+}
+
+/** `If-None-Match` / `If-Range`: any listed tag equal to the ETag (`W/` prefix tolerated), or `*`. */
+export function etagMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  const bare = etag.replace(/^W\//, '');
+  return header.split(',').some((part) => {
+    const tag = part.trim();
+    return tag === '*' || tag.replace(/^W\//, '') === bare;
+  });
+}
+
+/** ASCII-safe filename for Content-Disposition (quotes, backslashes, non-ASCII → `_`). */
+export function asciiFilename(name: string): string {
+  const safe = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_').trim();
+  return safe === '' ? 'file' : safe;
 }

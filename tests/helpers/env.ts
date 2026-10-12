@@ -4,6 +4,7 @@ import { loadEnvConfig } from '@next/env';
 
 // `@/server/llm/key` imports `server-only`: Vitest aliases it to a no-op (vitest.config.ts); other
 // Node-side importers (Playwright) must import scripts/lib/allow-server-only first.
+import { isPostgresUrl } from '@/server/db/url';
 import { openRouterKeyStatus } from '@/server/llm/key';
 
 // Kept on globalThis: Vitest re-evaluates modules per test file inside one worker process, but
@@ -31,7 +32,7 @@ export function getTestDatabaseUrl(): string {
   if (testUrl === '') {
     throw new Error('BLOG0_TEST_DATABASE_URL is not set — add it to .env (e.g. postgres://sai@localhost:5432/blog0_test)');
   }
-  if (!/^postgres(ql)?:\/\//.test(testUrl)) throw new Error('BLOG0_TEST_DATABASE_URL must be a postgres:// URL');
+  if (!isPostgresUrl(testUrl)) throw new Error('BLOG0_TEST_DATABASE_URL must be a postgres:// URL');
   const devUrl = ((globalThis as GlobalWithUrl)[ORIGINAL_DB_URL]?.value ?? '').trim();
   if (devUrl !== '' && devUrl !== testUrl && dbIdentity(devUrl) === dbIdentity(testUrl)) {
     throw new Error('BLOG0_TEST_DATABASE_URL points at the same database as BLOG0_DATABASE_URL — tests refuse to run');

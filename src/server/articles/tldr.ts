@@ -2,13 +2,15 @@ import 'server-only';
 
 import { and, eq } from 'drizzle-orm';
 
-import type { DeckInvalidDetails, GenerationDto } from '@/lib/api/dto';
-import type { TldrStateDto } from '@/lib/api/dto-phase2';
+import type { DeckInvalidDetails, DeckSlideDto, GenerationDto, SentenceDto, TldrStateDto } from '@/lib/api/dto';
+import type { RenderedArticle } from '@/lib/content/types';
 
 import { getConfig } from '../config';
-import { getDb, type Tx } from '../db/client';
-import { aiGeneration, articleFormat, type AiGenerationRow } from '../db/schema';
-import { GENERATION_STALE_MS, isGenerationActive, readTldrPayload, TLDR_MAX_SLIDES, TLDR_MIN_SLIDES, type TldrPayload } from '../formats';
+import { getDb, type Executor } from '../db/client';
+import { aiGeneration, articleFormat, type AiGenerationRow, type ArticleRow } from '../db/schema';
+import { readTldrPayload, TLDR_MAX_SLIDES, TLDR_MIN_SLIDES, type TldrPayload } from '../formats/payload';
+import { missingSlides, tldrAdapter } from '../formats/tldr';
+import { GENERATION_STALE_MS, isGenerationActive } from '../formats/types';
 import { ApiError } from '../http/api';
 import { computeBounds } from '../jev/bounds';
 import { guardInput, jevInputFromRendered } from '../jev/build-input';
@@ -18,20 +20,23 @@ import type { JevErrorCode, JevResult } from '../jev/state';
 import { getLlmClient, isLlmConfigured } from '../llm';
 import type { LlmClient } from '../llm/types';
 import { getCurrentSite } from '../site/current';
-import { findArticle, findFormatRow, latestGeneration, lockArticle, userNames } from './repo';
+import { findArticle, findFormatRow, latestGeneration, lockArticle, requireCurrentRevision, upsertFormatDraft, userNames } from './repo';
 import type { SaveDeckBody } from './schemas';
 import { notFound, type ActorContext } from './service';
-import { buildTldrState as buildTldrStatePhase1, renderRevision, requireCurrentRevision, toGenerationDto } from './views';
+import { iso, renderRevision, UNKNOWN_USER } from './views';
 
-// TLDR orchestration (spec/architecture.md §3 "Generate", "Deck edit"): the generation row, the
-// Jev call and the draft deck. Jev only returns indices; every slide's text is taken from the
-// server's own sentence list.
+// TLDR (spec/architecture.md §3 "Generate", "Deck edit"): the editor's TLDR state, the generation
+// row, the Jev call and the draft deck. Jev only returns indices; every slide's text is taken from
+// the server's own sentence list.
+
+const ABANDONED_CODE = 'GENERATION_ABANDONED';
+const ABANDONED_MESSAGE = 'This generation never finished (the server may have restarted) — try again.';
 
 const TLDR = 'tldr';
 const TASK = 'tldr.select';
 
 /** HTTP status per Jev/LLM error code (spec/api.md → Error codes). */
-export const JEV_ERROR_STATUS: Record<JevErrorCode, number> = {
+const JEV_ERROR_STATUS: Record<JevErrorCode, number> = {
   JEV_NO_SENTENCES: 422,
   JEV_INPUT_TOO_LONG: 422,
   LLM_AUTH: 502,
@@ -69,15 +74,14 @@ function jevAvailable(): boolean {
   return depsOverride?.llm !== undefined || isLlmConfigured();
 }
 
-/** The Phase 1 state plus `jevAvailable` (spec/api.md → TldrStateDto, Phase 2). */
-async function buildTldrState(siteId: string, row: Parameters<typeof buildTldrStatePhase1>[1]): Promise<TldrStateDto> {
-  return { ...(await buildTldrStatePhase1(siteId, row)), jevAvailable: jevAvailable() };
-}
-
 export async function getTldrState(siteId: string, id: string): Promise<TldrStateDto> {
   const row = await findArticle(siteId, id);
   if (!row) throw notFound(id);
   return buildTldrState(siteId, row);
+}
+
+function draftOf(ctx: ActorContext, payload: TldrPayload | null, revisionId: string | null, fingerprint: string | null) {
+  return { draftPayload: payload, draftRevisionId: revisionId, draftFingerprint: fingerprint, draftUpdatedBy: ctx.user.id, draftUpdatedAt: new Date() };
 }
 
 function conflict(): ApiError {
@@ -218,32 +222,12 @@ export async function generateTldr(
       })
       .where(and(eq(aiGeneration.id, generation.id), eq(aiGeneration.siteId, ctx.siteId)))
       .returning();
-    await upsertDraft(tx, ctx, id, { payload, revisionId: revision.id, fingerprint: revision.sentencesFingerprint });
+    await upsertFormatDraft(tx, ctx.siteId, id, TLDR, draftOf(ctx, payload, revision.id, revision.sentencesFingerprint));
   });
 
   const fresh = await findArticle(ctx.siteId, id);
   const names = await userNames(ctx.siteId, [succeeded!.requestedBy]);
   return { tldr: await buildTldrState(ctx.siteId, fresh ?? row), generation: toGenerationDto(succeeded!, names) };
-}
-
-async function upsertDraft(
-  tx: Tx,
-  ctx: ActorContext,
-  articleId: string,
-  draft: { payload: TldrPayload | null; revisionId: string | null; fingerprint: string | null },
-): Promise<void> {
-  const now = new Date();
-  const values = {
-    draftPayload: draft.payload,
-    draftRevisionId: draft.revisionId,
-    draftFingerprint: draft.fingerprint,
-    draftUpdatedBy: ctx.user.id,
-    draftUpdatedAt: now,
-  };
-  await tx
-    .insert(articleFormat)
-    .values({ siteId: ctx.siteId, articleId, kind: TLDR, ...values })
-    .onConflictDoUpdate({ target: [articleFormat.articleId, articleFormat.kind], set: values, setWhere: eq(articleFormat.siteId, ctx.siteId) });
 }
 
 export async function saveDeck(ctx: ActorContext, id: string, body: SaveDeckBody): Promise<TldrStateDto> {
@@ -290,7 +274,7 @@ export async function saveDeck(ctx: ActorContext, id: string, body: SaveDeckBody
       })),
       generationId: existing?.generationId ?? null,
     };
-    await upsertDraft(tx, ctx, id, { payload, revisionId: revision.id, fingerprint: revision.sentencesFingerprint });
+    await upsertFormatDraft(tx, ctx.siteId, id, TLDR, draftOf(ctx, payload, revision.id, revision.sentencesFingerprint));
   });
   return getTldrState(ctx.siteId, id);
 }
@@ -301,8 +285,92 @@ export async function clearDeck(ctx: ActorContext, id: string): Promise<TldrStat
     if (!row) throw notFound(id);
     await tx
       .update(articleFormat)
-      .set({ draftPayload: null, draftRevisionId: null, draftFingerprint: null, draftUpdatedBy: ctx.user.id, draftUpdatedAt: new Date() })
+      .set(draftOf(ctx, null, null, null))
       .where(and(eq(articleFormat.siteId, ctx.siteId), eq(articleFormat.articleId, id), eq(articleFormat.kind, TLDR)));
   });
   return getTldrState(ctx.siteId, id);
+}
+
+// ---------------------------------------------------------------------------------------------
+// TLDR state (GET …/tldr and every TLDR mutation's response)
+// ---------------------------------------------------------------------------------------------
+
+function storedPicks(output: unknown): GenerationDto['picks'] {
+  const picks = (output as { picks?: unknown } | null)?.picks;
+  if (!Array.isArray(picks)) return null;
+  return (picks as NonNullable<GenerationDto['picks']>).map((p) => ({ index: p.index, sid: p.sid, reason: p.reason }));
+}
+
+function toGenerationDto(gen: AiGenerationRow, names: Map<string, string>, now: Date = new Date()): GenerationDto {
+  const abandoned = gen.status === 'running' && !isGenerationActive(gen, now);
+  return {
+    id: gen.id,
+    status: abandoned ? 'failed' : gen.status,
+    model: gen.model,
+    promptVersion: gen.promptVersion,
+    requestedBy: names.get(gen.requestedBy) ?? UNKNOWN_USER,
+    startedAt: gen.startedAt.toISOString(),
+    finishedAt: iso(gen.finishedAt),
+    latencyMs: gen.latencyMs,
+    attempts: gen.attempts,
+    promptTokens: gen.promptTokens,
+    completionTokens: gen.completionTokens,
+    totalTokens: gen.totalTokens,
+    costUsd: gen.costUsd === null ? null : Number(gen.costUsd),
+    picks: gen.status === 'succeeded' ? storedPicks(gen.output) : null,
+    errorCode: abandoned ? ABANDONED_CODE : gen.errorCode,
+    errorMessage: abandoned ? ABANDONED_MESSAGE : gen.errorMessage,
+  };
+}
+
+function toSentenceDtos(rendered: RenderedArticle): SentenceDto[] {
+  const headingByPid = new Map(rendered.paragraphs.map((p) => [p.pid, p.headingPath]));
+  return rendered.sentences.map((s) => ({
+    sid: s.sid,
+    index: s.index,
+    pid: s.pid,
+    text: s.text,
+    words: s.words,
+    headingPath: headingByPid.get(s.pid) ?? [],
+  }));
+}
+
+async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new Date(), db: Executor = getDb()): Promise<TldrStateDto> {
+  const revision = await requireCurrentRevision(siteId, row, db);
+  const [rendered, formatRow, gen] = await Promise.all([
+    renderRevision(revision),
+    findFormatRow(siteId, row.id, TLDR, db),
+    latestGeneration(siteId, row.id, TLDR, db),
+  ]);
+  const names = await userNames(siteId, [formatRow?.draftUpdatedBy, gen?.requestedBy], db);
+
+  const draftPayload = readTldrPayload(formatRow?.draftPayload);
+  let draft: TldrStateDto['draft'] = null;
+  if (formatRow && draftPayload) {
+    const missing = new Set(missingSlides(draftPayload.slides, rendered.sentences));
+    draft = {
+      slides: draftPayload.slides.map(
+        (s): DeckSlideDto => ({ sid: s.sid, text: s.text, source: s.source, reason: s.reason, missing: missing.has(s.sid) }),
+      ),
+      revisionId: formatRow.draftRevisionId ?? revision.id,
+      updatedAt: (formatRow.draftUpdatedAt ?? formatRow.updatedAt).toISOString(),
+      updatedBy: (formatRow.draftUpdatedBy && names.get(formatRow.draftUpdatedBy)) || UNKNOWN_USER,
+    };
+  }
+
+  const publishedPayload = readTldrPayload(formatRow?.publishedPayload);
+  const published: TldrStateDto['published'] =
+    formatRow && publishedPayload && formatRow.publishedAt
+      ? { slides: publishedPayload.slides.map((s) => ({ text: s.text })), publishedAt: formatRow.publishedAt.toISOString() }
+      : null;
+
+  return {
+    status: tldrAdapter.computeStatus({ row: formatRow, currentRevision: revision, latestGeneration: gen, now }),
+    bounds: rendered.sentences.length === 0 ? null : computeBounds(rendered.sentences),
+    sentences: toSentenceDtos(rendered),
+    draft,
+    published,
+    latestGeneration: gen ? toGenerationDto(gen, names, now) : null,
+    jevAvailable: jevAvailable(),
+  };
 }

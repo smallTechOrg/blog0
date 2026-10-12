@@ -33,7 +33,8 @@ function clean(raw: string | undefined): string | undefined {
   return value === '' ? undefined : value;
 }
 
-function isPostgresUrl(value: string): boolean {
+/** A postgres:// (or postgresql://) URL that names a database. */
+export function isPostgresUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return (url.protocol === 'postgres:' || url.protocol === 'postgresql:') && url.pathname.length > 1;

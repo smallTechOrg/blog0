@@ -1,4 +1,4 @@
-// Designer mode (S2.8; spec/architecture.md §11, capability designer-mode) on a real embedded
+// Designer mode (spec/architecture.md §11, capability designer-mode) on a real embedded
 // PGlite (`pglite://memory`): the SAME migrations and seeds as Postgres, the generated designer
 // admin + session secret, health reporting `dbEngine: 'pglite'`, Jev refusing with
 // LLM_NOT_CONFIGURED when no key is set, and — with the real OpenRouter key — one real Generate
@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { POST as loginRoute } from '@/app/api/auth/login/route';
 import { GET as healthRoute } from '@/app/api/health/route';
-import type { HealthPhase2Dto } from '@/lib/api/dto-phase2';
+import type { HealthDto } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import { createArticle, publishArticle, updateArticle, type ActorContext } from '@/server/articles/service';
 import { generateTldr, getTldrState, saveDeck } from '@/server/articles/tldr';
@@ -168,7 +168,7 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
 
   it('reports the engine from /api/health', async () => {
     const response = await healthRoute(new Request(`${ORIGIN}/api/health`), routeCtx);
-    const body = (await response.json()) as Envelope<HealthPhase2Dto>;
+    const body = (await response.json()) as Envelope<HealthDto>;
 
     expect(response.status).toBe(200);
     expect(body.ok && body.data).toMatchObject({ status: 'ok', db: 'ok', dbEngine: 'pglite' });

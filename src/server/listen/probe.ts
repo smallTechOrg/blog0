@@ -2,12 +2,13 @@ import 'server-only';
 
 import { parseBuffer } from 'music-metadata';
 
+import type { AudioMime } from '@/lib/api/dto';
+
 // Audio probe (spec/architecture.md §9.3): the uploaded bytes decide the type — never the file
 // name or the browser's Content-Type. Accepted: MPEG layer III → audio/mpeg (mp3); MPEG-4 audio
 // with AAC/ALAC and no video track → audio/mp4 (m4a). Pure over a Buffer; the ingest maps the
 // result to HTTP errors.
 
-export type AudioMime = 'audio/mpeg' | 'audio/mp4';
 
 export interface AudioProbe {
   mimeType: AudioMime;
@@ -63,14 +64,4 @@ export async function probeAudio(buf: Buffer | Uint8Array): Promise<ProbeResult>
     ok: true,
     probe: { mimeType, durationMs: Math.round(duration * 1000), container, codec: format.codec ?? '' },
   };
-}
-
-/** The human phrase for an unsupported upload ("WAVE audio", "not an audio file"). */
-export function describeDetected(result: Extract<ProbeResult, { ok: false }>): string {
-  return result.detected;
-}
-
-/** Storage extension for an accepted type (mirrors STORAGE_EXTENSIONS in spec/architecture.md §9.1). */
-export function audioExtension(mime: AudioMime): 'mp3' | 'm4a' {
-  return mime === 'audio/mpeg' ? 'mp3' : 'm4a';
 }

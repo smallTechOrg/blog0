@@ -1,5 +1,5 @@
 // Content pipeline contract (spec/architecture.md §4). Pure + isomorphic: produced by
-// src/server/content (S1.2), consumed by Jev, the format adapters and the reader components.
+// src/server/content, consumed by Jev, the format adapters and the reader components.
 
 export type Block =
   | { kind: 'html'; html: string }

@@ -23,7 +23,7 @@ import { validatePicks } from './validate';
 // Jev assembly (spec/agent.md §2): computeBounds → guardInput → buildMessages → callModel →
 // validate → (repair → callModel) → finalize. Max 2 model calls, all within deps.deadlineMs.
 // No DB access here: the generation row and the draft deck are written by
-// src/server/articles/tldr.ts (S1.6) around this call.
+// src/server/articles/tldr.ts around this call.
 
 export interface JevDeps {
   llm: LlmClient;

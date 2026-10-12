@@ -1,4 +1,4 @@
-// pnpm spike:pglite — S2.0: can the v0.1 schema + the service-layer query shapes run unchanged on
+// pnpm spike:pglite — can the v0.1 schema + the service-layer query shapes run unchanged on
 // embedded PGlite via drizzle-orm/pglite? (spec/architecture.md §11.3 risk table, §11.4 spike.)
 // Opens a fresh PGlite dir under var/, applies the SAME migration folder with drizzle's pglite
 // migrator, then exercises one probe per risk point. Prints PASS/FAIL per probe + timing and exits
@@ -11,13 +11,10 @@ import path from 'node:path';
 
 import type { PGlite } from '@electric-sql/pglite';
 import { and, eq, sql } from 'drizzle-orm';
-import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { drizzle, type PgliteDatabase } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 
 import { latestGeneration, lockArticle } from '../src/server/articles/repo';
-import type { Db as PostgresDb, Tx as PostgresTx } from '../src/server/db/client';
 import * as schema from '../src/server/db/schema';
 import { GENERATION_STALE_MS, isGenerationActive } from '../src/server/formats/types';
 import { seedAdmin } from '../src/server/seed/admin';
@@ -25,18 +22,7 @@ import { seedSite } from '../src/server/seed/site';
 
 const { aiGeneration, appUser, article, articleFormat, articleRevision, session, site } = schema;
 
-// §11.2 compile-time check: the engine-neutral `Db` type S2.8 introduces must accept BOTH drivers.
-// If either assignment stops compiling, `pnpm typecheck` fails — that is the probe.
-type NeutralDb = PgDatabase<PgQueryResultHKT, typeof schema>;
-type NeutralTx = Parameters<Parameters<NeutralDb['transaction']>[0]>[0];
-export const neutralFromPglite = (db: PgliteDatabase<typeof schema>): NeutralDb => db;
-export const neutralFromPostgres = (db: PostgresJsDatabase<typeof schema>): NeutralDb => db;
-// Today's service code is typed against PostgresJsDatabase; until S2.8 retypes `Db`/`Tx` the spike
-// passes the PGlite handle through these casts (runtime is identical — same PgDatabase methods).
-const asServiceDb = (db: NeutralDb): PostgresDb => db as unknown as PostgresDb;
-const asServiceTx = (tx: NeutralTx): PostgresTx => tx as unknown as PostgresTx;
-
-// Same folder / ledger location as src/server/db/migrate.ts (kept in sync by S2.8).
+// Same folder / ledger location as src/server/db/migrate.ts (kept in sync).
 const MIGRATIONS_FOLDER = path.join(process.cwd(), 'src', 'server', 'db', 'migrations');
 const MIGRATIONS_SCHEMA = 'drizzle';
 const MIGRATIONS_TABLE = '__drizzle_migrations';
@@ -287,7 +273,7 @@ async function main(): Promise<void> {
   });
 
   await probe('risk #6  real seed code on PGlite: seedSite ×2 + seedAdmin ×2 (argon2 hash, onConflictDoNothing)', async () => {
-    const serviceDb = asServiceDb(db);
+    const serviceDb = db;
     const first = await seedSite(serviceDb, 'spike-seed');
     const second = await seedSite(serviceDb, 'spike-seed');
     assert(first.status === 'created' && second.status === 'ok' && first.site.id === second.site.id, `seedSite: ${first.status}/${second.status}`);
@@ -392,7 +378,7 @@ async function main(): Promise<void> {
     const now = new Date();
     const inserted = await db.transaction(async (tx) => {
       // The real repo.ts lockArticle (… limit 1 FOR UPDATE), unchanged.
-      const locked = await lockArticle(asServiceTx(tx), siteId, articleId);
+      const locked = await lockArticle(tx, siteId, articleId);
       assert(locked && locked.id === articleId, 'FOR UPDATE did not return the row');
       const [gen] = await tx
         .insert(aiGeneration)
@@ -430,14 +416,14 @@ async function main(): Promise<void> {
     const order: string[] = [];
     const t1 = db.transaction(async (tx) => {
       order.push('t1-start');
-      await lockArticle(asServiceTx(tx), siteId, articleId);
+      await lockArticle(tx, siteId, articleId);
       await tx.update(article).set({ topic: 'from-t1' }).where(eq(article.id, articleId));
       await new Promise((r) => setTimeout(r, 50));
       order.push('t1-end');
     });
     const t2 = db.transaction(async (tx) => {
       order.push('t2-start');
-      const row = await lockArticle(asServiceTx(tx), siteId, articleId);
+      const row = await lockArticle(tx, siteId, articleId);
       order.push(`t2-saw:${row!.topic}`);
       order.push('t2-end');
     });
@@ -486,9 +472,9 @@ async function main(): Promise<void> {
     // A second Generate click: the same tx shape as tldr.ts, which must refuse while the row is young.
     const secondClick = (now: Date) =>
       db.transaction(async (tx) => {
-        const locked = await lockArticle(asServiceTx(tx), siteId, articleId);
+        const locked = await lockArticle(tx, siteId, articleId);
         assert(locked, 'lock lost the row');
-        const latest = await latestGeneration(siteId, articleId, 'tldr', asServiceTx(tx));
+        const latest = await latestGeneration(siteId, articleId, 'tldr', tx);
         assert(latest && latest.id === generationId && latest.startedAt instanceof Date, `latest=${JSON.stringify(latest?.id)}`);
         if (isGenerationActive(latest, now)) throw new Error('GENERATION_IN_PROGRESS');
         return 'would-insert';
@@ -601,7 +587,7 @@ async function main(): Promise<void> {
       second = new PGliteCtor(SPIKE_DIR);
       await second.waitReady;
       const r = await second.query<{ n: number }>('select count(*)::int as n from article');
-      return `NOT rejected — second instance opened and read ${r.rows[0]!.n} row(s); no dir lock exists, so S2.8 must guarantee a single opener (globalThis cache; dev:design closes before next dev spawns)`;
+      return `NOT rejected — second instance opened and read ${r.rows[0]!.n} row(s); no dir lock exists, so the app must guarantee a single opener (globalThis cache; dev:design closes before next dev spawns)`;
     } catch (error) {
       return `second open rejected: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`;
     } finally {

@@ -1,4 +1,4 @@
-// Capability newsletter-signup (S2.3): POST /api/newsletter + GET /api/admin/subscribers against the
+// Capability newsletter-signup: POST /api/newsletter + GET /api/admin/subscribers against the
 // real blog0_test Postgres. No LLM is involved in this capability.
 import { and, count, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -19,7 +19,7 @@ import {
   resetNewsletterRateLimiterForTests,
 } from '@/server/newsletter/rate-limit';
 import { subscribersToCsv } from '@/server/newsletter/service';
-import type { NewsletterSubscribeResponse, SubscriberListResponse } from '@/server/newsletter/types';
+import type { NewsletterSubscribeResponse, SubscriberListResponse } from '@/lib/api/dto';
 import { siteSeedFor } from '@/server/site/defaults';
 import { resetCurrentSiteForTests } from '@/server/site/current';
 

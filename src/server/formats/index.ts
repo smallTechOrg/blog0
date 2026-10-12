@@ -9,40 +9,13 @@ import type { FormatAdapter } from './types';
 
 // Server-side format registry, keyed by src/lib/formats/registry.ts (registry order).
 
-export const FORMAT_ADAPTERS: Record<FormatKind, FormatAdapter> = {
+const FORMAT_ADAPTERS: Record<FormatKind, FormatAdapter> = {
   read: readAdapter,
   tldr: tldrAdapter,
   listen: listenAdapter,
 };
 
-export function getFormatAdapter(kind: FormatKind): FormatAdapter {
-  return FORMAT_ADAPTERS[kind];
-}
-
 /** Every registered adapter in FORMAT_KINDS order. */
 export function formatAdapters(): FormatAdapter[] {
   return FORMAT_KINDS.map((kind) => FORMAT_ADAPTERS[kind]);
 }
-
-export type { FormatAdapter, PublishCheck, StatusContext, ChipContext } from './types';
-export { GENERATION_STALE_MS, isGenerationActive } from './types';
-export { missingSlides } from './tldr';
-export { listenAdapter } from './listen';
-export {
-  AUDIO_MIMES,
-  listenAudioSchema,
-  listenBaseline,
-  listenMarkSchema,
-  listenPayloadSchema,
-  readListenPayload,
-  readTldrPayload,
-  tldrPayloadSchema,
-  TLDR_MAX_SLIDES,
-  TLDR_MIN_SLIDES,
-  TLDR_REASON_MAX,
-  type ListenAudio,
-  type ListenMark,
-  type ListenPayload,
-  type TldrPayload,
-  type TldrSlide,
-} from './payload';

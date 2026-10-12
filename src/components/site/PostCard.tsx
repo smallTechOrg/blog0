@@ -7,8 +7,8 @@ import { Dek } from '@/components/design/Dek';
 import { Icon } from '@/components/design/Icon';
 import { cx, dekDelay } from '@/components/design/motion';
 import { SplitHeadline } from '@/components/design/SplitHeadline';
-import type { PublicTldrDto } from '@/lib/api/dto-phase2';
-import type { PublicListenDto } from '@/lib/api/dto-phase3';
+import type { PublicTldrDto } from '@/lib/api/dto';
+import type { PublicListenDto } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import type { PostCardViewModel } from '@/lib/view-models';
 

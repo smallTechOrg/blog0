@@ -1,13 +1,13 @@
 import { imageSize } from 'image-size';
 
+import type { ImageMime } from '@/lib/api/dto';
+
 import { ApiError } from '../http/api';
 
 // Image probe (spec/architecture.md §9.3): type + dimensions from the bytes via `image-size`.
 // png/jpg/webp/gif → mime; anything else (incl. svg, bmp, tiff, avif, ico) or a throw → 415
 // UNSUPPORTED_MEDIA; width or height > 12 000 → 422 IMAGE_TOO_LARGE. Extension and the
 // browser's Content-Type are ignored: content wins.
-
-export type ImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
 export interface ImageProbe {
   mime: ImageMime;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generates the committed audio fixtures under tests/fixtures/audio (spec/roadmap.md Phase 3, S3.2).
+# Generates the committed audio fixtures under tests/fixtures/audio (spec/capabilities/listen-audio.md).
 #
 #   sample.m4a     ~20 s spoken paragraph about blog0 — macOS `say` → AIFF → `afconvert` (AAC, mono)
 #   sample.mp3     the same reading — Homebrew `ffmpeg` (libmp3lame, mono, 48 kbps)

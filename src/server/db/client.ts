@@ -15,6 +15,8 @@ import { databaseKey, type DbEngine, type ParsedDatabaseUrl } from './url';
 /** Both drizzle drivers (postgres-js, pglite) extend this type; services code against it. */
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+/** Either the app handle or an open transaction: every repo function takes one. */
+export type Executor = Db | Tx;
 
 export interface DbHandle {
   db: Db;

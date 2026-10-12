@@ -28,6 +28,7 @@ import {
   listArticlesWithRevision,
   lockArticle,
   nextRevisionNumber,
+  requireCurrentRevision,
   slugInUse,
   takenSlugs,
   userNames,
@@ -173,23 +174,17 @@ export async function createArticle(ctx: ActorContext, body: CreateArticleBody):
   }
 }
 
-function conflictError(current: RevisionRow, savedBy: string): ApiError {
-  return new ApiError(
+/** The current revision, or 409 CONFLICT naming who saved a newer one when it is not `revisionId`. */
+async function assertCurrentRevision(tx: Tx, siteId: string, row: ArticleRow, revisionId: string): Promise<RevisionRow> {
+  const current = await requireCurrentRevision(siteId, row, tx);
+  if (current.id === revisionId) return current;
+  const savedBy = (await userNames(siteId, [current.createdBy], tx)).get(current.createdBy) ?? 'another writer';
+  throw new ApiError(
     'CONFLICT',
     409,
     `A newer version (rev ${current.number}) was saved by ${savedBy} at ${current.createdAt.toISOString()}. Reload to see it — nothing was overwritten.`,
     { currentRevisionId: current.id, currentRevisionNumber: current.number, savedBy },
   );
-}
-
-async function assertCurrentRevision(tx: Tx, siteId: string, row: ArticleRow, revisionId: string): Promise<RevisionRow> {
-  const current = await findRevision(siteId, row.currentRevisionId, tx);
-  if (!current) throw new Error(`Article ${row.id} has no current revision`);
-  if (current.id !== revisionId) {
-    const names = await userNames(siteId, [current.createdBy], tx);
-    throw conflictError(current, names.get(current.createdBy) ?? 'another writer');
-  }
-  return current;
 }
 
 export async function updateArticle(
@@ -288,7 +283,7 @@ async function publishReasons(
   for (const adapter of formatAdapters()) {
     const check = adapter.validateForPublish({ row: rows.find((r) => r.kind === adapter.kind) ?? null, revision, rendered });
     if (!check.ok) {
-      // Only TLDR blocks (sids); Listen never blocks publishing (Phase 3 fix).
+      // Only TLDR blocks (sids); Listen never blocks publishing.
       const details = (check.details ?? {}) as { sids?: string[] };
       reasons.push({
         code: check.code as PublishBlockedReasonCode,

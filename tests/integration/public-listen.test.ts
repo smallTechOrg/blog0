@@ -1,4 +1,4 @@
-// Public Listen data (S3.5 + Phase 3 fix) against real blog0_test Postgres: the article view
+// Public Listen data against real blog0_test Postgres: the article view
 // model's `listen` + `times.listen`, the home/card minutes, and GET /api/public/articles/:slug/listen.
 // Readers get the PUBLISHED recording with marks RESOLVED per request over the PUBLISHED revision's
 // paragraphs (resolveMarks: stored marks covering the text → 'synced', else estimateMarks over
@@ -11,31 +11,28 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { POST as createRoute } from '@/app/api/admin/articles/route';
 import { PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
 import { POST as uploadRoute } from '@/app/api/admin/articles/[id]/audio/route';
 import { GET as adminListenRoute, PUT as listenPutRoute } from '@/app/api/admin/articles/[id]/listen/route';
-import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
 import { GET as listenRoute } from '@/app/api/public/articles/[slug]/listen/route';
 import { GET as tldrRoute } from '@/app/api/public/articles/[slug]/tldr/route';
-import type { PublicTldrDto } from '@/lib/api/dto-phase2';
-import type { ArticleDetailDto, ArticleResponse, UpdateArticleResponse } from '@/lib/api/dto';
-import type { ListenResponse, ListenStateDto, PublicListenDto } from '@/lib/api/dto-phase3';
+import type { ListenResponse, ListenStateDto, PublicListenDto, PublicTldrDto, UpdateArticleResponse } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import { countWords, estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { listenMinutes } from '@/lib/listen/marks';
-import { renderArticle, resetRenderCacheForTests } from '@/server/content';
+import { resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
-import { appUser, article, articleFormat, articleRevision, mediaAsset, type SiteRow } from '@/server/db/schema';
+import { articleFormat, mediaAsset, type SiteRow } from '@/server/db/schema';
 import { getHomeSections } from '@/server/public/home';
 import { getPublishedArticle, listPublishedPostCards } from '@/server/public/articles';
 
+import { actAs, call, createArticle, publish } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
-import { loginAs, type TestLogin } from '../helpers/session';
+import { seedArticle as seed, seedUser } from '../helpers/seed-articles';
+import { loginAs } from '../helpers/session';
 import { resetStorage } from '../helpers/storage';
 
 const BASE = 'http://localhost:3410';
@@ -70,54 +67,19 @@ let siteRow: SiteRow;
 let userId: string;
 let logs: CapturedLogs;
 
-async function makeUser(): Promise<string> {
-  const [u] = await getDb()
-    .insert(appUser)
-    .values({ siteId: siteRow.id, email: 'reader-writer@example.test', displayName: 'Writer', passwordHash: '$x$' })
-    .returning({ id: appUser.id });
-  return u.id;
-}
-
 async function seedArticle(input: { slug: string; status?: 'draft' | 'published'; listen?: ListenSeed; title?: string }) {
   const status = input.status ?? 'published';
-  const title = input.title ?? 'Listen me';
-  const dek = 'A short standfirst.';
-  const firstPublishedAt = status === 'published' ? new Date(Date.UTC(2026, 8, 8, 3, 30)) : null;
-  const [row] = await getDb()
-    .insert(article)
-    .values({
-      siteId: siteRow.id,
-      slug: input.slug,
-      status,
-      topic: 'Craft',
-      bylineName: 'Asha Writer',
-      createdBy: userId,
-      firstPublishedAt,
-      lastPublishedAt: firstPublishedAt,
-    })
-    .returning();
-  const rendered = await renderArticle({ title, dek, bodyMd: BODY });
-  const [rev] = await getDb()
-    .insert(articleRevision)
-    .values({
-      siteId: siteRow.id,
-      articleId: row.id,
-      number: 1,
-      title,
-      dek,
-      bodyMd: BODY,
-      bodyFingerprint: rendered.fingerprints.body,
-      paragraphsFingerprint: rendered.fingerprints.paragraphs,
-      sentencesFingerprint: rendered.fingerprints.sentences,
-      wordCount: rendered.stats.words,
-      eligibleSentenceCount: rendered.sentences.length,
-      createdBy: userId,
-    })
-    .returning();
-  await getDb()
-    .update(article)
-    .set({ currentRevisionId: rev.id, publishedRevisionId: status === 'published' ? rev.id : null })
-    .where(eq(article.id, row.id));
+  const { id, revisionId, rendered } = await seed({
+    siteId: siteRow.id,
+    slug: input.slug,
+    status,
+    title: input.title ?? 'Listen me',
+    bodyMd: BODY,
+    topic: 'Craft',
+    bylineName: 'Asha Writer',
+    firstPublishedAt: status === 'published' ? new Date(Date.UTC(2026, 8, 8, 3, 30)) : null,
+    withPublishedRevision: status === 'published',
+  });
 
   const pids = rendered.paragraphs.map((p) => p.pid);
   let audio: { assetId: string; key: string; mimeType: 'audio/mpeg' | 'audio/mp4'; bytes: number; durationMs: number } | null = null;
@@ -138,7 +100,7 @@ async function seedArticle(input: { slug: string; status?: 'draft' | 'published'
         byteSize: 654_321,
         sha256: 'cd'.repeat(32),
         durationSec: durationMs / 1000,
-        articleId: row.id,
+        articleId: id,
         createdBy: userId,
       })
       .returning();
@@ -157,18 +119,18 @@ async function seedArticle(input: { slug: string; status?: 'draft' | 'published'
       .insert(articleFormat)
       .values({
         siteId: siteRow.id,
-        articleId: row.id,
+        articleId: id,
         kind: 'listen',
         draftPayload: draft,
-        draftRevisionId: draft && draft.marks.length ? rev.id : null,
+        draftRevisionId: draft && draft.marks.length ? revisionId : null,
         draftFingerprint: draft && draft.marks.length ? rendered.fingerprints.paragraphs : null,
         publishedPayload: published,
-        publishedRevisionId: published ? rev.id : null,
+        publishedRevisionId: published ? revisionId : null,
         publishedFingerprint: published ? rendered.fingerprints.paragraphs : null,
         publishedAt: published ? new Date() : null,
       });
   }
-  return { id: row.id, pids, audio, rendered };
+  return { id: id, pids, audio, rendered };
 }
 
 const marksOver = (startMs = 500, stepMs = 30_000) => (pids: string[]) => pids.map((pid, i) => ({ pid, tMs: startMs + i * stepMs }));
@@ -189,7 +151,7 @@ async function callListen(slug: string) {
 beforeEach(async () => {
   siteRow = await resetDb();
   resetRenderCacheForTests();
-  userId = await makeUser();
+  userId = await seedUser(siteRow.id);
   logs = captureLogs();
 });
 
@@ -379,27 +341,13 @@ describe('GET /api/public/articles/:slug/listen', () => {
 });
 
 describe('through the admin routes: estimated → re-estimated after an edit → synced → estimated again', () => {
-  const ORIGIN = 'http://localhost:3410';
-  type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
-  let writer: TestLogin;
-
-  async function call<T>(handler: Handler, method: string, url: string, opts: { body?: unknown; form?: FormData; id?: string } = {}) {
-    const headers: Record<string, string> = { host: 'localhost:3410', cookie: writer.cookie };
-    if (method !== 'GET') headers.origin = ORIGIN;
-    if (opts.body !== undefined) headers['content-type'] = 'application/json';
-    const body = opts.form ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body));
-    const res = await handler(new Request(`${ORIGIN}${url}`, { method, headers, body }), {
-      params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}),
-    });
-    return { status: res.status, env: (await res.json()) as Envelope<T> };
-  }
   function ok<T>(r: { status: number; env: Envelope<T> }): T {
     if (!r.env.ok) throw new Error(`expected ok, got ${r.status} ${r.env.error.code}: ${r.env.error.message}`);
     return r.env.data;
   }
   const state = async (id: string) => ok(await call<ListenStateDto>(adminListenRoute, 'GET', `/api/admin/articles/${id}/listen`, { id }));
   async function publishOk(id: string, revisionId: string) {
-    const res = await call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${id}/publish`, { body: { revisionId }, id });
+    const res = await publish(id, revisionId);
     expect(res.status).toBe(200); // Listen never blocks
     return ok(res).article;
   }
@@ -416,13 +364,11 @@ describe('through the admin routes: estimated → re-estimated after an edit →
 
   beforeEach(async () => {
     resetStorage();
-    writer = await loginAs({ displayName: 'Asha Writer' });
+    actAs(await loginAs({ displayName: 'Asha Writer' }));
   });
 
   it('keeps the reader timing in step with the published text across edits, an aligner PUT and publishes', async () => {
-    const a = ok(
-      await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', { body: { title: 'Listen flow', topic: 'Craft', bodyMd: BODY } }),
-    ).article as ArticleDetailDto;
+    const a = await createArticle({ title: 'Listen flow', topic: 'Craft', bodyMd: BODY });
 
     const form = new FormData();
     const bytes = readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'audio', 'sample.mp3'));

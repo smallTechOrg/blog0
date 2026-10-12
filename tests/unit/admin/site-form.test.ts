@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { draftFrom, fieldErrorsFrom, isDirty, patchFrom, validateDraft } from '@/components/admin/site/site-form';
-import type { SiteSettingsDto } from '@/lib/api/dto-phase2';
-import { SITE_SETTINGS_LIMITS } from '@/lib/api/dto-phase2';
+import type { SiteSettingsDto } from '@/lib/api/dto';
+import { SITE_SETTINGS_LIMITS } from '@/lib/api/dto';
 
 const SAVED: SiteSettingsDto = {
   tagline: 'the meaning of life, universe, and everything',

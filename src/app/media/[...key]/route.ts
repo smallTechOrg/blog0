@@ -1,14 +1,13 @@
-import { randomUUID } from 'node:crypto';
-
 import { errEnvelope } from '@/lib/api/envelope';
-import { parseRange } from '@/server/media/range';
+import { requestIdFor, respond } from '@/server/http/api';
+import { asciiFilename, etagMatches, parseRange } from '@/server/media/range';
 import { findMediaAssetByKey } from '@/server/media/repo';
 import { log } from '@/server/log';
 import { getCurrentSite } from '@/server/site/current';
 import { getStorage } from '@/server/storage';
 import { isValidStorageKey, StorageError, type ByteRange } from '@/server/storage/types';
 
-// GET / HEAD /media/[...key] (spec/architecture.md §9.2, §6; spec/api.md Phase 3). Not withApi
+// GET / HEAD /media/[...key] (spec/architecture.md §9.2, §6; spec/api.md). Not withApi
 // (the body is bytes, not JSON): still sets x-request-id and writes one `media.request` line.
 // 200 full / 206 one range / 304 / 416 / 404 JSON envelope; other methods 405 with Allow.
 
@@ -18,42 +17,10 @@ interface Ctx {
   params: Promise<{ key?: string | string[] }>;
 }
 
-const REQUEST_ID_RE = /^[A-Za-z0-9._-]{8,80}$/;
 const CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
-function requestIdFor(request: Request): string {
-  const incoming = request.headers.get('x-request-id');
-  return incoming && REQUEST_ID_RE.test(incoming) ? incoming : randomUUID();
-}
-
 function notFound(requestId: string): Response {
-  return new Response(JSON.stringify(errEnvelope('NOT_FOUND', 'No such media.', requestId)), {
-    status: 404,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-request-id': requestId },
-  });
-}
-
-/** `If-None-Match`: any listed tag equal to the ETag (`W/` prefix tolerated), or `*`. */
-export function etagMatches(header: string | null, etag: string): boolean {
-  if (!header) return false;
-  const bare = etag.replace(/^W\//, '');
-  for (const part of header.split(',')) {
-    const tag = part.trim();
-    if (tag === '*') return true;
-    if (tag.replace(/^W\//, '') === bare) return true;
-  }
-  return false;
-}
-
-/** ASCII-safe filename for Content-Disposition (quotes, backslashes, non-ASCII → `_`). */
-export function asciiFilename(name: string): string {
-  const safe = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_').trim();
-  return safe === '' ? 'file' : safe;
-}
-
-function keyOf(raw: string | string[] | undefined): string {
-  if (Array.isArray(raw)) return raw.join('/');
-  return raw ?? '';
+  return respond(errEnvelope('NOT_FOUND', 'No such media.', requestId), 404, requestId);
 }
 
 async function serve(request: Request, ctx: Ctx, head: boolean): Promise<Response> {
@@ -65,7 +32,8 @@ async function serve(request: Request, ctx: Ctx, head: boolean): Promise<Respons
   let bytesSent = 0;
 
   try {
-    key = keyOf((await ctx.params).key);
+    const raw = (await ctx.params).key;
+    key = Array.isArray(raw) ? raw.join('/') : (raw ?? '');
     if (!isValidStorageKey(key)) return notFound(requestId);
 
     const site = await getCurrentSite();
@@ -146,10 +114,7 @@ async function serve(request: Request, ctx: Ctx, head: boolean): Promise<Respons
       err_message: err.message,
       err_stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
     });
-    return new Response(JSON.stringify(errEnvelope('INTERNAL', 'Something went wrong serving this file.', requestId)), {
-      status,
-      headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-request-id': requestId },
-    });
+    return respond(errEnvelope('INTERNAL', 'Something went wrong serving this file.', requestId), status, requestId);
   } finally {
     log.info('media.request', {
       msg: `${head ? 'HEAD' : 'GET'} /media/${key} ${status}`,
@@ -163,30 +128,15 @@ async function serve(request: Request, ctx: Ctx, head: boolean): Promise<Respons
   }
 }
 
-export async function GET(request: Request, ctx: Ctx): Promise<Response> {
-  return serve(request, ctx, false);
-}
+export const GET = (request: Request, ctx: Ctx): Promise<Response> => serve(request, ctx, false);
+export const HEAD = (request: Request, ctx: Ctx): Promise<Response> => serve(request, ctx, true);
 
-export async function HEAD(request: Request, ctx: Ctx): Promise<Response> {
-  return serve(request, ctx, true);
-}
-
-function methodNotAllowed(request: Request): Response {
+async function methodNotAllowed(request: Request): Promise<Response> {
   return new Response(null, { status: 405, headers: { allow: 'GET, HEAD', 'x-request-id': requestIdFor(request) } });
 }
 
-export async function POST(request: Request): Promise<Response> {
-  return methodNotAllowed(request);
-}
-export async function PUT(request: Request): Promise<Response> {
-  return methodNotAllowed(request);
-}
-export async function PATCH(request: Request): Promise<Response> {
-  return methodNotAllowed(request);
-}
-export async function DELETE(request: Request): Promise<Response> {
-  return methodNotAllowed(request);
-}
-export async function OPTIONS(request: Request): Promise<Response> {
-  return methodNotAllowed(request);
-}
+export const POST = methodNotAllowed;
+export const PUT = methodNotAllowed;
+export const PATCH = methodNotAllowed;
+export const DELETE = methodNotAllowed;
+export const OPTIONS = methodNotAllowed;

@@ -1,4 +1,4 @@
-// Site settings (S2.2) against real blog0_test: GET/PATCH /api/admin/site, validation and guards,
+// Site settings against real blog0_test: GET/PATCH /api/admin/site, validation and guards,
 // the reader-facing site record (getCurrentSite cache invalidated on save, so home and /about show
 // the edit on next load), state surviving a cold cache, and the idempotent legacy-brand upgrade
 // that `pnpm db:seed` applies to rows seeded before the brand became blog0.
@@ -7,8 +7,8 @@ import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { GET as getRoute, PATCH as patchRoute } from '@/app/api/admin/site/route';
-import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto-phase2';
-import type { Envelope, Err } from '@/lib/api/envelope';
+import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
+import type { Envelope } from '@/lib/api/envelope';
 import { siteViewModelFrom } from '@/lib/view-models';
 import { getDb } from '@/server/db/client';
 import { site } from '@/server/db/schema';
@@ -16,10 +16,9 @@ import { getCurrentSite, resetCurrentSiteForTests } from '@/server/site/current'
 import { SITE_DEFAULTS } from '@/server/site/defaults';
 import { getSiteSettings, upgradeLegacyBrand } from '@/server/site/service';
 
+import { data, err, ORIGIN } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { loginAs, type TestLogin } from '../helpers/session';
-
-const ORIGIN = 'http://localhost:3410';
 
 type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
 
@@ -35,16 +34,6 @@ async function call<T>(
   if (body !== undefined) headers['content-type'] = 'application/json';
   const res = await handler(new Request(`${ORIGIN}/api/admin/site`, { method, headers, body }), { params: Promise.resolve({}) });
   return { status: res.status, env: (await res.json()) as Envelope<T> };
-}
-
-function data<T>(env: Envelope<T>): T {
-  if (!env.ok) throw new Error(`expected ok envelope, got ${env.error.code}: ${env.error.message}`);
-  return env.data;
-}
-
-function err(env: Envelope<unknown>): Err['error'] {
-  if (env.ok) throw new Error('expected an error envelope');
-  return env.error;
 }
 
 async function siteRow() {
@@ -234,7 +223,7 @@ describe('PATCH /api/admin/site — errors', () => {
   });
 });
 
-describe('legacy brand upgrade (pnpm db:seed on a Phase 1 database)', () => {
+describe('legacy brand upgrade (pnpm db:seed on a pre-rebrand database)', () => {
   it('turns a log0 row into blog0 once, keeps admin edits, and is a no-op on re-run', async () => {
     const slug = (await getCurrentSite()).slug;
     await getDb().update(site).set({ wordmark: 'log0', brandName: 'log0', aboutStrap: 'Edited by an admin.' }).where(eq(site.slug, slug));

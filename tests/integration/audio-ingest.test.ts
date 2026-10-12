@@ -1,7 +1,7 @@
-// Audio ingest (S3.2) against real blog0_test + real files under var/storage-test
+// Audio ingest against real blog0_test + real files under var/storage-test
 // (spec/capabilities/listen-audio.md → Success Criteria; spec/architecture.md §9.3, §9.5).
 //
-// Happy paths: m4a + mp3 uploads → ready (Phase 3 fix: no sync step; uploadFingerprint = the
+// Happy paths: m4a + mp3 uploads → ready (no sync step; uploadFingerprint = the
 // current paragraphs fingerprint, timing estimated), content-detected mime, duration vs
 // sample.json, file + media_asset row + listen draft payload. Edge/error paths: renamed text file, WAV, over-size
 // (413, nothing on disk / in the DB), over-length (422 via injected limits), unknown article, no
@@ -16,12 +16,8 @@ import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { POST as createRoute } from '@/app/api/admin/articles/route';
 import { DELETE as deleteAudioRoute, POST as uploadRoute } from '@/app/api/admin/articles/[id]/audio/route';
-import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
-import type { ArticleDetailDto, ArticleResponse } from '@/lib/api/dto';
-import type { ListenResponse, ListenStateDto } from '@/lib/api/dto-phase3';
-import type { Envelope, Err } from '@/lib/api/envelope';
+import type { ArticleDetailDto, ListenResponse, ListenStateDto } from '@/lib/api/dto';
 import { getConfig, resetConfigForTests } from '@/server/config';
 import { getDb } from '@/server/db/client';
 import { article as articleTable, articleFormat, articleRevision, mediaAsset, type MediaAssetRow } from '@/server/db/schema';
@@ -29,16 +25,14 @@ import { ApiError } from '@/server/http/api';
 import { uploadAudio } from '@/server/listen/ingest';
 import { getPublishedArticle } from '@/server/public/articles';
 
+import { actAs, call, createArticle as create, data, err, ORIGIN, publish as publishCall } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
 import { resetStorage } from '../helpers/storage';
 
-const ORIGIN = 'http://localhost:3410';
 const FIXTURES = path.join(import.meta.dirname, '..', 'fixtures', 'audio');
 const known = JSON.parse(readFileSync(path.join(FIXTURES, 'sample.json'), 'utf8')) as Record<'mp3' | 'm4a' | 'wav', { durationMs: number; bytes: number; sha256: string }>;
-
-type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
 
 function fixture(name: string): Buffer {
   return readFileSync(path.join(FIXTURES, name));
@@ -52,40 +46,12 @@ function fileOf(bytes: Buffer | Uint8Array, name: string, type: string): File {
   return new File([new Uint8Array(bytes)], name, { type });
 }
 
-async function call<T>(handler: Handler, method: string, url: string, opts: { form?: FormData; json?: unknown; id?: string; who?: TestLogin } = {}) {
-  const headers: Record<string, string> = { host: 'localhost:3410', cookie: (opts.who ?? writer).cookie };
-  if (method !== 'GET') headers.origin = ORIGIN;
-  let body: BodyInit | undefined;
-  if (opts.form) body = opts.form;
-  else if (opts.json !== undefined) {
-    headers['content-type'] = 'application/json';
-    body = JSON.stringify(opts.json);
-  }
-  const res = await handler(new Request(`${ORIGIN}${url}`, { method, headers, body }), {
-    params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}),
-  });
-  return { status: res.status, env: (await res.json()) as Envelope<T> };
-}
-
-function data<T>(env: Envelope<T>): T {
-  if (!env.ok) throw new Error(`expected ok envelope, got ${env.error.code}: ${env.error.message}`);
-  return env.data;
-}
-
-function err(env: Envelope<unknown>): Err['error'] {
-  if (env.ok) throw new Error('expected an error envelope');
-  return env.error;
-}
-
 let writer: TestLogin;
 let storageDir: string;
 let logs: CapturedLogs;
 
-async function createArticle(body: Record<string, unknown> = {}): Promise<ArticleDetailDto> {
-  const res = await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', {
-    json: { title: 'A recorded article', bodyMd: 'First paragraph of the reading.\n\nSecond paragraph of the reading.', ...body },
-  });
-  return data(res.env).article;
+function createArticle(body: Record<string, unknown> = {}): Promise<ArticleDetailDto> {
+  return create({ title: 'A recorded article', bodyMd: 'First paragraph of the reading.\n\nSecond paragraph of the reading.', ...body });
 }
 
 async function upload(id: string, file: File) {
@@ -110,7 +76,7 @@ async function paragraphsFingerprint(revisionId: string): Promise<string> {
 }
 
 async function publish(id: string, revisionId: string) {
-  const res = await call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${id}/publish`, { json: { revisionId }, id });
+  const res = await publishCall(id, revisionId);
   expect(res.status).toBe(200);
   return data(res.env).article;
 }
@@ -141,7 +107,7 @@ beforeEach(async () => {
   resetConfigForTests();
   storageDir = resetStorage();
   await resetDb();
-  writer = await loginAs();
+  writer = actAs(await loginAs());
   logs = captureLogs();
 });
 
@@ -401,7 +367,7 @@ describe('replace and remove', () => {
     const article = await createArticle();
     const published = await uploadOk(article.id, fileOf(fixture('sample.m4a'), 'published.m4a', 'audio/mp4'));
     const draftRow = (await listenRow(article.id))!;
-    // Stand in for S3.3's adapter publish: copy the (synced) draft into the published columns.
+    // Stand in for the adapter publish: copy the (synced) draft into the published columns.
     const payload = { ...(draftRow.draftPayload as { audio: object }), marks: [{ pid: 'p1', tMs: 0 }, { pid: 'p2', tMs: 9000 }], syncFingerprint: 'fp-published' };
     await getDb()
       .update(articleFormat)
@@ -543,7 +509,7 @@ describe('publish deletes the superseded published recording (listen-audio file 
     const second = await uploadOk(article.id, fileOf(fixture('sample.mp3'), 'second.mp3', 'audio/mpeg'));
     // Clearing the topic makes the publish fail its guard → the transaction rolls back.
     await getDb().update(articleTable).set({ topic: '' }).where(eq(articleTable.id, article.id));
-    const res = await call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${article.id}/publish`, { json: { revisionId: article.currentRevision.id }, id: article.id });
+    const res = await publishCall(article.id, article.currentRevision.id);
     expect(res.status).toBe(422);
     expect(existsSync(onDisk(first.audio!.key))).toBe(true);
     expect((await assetRows()).map((r) => r.id).sort()).toEqual([first.audio!.assetId, second.audio!.assetId].sort());

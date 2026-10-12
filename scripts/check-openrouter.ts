@@ -1,5 +1,5 @@
 // pnpm check:openrouter — proves the OpenRouter key and the Jev model slug are alive with one real call.
-// Self-contained (plain fetch, not the S1.3 adapter). Prints only booleans/numbers — never the key.
+// Self-contained (plain fetch, not the LLM adapter). Prints only booleans/numbers — never the key.
 // Exit 1 on any failure. Model + fallback list: spec/agent.md §3.
 import { loadEnvConfig } from '@next/env';
 

@@ -1,4 +1,4 @@
-// Seed decks (S2.7, `pnpm seed:tldr`) against real blog0_test Postgres:
+// Seed decks (`pnpm seed:tldr`) against real blog0_test Postgres:
 //   - fixture path (no AI): 5 published decks from src/server/seed/decks/*.json, every line verbatim
 //     in its article, editors' disclosure, 0 ai_generation rows; a mangled fixture line is dropped
 //     with a logged warning and the deck still publishes; idempotent; never publishes a writer's
@@ -16,7 +16,7 @@ import { updateArticle } from '@/server/articles/service';
 import { renderArticle } from '@/server/content';
 import { closeDb, getDb } from '@/server/db/client';
 import { aiGeneration, article, articleFormat, type SiteRow } from '@/server/db/schema';
-import { readTldrPayload, type TldrPayload } from '@/server/formats';
+import { readTldrPayload, type TldrPayload } from '@/server/formats/payload';
 import { JEV_PROMPT_VERSION } from '@/server/jev/prompt';
 import { resetLlmClientForTests } from '@/server/llm';
 import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';

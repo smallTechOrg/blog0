@@ -9,7 +9,7 @@ import { session } from '../db/schema';
 import { getConfig } from '../config';
 import { ApiError } from '../http/api';
 import { log, maskEmail } from '../log';
-import { findUserByEmail, recordUserLogin, toUserDto } from '../users/repo';
+import { findUserByEmail, normalizeUserEmail, recordUserLogin, toUserDto } from '../users/repo';
 import { verifyAgainstDummy, verifyPassword } from './password';
 import { getLoginRateLimiter, rateLimitMessage } from './rate-limit';
 import { createSession } from './session';
@@ -21,9 +21,7 @@ import { createSession } from './session';
 export const BAD_CREDENTIALS_MESSAGE = 'Email or password is incorrect.';
 const DEFAULT_NEXT = '/admin';
 
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
+export { normalizeUserEmail as normalizeEmail } from '../users/repo';
 
 /** Throttling key when no trusted proxy is configured: forwarding headers are client-controlled. */
 export const DIRECT_CLIENT = 'direct';
@@ -91,7 +89,7 @@ function logAttempt(outcome: 'ok' | 'bad_credentials' | 'rate_limited', email: s
  */
 export async function login(input: LoginInput): Promise<LoginSuccess> {
   const now = input.now ?? new Date();
-  const email = normalizeEmail(input.email);
+  const email = normalizeUserEmail(input.email);
   const limiter = getLoginRateLimiter();
 
   // Check AND reserve this attempt synchronously (before the first await), so concurrent wrong

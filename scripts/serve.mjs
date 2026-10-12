@@ -6,7 +6,7 @@
 // `BLOG0_DIST_DIR=.next-gate pnpm start` serves the build made by `BLOG0_DIST_DIR=.next-gate pnpm build`.
 // `pnpm dev` is the hot-reload server (Turbopack). Open it as http://localhost:<port>; 127.0.0.1 and
 // this machine's LAN addresses are allowed by next.config.ts `allowedDevOrigins` (without that, the
-// HMR socket was refused and the page fully reloaded every ~40 s — the Phase 1 "reload loop").
+// HMR socket was refused and the page fully reloaded every ~40 s — the old "reload loop").
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import process from 'node:process';

@@ -13,7 +13,6 @@ import type {
   SentenceDto,
   TldrStateDto,
 } from '@/lib/api/dto';
-import type { TldrStateDto as TldrStatePhase2 } from '@/lib/api/dto-phase2';
 
 import { apiRequest } from '../api';
 import { boundsHint, FORMAT_STATUS_LABEL, generationMeta } from '../labels';
@@ -288,7 +287,7 @@ export function TldrTab(props: TldrTabProps) {
         : null;
   const readMinutes = Math.max(1, Math.ceil(article.currentRevision.wordCount / 230));
   // Designer mode with no OpenRouter key (spec/ui.md §4, Phase 2): Generate disabled + notice.
-  const jevAvailable = (tldr as TldrStatePhase2 | null)?.jevAvailable !== false;
+  const jevAvailable = tldr?.jevAvailable !== false;
 
   return (
     <div className="tldrtab">

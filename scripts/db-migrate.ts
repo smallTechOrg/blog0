@@ -1,16 +1,13 @@
 // pnpm db:migrate — applies pending migrations (src/server/db/migrations) to BLOG0_DATABASE_URL
 // (postgres://…, or pglite://<dir> for designer mode; never while a dev server has that dir open).
-import './lib/allow-server-only';
-
-import { loadEnvConfig } from '@next/env';
+import { runCli } from './lib/cli';
 
 import { loadDatabaseTarget } from '../src/server/config';
 import { createDbHandle } from '../src/server/db/client';
 import { getMigrationStatus, runMigrations } from '../src/server/db/migrate';
 import { describeDatabase } from '../src/server/db/url';
 
-async function main(): Promise<void> {
-  loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
+runCli('db:migrate', async () => {
   const target = loadDatabaseTarget(process.env);
   const label = describeDatabase(target);
   const handle = await createDbHandle(target, { max: 1 });
@@ -28,9 +25,4 @@ async function main(): Promise<void> {
   } finally {
     await handle.close();
   }
-}
-
-main().catch((error: unknown) => {
-  console.error(`db:migrate failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
 });

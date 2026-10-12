@@ -30,15 +30,22 @@ export class ApiError extends Error {
   }
 }
 
-/** Return from a handler to control the status code / extra headers (e.g. 201, Set-Cookie). */
+export interface ApiResultInit {
+  status?: number;
+  headers?: Array<[string, string]>;
+  /** A raw body (e.g. a CSV download) sent instead of the JSON envelope; `data` still feeds the log summary. */
+  body?: string;
+}
+
+/** Return from a handler to control the status code / extra headers (e.g. 201, Set-Cookie) or send a raw body. */
 export class ApiResult<T> {
   constructor(
     readonly data: T,
-    readonly init: { status?: number; headers?: Array<[string, string]> } = {},
+    readonly init: ApiResultInit = {},
   ) {}
 }
 
-export function apiResult<T>(data: T, init: { status?: number; headers?: Array<[string, string]> } = {}): ApiResult<T> {
+export function apiResult<T>(data: T, init: ApiResultInit = {}): ApiResult<T> {
   return new ApiResult(data, init);
 }
 
@@ -50,7 +57,7 @@ export interface RouteContext {
 
 type AuthMode = 'admin' | 'none';
 type Summary = Record<string, unknown>;
-/** `body: 'multipart'` — the handler receives the parsed `FormData` (uploads, spec/api.md Phase 3). */
+/** `body: 'multipart'` — the handler receives the parsed `FormData` (uploads). */
 export type BodySpec = z.ZodType | 'multipart' | undefined;
 export type BodyOf<S extends BodySpec> = S extends 'multipart' ? FormData : S extends z.ZodType ? z.infer<S> : undefined;
 
@@ -63,8 +70,10 @@ export interface ApiOptions<S extends BodySpec, A extends AuthMode> {
    *  else 413 PAYLOAD_TOO_LARGE before the body is read. Read at request time (config limits). */
   maxBytes?: number | (() => number);
   /** Counts/ids only — never article text, passwords, tokens, keys or full emails. */
-  summarizeInput?: (body: BodyOf<S>) => Summary;
+  summarizeInput?: (body: BodyOf<S>, request: Request) => Summary;
   summarizeOutput?: (data: unknown) => Summary;
+  /** Cache-Control for a 200 (public reads); everything else stays `no-store`. */
+  cacheControl?: string;
 }
 
 export interface ApiContext<S extends BodySpec, A extends AuthMode> {
@@ -107,7 +116,8 @@ async function parseMultipart(request: Request): Promise<FormData> {
   }
 }
 
-function requestIdFor(request: Request): string {
+/** The incoming x-request-id when well-formed, else a fresh uuid. */
+export function requestIdFor(request: Request): string {
   const incoming = request.headers.get('x-request-id');
   return incoming && REQUEST_ID_RE.test(incoming) ? incoming : randomUUID();
 }
@@ -127,14 +137,18 @@ function originAllowed(request: Request): boolean {
   return host !== null && originUrl.host === host;
 }
 
-function json(body: unknown, status: number, requestId: string, extra: Array<[string, string]> = []): Response {
+/** A JSON envelope response (or a raw body when `extra` sets its own content-type), `no-store` unless overridden. */
+export function respond(body: unknown, status: number, requestId: string, extra: Array<[string, string]> = []): Response {
   const headers = new Headers({
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'x-request-id': requestId,
   });
-  for (const [name, value] of extra) headers.append(name, value);
-  return new Response(JSON.stringify(body), { status, headers });
+  for (const [name, value] of extra) {
+    if (name === 'content-type' || name === 'cache-control') headers.set(name, value);
+    else headers.append(name, value);
+  }
+  return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers });
 }
 
 async function parseBody(request: Request, schema: z.ZodType): Promise<unknown> {
@@ -197,9 +211,7 @@ export function withApi<S extends BodySpec = undefined, A extends AuthMode = Aut
       } else if (options.body) {
         body = await parseBody(request, options.body);
       }
-      if (options.summarizeInput) {
-        inputSummary = options.summarizeInput(body as BodyOf<S>);
-      }
+      if (options.summarizeInput) inputSummary = options.summarizeInput(body as BodyOf<S>, request);
 
       const result = await handler({
         request,
@@ -211,19 +223,18 @@ export function withApi<S extends BodySpec = undefined, A extends AuthMode = Aut
 
       const extraHeaders: Array<[string, string]> = [];
       if (auth?.setCookie) extraHeaders.push(['set-cookie', auth.setCookie]);
-      let data: unknown = result;
-      if (result instanceof ApiResult) {
-        data = result.data;
-        status = result.init.status ?? 200;
-        extraHeaders.push(...(result.init.headers ?? []));
-      }
+      const init = result instanceof ApiResult ? result.init : {};
+      const data = result instanceof ApiResult ? result.data : result;
+      status = init.status ?? 200;
+      extraHeaders.push(...(init.headers ?? []));
+      if (status === 200 && options.cacheControl) extraHeaders.push(['cache-control', options.cacheControl]);
       if (options.summarizeOutput) outputSummary = options.summarizeOutput(data);
-      response = json(okEnvelope(data), status, requestId, extraHeaders);
+      response = respond(init.body ?? okEnvelope(data), status, requestId, extraHeaders);
     } catch (error) {
       if (error instanceof ApiError) {
         status = error.status;
         errCode = error.code;
-        response = json(
+        response = respond(
           errEnvelope(error.code, error.message, requestId, error.details),
           error.status,
           requestId,
@@ -241,7 +252,7 @@ export function withApi<S extends BodySpec = undefined, A extends AuthMode = Aut
           err_message: err.message,
           err_stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
         });
-        response = json(errEnvelope('INTERNAL', INTERNAL_MESSAGE, requestId), 500, requestId);
+        response = respond(errEnvelope('INTERNAL', INTERNAL_MESSAGE, requestId), 500, requestId);
       }
     }
 

@@ -1,8 +1,8 @@
-// Seed posts (S2.6) against real blog0_test Postgres: `seedPosts` writes the 5 design articles
-// through the Phase 1 content pipeline as published articles (one revision each, no format rows),
+// Seed posts against real blog0_test Postgres: `seedPosts` writes the 5 design articles
+// through the content pipeline as published articles (one revision each, no format rows),
 // is idempotent by slug and never overwrites a later writer edit; plus the legacy-brand upgrade
 // `seedSite` applies so an existing DB becomes "blog0" on `pnpm db:seed`.
-// No LLM is involved in seeding (decks are S2.7), so there is no real-key call here.
+// No LLM is involved in seeding (decks are `pnpm seed:tldr`), so there is no real-key call here.
 import { and, asc, eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -70,7 +70,7 @@ describe('seedPosts — first run', () => {
       expect(rev.bodyMd).toBe(post.bodyMd);
       expect(rev.createdBy).toBe(admin.user.id);
 
-      // Through the Phase 1 content pipeline: fingerprints/stats match a fresh render.
+      // Through the content pipeline: fingerprints/stats match a fresh render.
       const rendered = await renderArticle({ title: post.title, dek: post.dek, bodyMd: post.bodyMd });
       expect(rev.bodyFingerprint).toBe(rendered.fingerprints.body);
       expect(rev.paragraphsFingerprint).toBe(rendered.fingerprints.paragraphs);

@@ -2,10 +2,9 @@ import 'server-only';
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { getConfig } from '../config';
-import { closeDb, initDb, type Db } from '../db/client';
+import { closeDb, initDb } from '../db/client';
 import { getMigrationStatus, runMigrations } from '../db/migrate';
 import { resolvePgliteDir } from '../db/pglite';
 import { DEFAULT_PGLITE_DIR, describeDatabase, isMemoryPglite } from '../db/url';
@@ -13,6 +12,7 @@ import { maskEmail } from '../log';
 import { adminCredentialsFromEnv, seedAdmin, SeedError } from '../seed/admin';
 import { SEED_POSTS } from '../seed/posts';
 import { firstAdminId, seedPosts } from '../seed/seed-posts';
+import { formatSeedTldrSummary, seedTldr } from '../seed/seed-tldr';
 import { seedSite } from '../seed/site';
 import { DESIGNER_ADMIN_FILE, ensureDesignerAdmin } from './admin';
 
@@ -29,7 +29,7 @@ export function designerAdminFileFor(dir: string): string {
 
 // `pnpm dev:design` steps 1–5 (capability designer-mode; spec/roadmap.md → designer one-liner):
 // ensure the PGlite dir → migrate → seed site + designer admin (+ BLOG0_ADMIN_* when set) → seed
-// the 5 posts → seed decks (when the deck seeder is present) → close PGlite. Idempotent: a second
+// the 5 posts → seed decks (fixture when no key) → close PGlite. Idempotent: a second
 // run creates nothing and prints no password. Uses the app's own handle (getDb()) so the seeders
 // and any service they call share ONE PGlite instance (two instances on one dir can corrupt it).
 
@@ -43,23 +43,7 @@ export interface DesignerSetupResult {
   migrationsApplied: string[];
   postsCreated: number;
   adminPasswordPrinted: boolean;
-  decks: 'seeded' | 'unavailable';
-}
-
-/** Deck seeding lands separately (`pnpm seed:tldr`, src/server/seed/seed-tldr.ts + decks/). */
-const DECK_SEEDER = path.join('src', 'server', 'seed', 'seed-tldr.ts');
-const DECK_FIXTURE_INDEX = path.join('src', 'server', 'seed', 'decks', 'index.ts');
-
-type SeedTldr = (db: Db, siteId: string, userId: string, opts: { source: 'auto' | 'fixture' | 'jev' }) => Promise<unknown>;
-
-function describeDeckResult(result: unknown): string {
-  const r = (result ?? {}) as Record<string, unknown>;
-  const count = (v: unknown): number | null => (Array.isArray(v) ? v.length : typeof v === 'number' ? v : null);
-  const seeded = count(r.seeded) ?? count(r.created);
-  const calls = typeof r.calls === 'number' ? r.calls : null;
-  const cost = typeof r.costUsd === 'number' ? `, $${r.costUsd.toFixed(4)}` : '';
-  if (seeded === null) return 'decks: done';
-  return `decks: ${seeded} seeded${calls === null ? '' : ` (${calls} call${calls === 1 ? '' : 's'}${cost})`}`;
+  decksSeeded: number;
 }
 
 export async function runDesignerSetup(options: DesignerSetupOptions = {}): Promise<DesignerSetupResult> {
@@ -117,25 +101,16 @@ export async function runDesignerSetup(options: DesignerSetupOptions = {}): Prom
     const posts = await seedPosts(db, siteResult.site.id, authorId);
     print(`${SEED_POSTS.length} posts: ${posts.created.length} created`);
 
-    // 5. Decks (fixture when no key) — only when the deck seeder is part of this checkout.
-    let decks: DesignerSetupResult['decks'] = 'unavailable';
-    const seederFile = path.resolve(process.cwd(), DECK_SEEDER);
-    if (existsSync(seederFile) && existsSync(path.resolve(process.cwd(), DECK_FIXTURE_INDEX))) {
-      const mod = (await import(/* webpackIgnore: true */ pathToFileURL(seederFile).href)) as { seedTldr?: SeedTldr };
-      if (typeof mod.seedTldr !== 'function') throw new Error(`${DECK_SEEDER} does not export seedTldr()`);
-      const result = await mod.seedTldr(db, siteResult.site.id, authorId, { source: 'auto' });
-      print(describeDeckResult(result));
-      decks = 'seeded';
-    } else {
-      print('decks: skipped — the deck seeder (pnpm seed:tldr) is not in this checkout yet; TLDR buttons read "No summary yet"');
-    }
+    // 5. Decks (fixture when no key).
+    const decks = await seedTldr(db, siteResult.site.id, authorId, { source: 'auto' });
+    print(formatSeedTldrSummary(decks));
 
     return {
       dataDir,
       migrationsApplied: applied,
       postsCreated: posts.created.length,
       adminPasswordPrinted: admin.password !== null,
-      decks,
+      decksSeeded: decks.seeded.length,
     };
   } finally {
     // 6. Close PGlite before the dev server opens the same directory (single opener per dir).

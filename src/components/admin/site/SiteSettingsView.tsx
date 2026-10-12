@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { AboutView } from '@/components/site/about/AboutView';
 import { aboutParagraphs } from '@/components/site/about/about-text';
-import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto-phase2';
+import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
 
 import { apiRequest, signInHref } from '../api';
 

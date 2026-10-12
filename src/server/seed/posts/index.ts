@@ -5,7 +5,7 @@ import path from 'node:path';
 
 // The 5 design articles (spec/design/design-app.js → POSTS). Bodies live next to this file as
 // `<slug>.md`, byte-for-byte the design's `md` string plus one trailing newline (stripped on read).
-// Used by tests now (Jev integration, eval) and seeded as published posts in Phase 2 (S2.6).
+// Used by tests (Jev integration, eval) and seeded as published posts (pnpm db:seed:posts).
 
 export interface SeedPost {
   /** Design id = slug. */

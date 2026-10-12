@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-// Storage interface (spec/architecture.md §9.1) — the contract every Phase 3 slice codes against.
+// Storage interface (spec/architecture.md §9.1) — the contract every media caller codes against.
 // Pure types + key helpers; no filesystem access here (LocalDiskStorage lives in local-disk.ts).
 
 export interface StoredObject {
@@ -63,12 +63,6 @@ export const STORAGE_EXTENSIONS = {
 
 export type StoredMime = keyof typeof STORAGE_EXTENSIONS;
 export type StoredKind = 'audio' | 'image';
-
-export const STORED_MIMES = Object.keys(STORAGE_EXTENSIONS) as StoredMime[];
-
-export function isStoredMime(value: unknown): value is StoredMime {
-  return typeof value === 'string' && Object.hasOwn(STORAGE_EXTENSIONS, value);
-}
 
 /** `<siteSlug>/<audio|image>/<yyyy>/<mm>/<uuid v4>.<ext>` — the only accepted shape. */
 export const STORAGE_KEY_RE =

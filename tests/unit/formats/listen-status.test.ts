@@ -6,7 +6,7 @@ import type { Tx } from '@/server/db/client';
 import { listenAdapter } from '@/server/formats/listen';
 import { listenBaseline, readListenPayload, type ListenPayload } from '@/server/formats/payload';
 
-// Listen adapter status + publish rules (spec/architecture.md §5 as revised by the Phase 3 fix;
+// Listen adapter status + publish rules (spec/architecture.md §5 (estimated-timing revision);
 // spec/capabilities/listen-audio.md). missing | ready | text_changed, computed from the draft's
 // baseline (uploadFingerprint ?? legacy syncFingerprint) vs the current paragraphs fingerprint.
 // Listen never blocks publishing; publish copies the draft whatever its status.
@@ -80,7 +80,7 @@ function rendered(pids: readonly string[], paragraphsFingerprint: string): Rende
 const uploaded: ListenPayload = { audio, marks: [], syncFingerprint: null, uploadFingerprint: FP_A };
 /** Upload + aligner-written marks (PUT) against the same text. */
 const withMarks: ListenPayload = { audio, marks, syncFingerprint: FP_A, uploadFingerprint: FP_A };
-/** Legacy Phase 3 rows had no uploadFingerprint. */
+/** Legacy rows (tap-sync era) had no uploadFingerprint. */
 const legacySynced: ListenPayload = { audio, marks, syncFingerprint: FP_A, uploadFingerprint: null };
 const legacyUnsynced: ListenPayload = { audio, marks: [], syncFingerprint: null, uploadFingerprint: null };
 

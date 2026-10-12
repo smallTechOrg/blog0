@@ -2,13 +2,11 @@ import 'server-only';
 
 import { and, eq } from 'drizzle-orm';
 
-import { getDb, type Db, type Tx } from '../db/client';
+import { getDb, type Executor } from '../db/client';
 import { mediaAsset, type MediaAssetRow } from '../db/schema';
 import { isUuid } from '../articles/repo';
 
 // Data access for media_asset (spec/data.md). Every query filters by site id.
-
-export type Executor = Db | Tx;
 
 export interface NewMediaAsset {
   siteId: string;
@@ -73,9 +71,4 @@ export async function deleteMediaAssetRow(siteId: string, id: string, db: Execut
     .where(and(eq(mediaAsset.siteId, siteId), eq(mediaAsset.id, id)))
     .returning({ id: mediaAsset.id });
   return rows.length > 0;
-}
-
-/** Integer milliseconds from the stored numeric(10,3) seconds (null for images). */
-export function durationMsOf(row: Pick<MediaAssetRow, 'durationSec'>): number | null {
-  return row.durationSec == null ? null : Math.round(Number(row.durationSec) * 1000);
 }

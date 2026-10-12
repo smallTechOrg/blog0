@@ -1,7 +1,7 @@
 import 'server-only';
 
 import packageJson from '../../package.json';
-import { DatabaseUrlError, DEFAULT_PGLITE_URL, parseDatabaseUrl, type DbEngine, type ParsedDatabaseUrl } from './db/url';
+import { DatabaseUrlError, DEFAULT_PGLITE_URL, isPostgresUrl, parseDatabaseUrl, type DbEngine, type ParsedDatabaseUrl } from './db/url';
 import { ensureDesignerSessionSecret } from './designer/secret';
 import { openRouterKeyStatus } from './llm/key';
 
@@ -149,15 +149,6 @@ function isPlaceholder(value: string): boolean {
 /** The value itself is never echoed — only the variable name. */
 function placeholderProblem(name: string): string {
   return `${name} still holds the .env.example placeholder — set a real value in .env`;
-}
-
-function isPostgresUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (url.protocol === 'postgres:' || url.protocol === 'postgresql:') && url.pathname.length > 1;
-  } catch {
-    return false;
-  }
 }
 
 function httpUrl(value: string): string | null {

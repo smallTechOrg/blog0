@@ -1,5 +1,5 @@
-// Reader view models (spec/architecture.md §3 "View-model contract"). Owned by S1.4 (the
-// components that render them), produced by S1.7 (src/server/public). Pure + isomorphic.
+// Reader view models (spec/architecture.md §3 "View-model contract"). Rendered by the reader
+// components, produced by src/server/public. Pure + isomorphic.
 
 import type { Block } from '@/lib/content/types';
 
@@ -23,7 +23,7 @@ export interface DeckViewModel {
   shareUrl: string; // absolute …/p/<slug>/tldr
 }
 
-/** The published Listen (spec/architecture.md §3; Phase 3 + fix): the recording + its resolved paragraph marks. */
+/** The published Listen (spec/architecture.md §3): the recording + its resolved paragraph marks. */
 export interface ListenViewModel {
   audioUrl: string; // '/media/' + key (same-origin)
   mimeType: 'audio/mpeg' | 'audio/mp4';
@@ -40,13 +40,13 @@ export interface ArticleViewModel {
   topic: string;
   bylineName: string;
   publishedLabel: string; // fmtDate(first_published_at, site tz) e.g. "8 Sep 2026"
-  updatedLabel: string | null; // Phase 4
+  updatedLabel: string | null; // revision history (deferred): always null
   inProgress: boolean;
   blocks: Block[]; // from RenderedArticle
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null; // published deck only
   listen: ListenViewModel | null; // published Listen only; null without one
-  correctionsHtml: string | null; // Phase 4
+  correctionsHtml: string | null; // revision history (deferred): always null
   next: { slug: string; title: string } | null;
   articleUrl: string; // absolute
 }

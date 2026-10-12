@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { getDb } from '../db/client';
 import { newsletterSubscriber } from '../db/schema';
-import type { SubscriberDto, SubscriberListResponse } from './types';
+import type { SubscriberDto, SubscriberListResponse } from '@/lib/api/dto';
 
 // Newsletter signup (capability newsletter-signup). Emails are trimmed + lower-cased; a repeat
 // signup for the same (site, email) succeeds silently — the caller cannot tell whether the address

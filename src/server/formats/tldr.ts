@@ -1,12 +1,9 @@
 import 'server-only';
 
-import { and, eq } from 'drizzle-orm';
-
 import type { Sentence } from '@/lib/content/types';
 
-import { articleFormat } from '../db/schema';
 import { readTldrPayload, type TldrSlide } from './payload';
-import { isGenerationActive, type FormatAdapter } from './types';
+import { isGenerationActive, publishDraft, type FormatAdapter } from './types';
 
 // TLDR adapter (spec/architecture.md §5):
 // generating (latest run `running` < 3 min) → ready (draft fp == current sentences fp) → stale
@@ -54,21 +51,6 @@ export const tldrAdapter: FormatAdapter = {
     };
   },
 
-  async publish(tx, { row, revision, now }) {
-    if (!row) return;
-    const draft = readTldrPayload(row.draftPayload);
-    await tx
-      .update(articleFormat)
-      .set(
-        draft
-          ? {
-              publishedPayload: draft,
-              publishedRevisionId: revision.id,
-              publishedFingerprint: revision.sentencesFingerprint,
-              publishedAt: now,
-            }
-          : { publishedPayload: null, publishedRevisionId: null, publishedFingerprint: null, publishedAt: null },
-      )
-      .where(and(eq(articleFormat.id, row.id), eq(articleFormat.siteId, row.siteId)));
-  },
+  publish: (tx, { row, revision, now }) =>
+    publishDraft(tx, row, readTldrPayload(row?.draftPayload), { revisionId: revision.id, fingerprint: revision.sentencesFingerprint, now }),
 };

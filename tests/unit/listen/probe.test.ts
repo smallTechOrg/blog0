@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { describeDetected, probeAudio } from '@/server/listen/probe';
+import { probeAudio } from '@/server/listen/probe';
 
 const FIXTURES = path.join(import.meta.dirname, '..', '..', 'fixtures', 'audio');
 const known = JSON.parse(readFileSync(path.join(FIXTURES, 'sample.json'), 'utf8')) as {
@@ -45,7 +45,7 @@ describe('probeAudio', () => {
   it('refuses a WAV file by content, naming the detected container', async () => {
     const result = await probeAudio(fixture('not-audio.wav'));
     expect(result).toEqual({ ok: false, reason: 'unsupported', detected: 'WAVE audio' });
-    if (!result.ok) expect(describeDetected(result)).toBe('WAVE audio');
+    if (!result.ok) expect(result.detected).toBe('WAVE audio');
   });
 
   it('refuses a renamed text file (1 byte) as "not an audio file"', async () => {

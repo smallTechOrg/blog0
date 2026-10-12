@@ -1,7 +1,9 @@
-import type { ListenResponse } from '@/lib/api/dto-phase3';
+import type { ListenResponse } from '@/lib/api/dto';
 import { actorOf, idParam } from '@/server/articles/http';
-import { ApiError, withApi } from '@/server/http/api';
+import { withApi } from '@/server/http/api';
 import { configuredAudioLimits, removeAudio, uploadAudio } from '@/server/listen/ingest';
+import { summarizeListen } from '@/server/listen/sync';
+import { formFile } from '@/server/media/ingest';
 
 // POST   /api/admin/articles/:id/audio — multipart `file`: upload / replace the draft recording
 //        (200 ListenResponse, status 'ready', marks [], timing 'estimated', uploadFingerprint = the
@@ -11,11 +13,6 @@ import { configuredAudioLimits, removeAudio, uploadAudio } from '@/server/listen
 export const dynamic = 'force-dynamic';
 /** Large uploads on a slow link: give the handler up to two minutes (spec/api.md). */
 export const maxDuration = 120;
-
-function summarizeListen(data: unknown): Record<string, unknown> {
-  const l = (data as { listen?: { status?: string; audio?: { assetId?: string; durationMs?: number; bytes?: number } | null } } | null)?.listen;
-  return l ? { listen_status: l.status, asset_id: l.audio?.assetId ?? null, duration_ms: l.audio?.durationMs ?? null, bytes: l.audio?.bytes ?? null } : {};
-}
 
 export const POST = withApi(
   {
@@ -29,10 +26,7 @@ export const POST = withApi(
     summarizeOutput: summarizeListen,
   },
   async ({ auth, params, body, requestId }): Promise<ListenResponse> => {
-    const file = body.get('file');
-    if (!(file instanceof File)) {
-      throw new ApiError('VALIDATION_FAILED', 400, 'Attach the recording as the multipart field "file".', { fieldErrors: { file: ['required'] } });
-    }
+    const file = formFile(body, 'Attach the recording as the multipart field "file".');
     return { listen: await uploadAudio(idParam(params), file, actorOf(auth), { requestId }) };
   },
 );

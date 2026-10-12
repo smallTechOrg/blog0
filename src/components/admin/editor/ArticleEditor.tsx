@@ -335,7 +335,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
               {t.id === 'tldr' && tldrChip ? (
                 <span className={`tabchip tabchip--${tldrChip.status}`}>{FORMAT_STATUS_LABEL[tldrChip.status]}</span>
               ) : null}
-              {t.id === 'listen' && listenChip && listenChip.status !== 'unavailable' ? (
+              {t.id === 'listen' && listenChip ? (
                 <span className={`tabchip tabchip--${listenChip.status}`} data-testid="listen-tabchip">
                   {FORMAT_STATUS_LABEL[listenChip.status]}
                 </span>

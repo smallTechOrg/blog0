@@ -1,33 +1,30 @@
-// Public reader API + crawler surfaces (S2.5) against real blog0_test Postgres:
+// Public reader API + crawler surfaces against real blog0_test Postgres:
 // GET /api/public/articles/:slug/tldr (the card → deck overlay), /sitemap.xml, /robots.txt and the
 // article route metadata (OG times from the DB). Articles are inserted directly with the schema
 // and rendered with the real content pipeline. No LLM is involved anywhere in this capability.
-// Phase 3 fix: GET /api/public/articles/:slug/listen serves marks resolved per request (estimated
+// GET /api/public/articles/:slug/listen serves marks resolved per request (estimated
 // over the published paragraphs when no stored marks cover them) and the same times as the deck DTO.
-import { randomUUID } from 'node:crypto';
-
-import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { GET as listenRoute } from '@/app/api/public/articles/[slug]/listen/route';
 import { GET as tldrRoute } from '@/app/api/public/articles/[slug]/tldr/route';
 import robots from '@/app/robots';
 import sitemap from '@/app/sitemap';
-import type { PublicTldrDto } from '@/lib/api/dto-phase2';
-import type { PublicListenDto } from '@/lib/api/dto-phase3';
+import type { PublicListenDto, PublicTldrDto } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
 import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { DECK_DISCLOSURE } from '@/lib/view-models';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
-import { appUser, article, articleFormat, articleRevision, site, type SiteRow } from '@/server/db/schema';
+import { site, type SiteRow } from '@/server/db/schema';
 import { loadPublishedArticle } from '@/server/public/articles';
-import { articleRouteMetadata, publishedModifiedAt } from '@/server/public/metadata';
+import { articleRouteMetadata } from '@/server/public/metadata';
 import { siteSeedFor } from '@/server/site/defaults';
 
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
+import { day, deckFrom as deckOf, listenPayload as listenOf, seedArticle as seed, type Rendered, type SeedArticle } from '../helpers/seed-articles';
 
 const BASE = 'http://localhost:3410';
 
@@ -40,119 +37,14 @@ const BODY_A = [
 ].join('\n');
 const BODY_B = 'Every article on this site is read three ways by the people who visit it. That is the whole idea.';
 
-type Status = 'draft' | 'submitted' | 'approved' | 'published';
-
-interface SeedArticle {
-  slug: string;
-  title: string;
-  dek?: string;
-  topic?: string;
-  bodyMd: string;
-  status?: Status;
-  firstPublishedAt?: Date | null;
-  lastPublishedAt?: Date | null;
-  siteId?: string;
-  deck?: unknown;
-  draftDeck?: unknown;
-  withPublishedRevision?: boolean;
-  /** Listen payloads (raw jsonb); omitted → no listen row. */
-  listen?: { published?: unknown; draft?: unknown };
-}
-
 let siteRow: SiteRow;
-let userId: string;
 let logs: CapturedLogs;
 
-const day = (n: number) => new Date(Date.UTC(2026, 8, n, 3, 30)); // 09:00 Asia/Kolkata
-
-async function makeUser(siteId: string): Promise<string> {
-  const [u] = await getDb()
-    .insert(appUser)
-    .values({ siteId, email: `w-${siteId.slice(0, 8)}@example.test`, displayName: 'Writer', passwordHash: '$x$' })
-    .onConflictDoNothing()
-    .returning({ id: appUser.id });
-  if (u) return u.id;
-  const [existing] = await getDb().select({ id: appUser.id }).from(appUser).where(eq(appUser.siteId, siteId));
-  return existing.id;
-}
-
-async function seedArticle(a: SeedArticle) {
-  const siteId = a.siteId ?? siteRow.id;
-  const by = siteId === siteRow.id ? userId : await makeUser(siteId);
-  const status = a.status ?? 'published';
-  const firstPublishedAt = a.firstPublishedAt === undefined ? (status === 'published' ? new Date() : null) : a.firstPublishedAt;
-  const [row] = await getDb()
-    .insert(article)
-    .values({
-      siteId,
-      slug: a.slug,
-      status,
-      topic: a.topic ?? 'Analysis',
-      bylineName: 'Sai Krishna V',
-      createdBy: by,
-      firstPublishedAt,
-      lastPublishedAt: a.lastPublishedAt === undefined ? firstPublishedAt : a.lastPublishedAt,
-    })
-    .returning();
-  const dek = a.dek ?? 'A short standfirst.';
-  const r = await renderArticle({ title: a.title, dek, bodyMd: a.bodyMd });
-  const [rev] = await getDb()
-    .insert(articleRevision)
-    .values({
-      siteId,
-      articleId: row.id,
-      number: 1,
-      title: a.title,
-      dek,
-      bodyMd: a.bodyMd,
-      bodyFingerprint: r.fingerprints.body,
-      paragraphsFingerprint: r.fingerprints.paragraphs,
-      sentencesFingerprint: r.fingerprints.sentences,
-      wordCount: r.stats.words,
-      eligibleSentenceCount: r.sentences.length,
-      createdBy: by,
-    })
-    .returning();
-  const publishedRevisionId = a.withPublishedRevision === false ? null : rev.id;
-  await getDb().update(article).set({ currentRevisionId: rev.id, publishedRevisionId }).where(eq(article.id, row.id));
-  if (a.deck !== undefined || a.draftDeck !== undefined) {
-    await getDb()
-      .insert(articleFormat)
-      .values({
-        siteId,
-        articleId: row.id,
-        kind: 'tldr',
-        draftPayload: a.draftDeck ?? null,
-        publishedPayload: a.deck ?? null,
-        publishedRevisionId: a.deck ? rev.id : null,
-        publishedAt: a.deck ? new Date() : null,
-      });
-  }
-  if (a.listen) {
-    await getDb()
-      .insert(articleFormat)
-      .values({
-        siteId,
-        articleId: row.id,
-        kind: 'listen',
-        draftPayload: a.listen.draft ?? null,
-        publishedPayload: a.listen.published ?? null,
-        publishedRevisionId: a.listen.published ? rev.id : null,
-        publishedAt: a.listen.published ? new Date() : null,
-      });
-  }
-  return { id: row.id, rendered: r };
-}
-
+const seedArticle = (a: Omit<SeedArticle, 'siteId'> & { siteId?: string }) => seed({ ...a, siteId: a.siteId ?? siteRow.id });
+const deckFrom = (rendered: Rendered, picks: number[], sources?: Array<'jev' | 'writer'>) =>
+  deckOf(rendered, picks, sources, { reason: 'SECRET-REASON because it matters', generationId: '00000000-0000-4000-8000-00000000c0de' });
 /** An uploaded-and-published Listen payload with no stored marks (spec/data.md). */
-function listenPayload(durationMs: number) {
-  return {
-    audio: { assetId: randomUUID(), key: `blog0/audio/2026/10/${randomUUID()}.m4a`, mimeType: 'audio/mp4', bytes: 4321, durationMs },
-    marks: [],
-    syncFingerprint: null,
-    uploadFingerprint: 'fp-at-upload',
-  };
-}
+const listenPayload = (durationMs: number) => listenOf(durationMs, { ext: 'm4a', bytes: 4321, fp: 'fp-at-upload' });
 
 async function getListen(slug: string) {
   const res = await listenRoute(new Request(`${BASE}/api/public/articles/${encodeURIComponent(slug)}/listen`, { headers: { host: 'localhost:3410' } }), {
@@ -160,18 +52,6 @@ async function getListen(slug: string) {
   });
   const text = await res.text();
   return { status: res.status, headers: res.headers, text, env: JSON.parse(text) as Envelope<PublicListenDto> };
-}
-
-function deckFrom(rendered: Awaited<ReturnType<typeof renderArticle>>, picks: number[], sources?: Array<'jev' | 'writer'>) {
-  return {
-    slides: picks.map((i, k) => ({
-      sid: rendered.sentences[i].sid,
-      text: rendered.sentences[i].text,
-      source: sources?.[k] ?? 'jev',
-      reason: 'SECRET-REASON because it matters',
-    })),
-    generationId: '00000000-0000-4000-8000-00000000c0de',
-  };
 }
 
 async function getTldr(slug: string) {
@@ -185,7 +65,6 @@ async function getTldr(slug: string) {
 beforeEach(async () => {
   siteRow = await resetDb();
   resetRenderCacheForTests();
-  userId = await makeUser(siteRow.id);
   logs = captureLogs();
 });
 
@@ -337,12 +216,12 @@ describe('article route metadata', () => {
     await seedArticle({ slug: 'was-live', title: 'Was live', bodyMd: BODY_B, status: 'draft', firstPublishedAt: day(1) });
 
     expect(await articleRouteMetadata(null, 'read')).toEqual({});
-    expect(await publishedModifiedAt('was-live')).toBeNull();
-    expect(await publishedModifiedAt('never-existed')).toBeNull();
+    expect(await loadPublishedArticle('was-live')).toBeNull();
+    expect(await loadPublishedArticle('never-existed')).toBeNull();
   });
 });
 
-describe('GET /api/public/articles/:slug/listen (Phase 3 fix)', () => {
+describe('GET /api/public/articles/:slug/listen', () => {
   it('serves estimated marks over the published paragraphs + the same times as the deck DTO; no admin fields', async () => {
     const pre = await renderArticle({ title: 'Hear the work', dek: 'Benchmarks are not the job.', bodyMd: BODY_A });
     const payload = listenPayload(95_000);

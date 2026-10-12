@@ -3,7 +3,7 @@ import { ApiError, withApi } from '@/server/http/api';
 import { maskEmail } from '@/server/log';
 import { getNewsletterThrottle } from '@/server/newsletter/rate-limit';
 import { subscribe, subscribeBody } from '@/server/newsletter/service';
-import type { NewsletterSubscribeResponse } from '@/server/newsletter/types';
+import type { NewsletterSubscribeResponse } from '@/lib/api/dto';
 import { getCurrentSite } from '@/server/site/current';
 
 // POST /api/newsletter — { email, name? } → { subscribed: true } (spec/api.md, capability

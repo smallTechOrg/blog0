@@ -1,4 +1,4 @@
-// Listen state + aligner-facing sync API against real blog0_test (Phase 3 fix): upload ⇒ ready,
+// Listen state + aligner-facing sync API against real blog0_test: upload ⇒ ready,
 // a paragraph text edit ⇒ text_changed (warning only — publish is NEVER blocked by Listen),
 // heading-only edits and reverts stay/return ready, re-upload re-baselines; PUT …/listen keeps its
 // validation contract (every MARKS_INVALID reason, CONFLICT, LISTEN_NO_AUDIO) and never changes the
@@ -15,14 +15,12 @@ import path from 'node:path';
 import { and, count, eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { GET as listRoute, POST as createRoute } from '@/app/api/admin/articles/route';
+import { GET as listRoute } from '@/app/api/admin/articles/route';
 import { PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
 import { POST as uploadRoute } from '@/app/api/admin/articles/[id]/audio/route';
 import { GET as listenGetRoute, PUT as listenPutRoute } from '@/app/api/admin/articles/[id]/listen/route';
-import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
-import type { ArticleDetailDto, ArticleListResponse, ArticleResponse, UpdateArticleResponse } from '@/lib/api/dto';
-import type { ListenMarkDto, ListenResponse, ListenStateDto, MarksInvalidDetails } from '@/lib/api/dto-phase3';
-import type { Envelope, Err } from '@/lib/api/envelope';
+import type { ArticleDetailDto, ArticleListResponse, ListenMarkDto, ListenResponse, ListenStateDto, MarksInvalidDetails, UpdateArticleResponse } from '@/lib/api/dto';
+import type { Envelope } from '@/lib/api/envelope';
 import { getDb } from '@/server/db/client';
 import { aiGeneration, article, articleFormat, articleRevision, mediaAsset } from '@/server/db/schema';
 import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
@@ -30,11 +28,11 @@ import { readListenPayload, type ListenPayload } from '@/server/formats/payload'
 import { getPublishedArticle } from '@/server/public/articles';
 import { getCurrentSite } from '@/server/site/current';
 
+import { actAs, call, createArticle as create, data, err, ORIGIN, publish } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { loginAs, type TestLogin } from '../helpers/session';
 import { resetStorage } from '../helpers/storage';
 
-const ORIGIN = 'http://localhost:3410';
 const DURATION_MS = 20_480;
 const FIXTURES = path.join(process.cwd(), 'tests', 'fixtures', 'audio');
 
@@ -57,36 +55,10 @@ const BODY = [
   'Readers can open the deck from any article page. The published deck keeps serving until the next publish.',
 ].join('\n');
 
-type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
-
 let writer: TestLogin;
 
-async function call<T>(handler: Handler, method: string, url: string, opts: { body?: unknown; id?: string; who?: TestLogin } = {}) {
-  const headers: Record<string, string> = { host: 'localhost:3410', cookie: (opts.who ?? writer).cookie };
-  if (method !== 'GET') headers.origin = ORIGIN;
-  if (opts.body !== undefined) headers['content-type'] = 'application/json';
-  const res = await handler(
-    new Request(`${ORIGIN}${url}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }),
-    { params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}) },
-  );
-  return { status: res.status, env: (await res.json()) as Envelope<T> };
-}
-
-function data<T>(env: Envelope<T>): T {
-  if (!env.ok) throw new Error(`expected ok envelope, got ${env.error.code}: ${env.error.message}`);
-  return env.data;
-}
-
-function err(env: Envelope<unknown>): Err['error'] {
-  if (env.ok) throw new Error('expected an error envelope');
-  return env.error;
-}
-
-async function createArticle(body: Record<string, unknown> = {}): Promise<ArticleDetailDto> {
-  const res = await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', {
-    body: { title: 'Listen me', topic: 'Craft', bodyMd: BODY, ...body },
-  });
-  return data(res.env).article;
+function createArticle(body: Record<string, unknown> = {}): Promise<ArticleDetailDto> {
+  return create({ title: 'Listen me', topic: 'Craft', bodyMd: BODY, ...body });
 }
 async function save(id: string, body: Record<string, unknown>) {
   return data((await call<UpdateArticleResponse>(patchRoute, 'PATCH', `/api/admin/articles/${id}`, { body, id })).env);
@@ -96,9 +68,6 @@ async function listen(id: string): Promise<ListenStateDto> {
 }
 async function putMarks(id: string, body: Record<string, unknown>) {
   return call<ListenResponse>(listenPutRoute, 'PUT', `/api/admin/articles/${id}/listen`, { body, id });
-}
-async function publish(id: string, revisionId: string) {
-  return call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${id}/publish`, { body: { revisionId }, id });
 }
 async function deskChip(id: string, kind: string) {
   const list = data((await call<ArticleListResponse>(listRoute, 'GET', '/api/admin/articles')).env).articles;
@@ -138,7 +107,7 @@ async function currentParagraphsFingerprint(articleId: string): Promise<string> 
 
 /**
  * Seeds a draft recording the way the ingest does (media_asset + listen draft, marks cleared,
- * uploadFingerprint = the current paragraphs fingerprint). `legacy` writes a Phase 3 payload with
+ * uploadFingerprint = the current paragraphs fingerprint). `legacy` writes a tap-sync era payload with
  * no uploadFingerprint key (optionally with a syncFingerprint) to exercise the fallback.
  */
 async function seedAudio(
@@ -184,7 +153,7 @@ async function seedAudio(
   return audio;
 }
 
-/** Remove audio the way S3.2 does: draft payload cleared, row kept. */
+/** Remove audio the way removeAudio does: draft payload cleared, row kept. */
 async function clearDraft(articleId: string) {
   await getDb()
     .update(articleFormat)
@@ -219,7 +188,7 @@ function editParagraph(bodyMd: string, text: string): string {
 
 beforeEach(async () => {
   await resetDb();
-  writer = await loginAs({ displayName: 'Asha Writer' });
+  writer = actAs(await loginAs({ displayName: 'Asha Writer' }));
 });
 
 describe('GET /api/admin/articles/:id/listen', () => {
@@ -517,7 +486,7 @@ describe('text_changed warning + publish (Listen never blocks)', () => {
     expect(back.textChangedSinceUpload).toBe(false);
   });
 
-  it('legacy Phase 3 payloads (no uploadFingerprint) fall back to syncFingerprint for the warning; a PUT never changes their status', async () => {
+  it('legacy payloads (no uploadFingerprint) fall back to syncFingerprint for the warning; a PUT never changes their status', async () => {
     const a = await createArticle();
     const fp = await paragraphsFingerprint(a.currentRevision.id);
     const paragraphs = (await listen(a.id)).paragraphs;

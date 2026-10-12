@@ -3,7 +3,7 @@
 import { useRef, useState, type DragEvent, type ReactNode, type RefObject } from 'react';
 
 import { AudioPlayer, type AudioPlayerHandle } from '@/components/reader/AudioPlayer';
-import type { ListenAudioDto, ListenResponse } from '@/lib/api/dto-phase3';
+import type { ListenAudioDto, ListenResponse } from '@/lib/api/dto';
 import { fmtClock } from '@/lib/listen/marks';
 
 import type { ApiResult } from '../api';

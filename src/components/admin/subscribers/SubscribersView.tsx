@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import type { SubscriberDto, SubscriberListResponse } from '@/server/newsletter/types';
+import type { SubscriberDto, SubscriberListResponse } from '@/lib/api/dto';
 
 import { apiRequest, signInHref } from '../api';
 import { relativeTime } from '../relative-time';

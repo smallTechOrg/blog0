@@ -2,21 +2,17 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { ARTICLE_LIMITS as MAX } from '@/lib/articles/limits';
+
 import { TLDR_REASON_MAX } from '../formats/payload';
-import { SLUG_MAX, SLUG_RE } from './slug';
+import { SLUG_RE } from './slug';
 
-// Request bodies for /api/admin/* (spec/api.md → Phase 1). Bad input → 400 VALIDATION_FAILED.
+// Request bodies for /api/admin/* (spec/api.md). Bad input → 400 VALIDATION_FAILED.
 
-export const TITLE_MAX = 200;
-export const DEK_MAX = 400;
-export const TOPIC_MAX = 40;
-export const BODY_MAX = 200_000;
-export const BYLINE_MAX = 80;
-
-const title = z.string().trim().min(1, 'Title is required.').max(TITLE_MAX);
-const dek = z.string().trim().max(DEK_MAX);
-const topic = z.string().trim().max(TOPIC_MAX);
-const bodyMd = z.string().max(BODY_MAX);
+const title = z.string().trim().min(1, 'Title is required.').max(MAX.title);
+const dek = z.string().trim().max(MAX.dek);
+const topic = z.string().trim().max(MAX.topic);
+const bodyMd = z.string().max(MAX.body);
 const id = z.string().trim().min(1).max(64);
 
 export const previewBody = z.object({
@@ -41,10 +37,10 @@ export const updateArticleBody = z.object({
   slug: z
     .string()
     .trim()
-    .max(SLUG_MAX)
+    .max(MAX.slug)
     .regex(SLUG_RE, 'Use lowercase letters, digits and single hyphens.')
     .optional(),
-  bylineName: z.string().trim().min(1).max(BYLINE_MAX).optional(),
+  bylineName: z.string().trim().min(1).max(MAX.byline).optional(),
   isFeatured: z.boolean().optional(),
   featuredRank: z.number().int().min(0).max(10_000).nullable().optional(),
   inProgress: z.boolean().optional(),

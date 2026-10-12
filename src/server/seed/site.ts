@@ -8,7 +8,7 @@ import { siteSeedFor } from '../site/defaults';
 import { upgradeLegacyBrand } from '../site/service';
 
 // `pnpm db:seed` step 1: upsert the site row (spec/data.md → Seed data). An existing row is left
-// untouched (admins edit it from Phase 2) except for the one-time brand upgrade: a row still
+// untouched (admins edit it in the desk) except for the one-time brand upgrade: a row still
 // carrying the design's "log0" wordmark/brand_name becomes "blog0" (upgradeLegacyBrand only
 // rewrites that exact legacy value), so re-running the seed changes nothing.
 

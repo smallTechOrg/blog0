@@ -1,9 +1,11 @@
 import 'server-only';
 
+import { ARTICLE_LIMITS } from '@/lib/articles/limits';
+
 // Slugs (spec/data.md → article.slug): `^[a-z0-9]+(?:-[a-z0-9]+)*$`, ≤ 80, unique per site,
 // derived from the title with `-2`, `-3`… on collision; locked once first published.
 
-export const SLUG_MAX = 80;
+const SLUG_MAX = ARTICLE_LIMITS.slug;
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const FALLBACK_SLUG = 'article';
 

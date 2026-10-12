@@ -1,4 +1,4 @@
-// Media (S3.1) against real blog0_test + real files under var/storage-test: the storage
+// Media against real blog0_test + real files under var/storage-test: the storage
 // interface (atomic put, size cap, traversal refusal), image upload (png/jpg/webp/gif, SVG 415,
 // content wins over extension, 413/400/404), the /media/[...key] route (200/206/304/416/404/405,
 // headers, If-Range, HEAD), cleanup, log lines — and one designer-mode (PGlite) upload → stream.
@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { POST as uploadImageRoute } from '@/app/api/admin/uploads/images/route';
 import { DELETE as mediaDelete, GET as mediaGet, HEAD as mediaHead, POST as mediaPost } from '@/app/media/[...key]/route';
-import type { Envelope, Err } from '@/lib/api/envelope';
+import type { Envelope } from '@/lib/api/envelope';
 import { createArticle, type ActorContext } from '@/server/articles/service';
 import { renderArticle } from '@/server/content';
 import { resetConfigForTests } from '@/server/config';
@@ -27,12 +27,12 @@ import { seedSite } from '@/server/seed/site';
 import { resetCurrentSiteForTests } from '@/server/site/current';
 import { getStorage, LocalDiskStorage, resetStorageForTests, StorageError } from '@/server/storage';
 
+import { data, err, ORIGIN } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { captureLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
 import { resetStorage, testStorageDir } from '../helpers/storage';
 
-const ORIGIN = 'http://localhost:3410';
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const FIXTURES = path.join(ROOT, 'tests', 'fixtures', 'images');
 type Manifest = Record<string, { type: string; mime: string | null; width: number; height: number; bytes: number }>;
@@ -69,16 +69,6 @@ async function upload(opts: UploadOpts): Promise<{ status: number; env: Envelope
   const request = new Request(`${ORIGIN}/api/admin/uploads/images`, { method: 'POST', headers, body: form });
   const res = await uploadImageRoute(request, { params: Promise.resolve({}) });
   return { status: res.status, env: (await res.json()) as Envelope<ImageUploadData>, res };
-}
-
-function data<T>(env: Envelope<T>): T {
-  if (!env.ok) throw new Error(`expected ok envelope, got ${env.error.code}: ${env.error.message}`);
-  return env.data;
-}
-
-function err(env: Envelope<unknown>): Err['error'] {
-  if (env.ok) throw new Error('expected an error envelope');
-  return env.error;
 }
 
 type MediaHandler = (request: Request, ctx: { params: Promise<{ key?: string | string[] }> }) => Promise<Response>;

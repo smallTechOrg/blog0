@@ -4,7 +4,7 @@
 // progress bar and `abort()` the Cancel button. Same envelope handling as apiRequest.
 
 import type { Envelope } from '@/lib/api/envelope';
-import type { GetListenResponse, ImageUploadResponse, ListenResponse } from '@/lib/api/dto-phase3';
+import type { GetListenResponse, ImageUploadResponse, ListenResponse } from '@/lib/api/dto';
 
 import { apiRequest, NETWORK_MESSAGE, UNEXPECTED_MESSAGE, type ApiFailure, type ApiResult } from '../api';
 

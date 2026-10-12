@@ -28,3 +28,18 @@ export function openPostgres(url: string, options: { max?: number } = {}): DbHan
     },
   };
 }
+
+/** Creates the URL's database (via the `postgres` maintenance DB) when it does not exist yet. */
+export async function ensurePostgresDatabase(url: string): Promise<'exists' | 'created'> {
+  const name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ''));
+  const maintenance = new URL(url);
+  maintenance.pathname = '/postgres';
+  const sql = postgres(maintenance.toString(), { max: 1, connect_timeout: 5, onnotice: () => {} });
+  try {
+    if ((await sql`select 1 from pg_database where datname = ${name}`).length > 0) return 'exists';
+    await sql.unsafe(`create database "${name.replace(/"/g, '""')}"`);
+    return 'created';
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}

@@ -11,13 +11,12 @@ import { AudioUploader, CONFIRM_REMOVE, UNSAVED_TEXT_HINT } from '@/components/a
 import { FormatChips } from '@/components/admin/FormatChips';
 import { DeckList } from '@/components/admin/tldr/DeckList';
 import { groupByHeading } from '@/components/admin/tldr/SentencePicker';
-import type { ArticleDetailDto, ArticleListItemDto, FormatChipDto, SentenceDto } from '@/lib/api/dto';
-import type { ListenStateDto } from '@/lib/api/dto-phase3';
+import type { ArticleDetailDto, ArticleListItemDto, FormatChipDto, ListenStateDto, SentenceDto } from '@/lib/api/dto';
 
 const CHIPS: FormatChipDto[] = [
   { kind: 'read', status: 'ready', published: true, hasUnpublishedChanges: false },
   { kind: 'tldr', status: 'stale', published: true, hasUnpublishedChanges: true },
-  { kind: 'listen', status: 'unavailable', published: false, hasUnpublishedChanges: false },
+  { kind: 'listen', status: 'text_changed', published: false, hasUnpublishedChanges: false },
 ];
 
 describe('FormatChips', () => {
@@ -26,9 +25,9 @@ describe('FormatChips', () => {
 
     expect(html).toContain('Read ✓');
     expect(html).toContain('TLDR stale');
-    expect(html).toContain('Listen later phase');
-    expect(html).toContain('data-status="unavailable"');
-    expect(html).toContain('Listen arrives in Phase 3');
+    expect(html).toContain('Listen text changed');
+    expect(html).toContain('data-status="text_changed"');
+    expect(html).toContain('title="Not published"');
   });
 });
 
