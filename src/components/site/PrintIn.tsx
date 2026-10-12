@@ -5,7 +5,7 @@ import { useLayoutEffect } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
 
-export const BOOT_LINE_MS = 70; /* gap between one block landing and the next */
+import { BOOT_LINE_MS } from './Boot';
 
 /* Selector list verbatim from the design's usePrintIn. */
 const PRINT_SELECTOR =
@@ -17,7 +17,10 @@ function releaseHold() {
   document.documentElement.removeAttribute('data-printing');
 }
 
-/* Every block on the page, in document order, gets a staggered delay. The
+/* The design's usePrintIn, as a component the site layout mounts once (keyed
+   on the route, not the full pathname — see below).
+
+   Every block on the page, in document order, gets a staggered delay. The
    candidates include containers and their children; only the innermost of
    each nesting prints on its own, so a paragraph is a line but the column
    that holds it is not. The classes come off again once the run is over,

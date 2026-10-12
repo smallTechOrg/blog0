@@ -1,6 +1,7 @@
 import { and, desc, eq, max, ne } from 'drizzle-orm';
 import type { ReactNode } from 'react';
 
+import { Boot } from '@/components/site/Boot';
 import { Footer } from '@/components/site/Footer';
 import { Masthead } from '@/components/site/Masthead';
 import { PrintIn } from '@/components/site/PrintIn';
@@ -10,8 +11,9 @@ import { getDb } from '@/server/db/client';
 import { article } from '@/server/db/schema';
 import { getCurrentSite } from '@/server/site/current';
 
-// Public chrome (spec/ui.md §3 "Chrome"): #blog0-root → Masthead → page → Footer, with the
-// print-in running on every pathname change. Brand values come from the site record.
+// Public chrome (spec/ui.md §3 "Chrome"): #blog0-root → Boot strip (divergence 6) → Masthead →
+// page → Footer, with the print-in running on every route change. Brand values come from the
+// site record.
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +37,7 @@ export default async function SiteLayout({ children }: { children: ReactNode }) 
 
   return (
     <div id="blog0-root">
+      <Boot brand={vm.wordmark} />
       <Masthead wordmark={vm.wordmark} tagline={vm.tagline} />
       {children}
       <Footer site={vm} />

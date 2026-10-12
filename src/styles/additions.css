@@ -13,6 +13,13 @@
 /* --- the design's #root is #blog0-root here (spec/ui.md §1 rule 3) --- */
 #blog0-root { position: relative; z-index: 1; }
 
+/* --- boot strip on (div. 6) -------------------------------------------
+   The design ships the strip at --booth: 0px and never renders it. It is on
+   here, so the sticky header, mode bar, pinned Featured head and stack all
+   measure from under it. 28px is the strip's own line: 13px/1.4 mono +
+   7px top padding + 1px rule, rounded up. */
+:root { --booth: 28px; }
+
 /* The design renders on the client, so its print-in starts from an empty
    page. Server-rendered HTML would paint first and then vanish when the
    print-in hides it; the theme script marks the first load, this holds the
@@ -22,16 +29,22 @@ html[data-printing] #blog0-root { visibility: hidden; }
 
 /* --- paragraphs (the pipeline's .para replaces the design's .sent; div. 2) --- */
 .para { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-/* the hover rule appears only once paragraph sharing is wired (Phase 2) */
-[data-para-share] .para { position: relative; cursor: pointer; }
+/* A reader's paragraph is tappable (paragraph share, S2.4): the article page
+   (.artwrap) and any host that opts in with [data-para-share]. The editor's
+   live preview is neither, so its paragraphs stay inert. */
+.artwrap .para, [data-para-share] .para { position: relative; cursor: pointer; }
+/* hover shows a 2px accent rule in the left gutter instead of the design's
+   dotted underline (pointer devices only) */
 @media (hover: hover) {
-  [data-para-share] .para:hover::before {
+  .artwrap .para:hover::before, [data-para-share] .para:hover::before {
     content: ''; position: absolute; left: -14px; top: 0.35em; bottom: 0.35em;
     width: 2px; background: var(--accent); border-radius: 1px;
   }
 }
-.para.is-hl, .para.is-live { background: var(--accent-soft); border-radius: 2px; }
-.para.is-live { background: var(--accent-softer); }
+/* same fill as the design's .sent.is-hl, without the underline */
+.para.is-hl { background: var(--accent-soft); border-radius: 2px; }
+/* Listen (Phase 3): the paragraph being read */
+.para.is-live { background: var(--accent-softer); border-radius: 2px; }
 
 /* --- Markdown beyond the design (div. 11) ----------------------------- */
 .prose del { color: var(--muted); }
@@ -98,10 +111,6 @@ html[data-printing] #blog0-root { visibility: hidden; }
 .stub__label { color: var(--accent-ink); font-weight: 600; }
 .listenview .stub { width: 100%; margin: 0; }
 
-/* the footer's newsletter form is a labelled stub in Phase 1 */
-.ft-go[data-stub]:disabled, .ft-fld:disabled { cursor: not-allowed; }
-.ft-fld:disabled { opacity: .6; }
-
 /* --- capsule: the design references disabled modes ------------------- */
 .mode:disabled { opacity: .45; cursor: not-allowed; }
 
@@ -113,3 +122,8 @@ html[data-printing] #blog0-root { visibility: hidden; }
    The design's comments say the deck's strip is the one meant to show, under
    the site header (z-index 50). */
 .tdeck { z-index: 46; }
+
+/* --- share menu inside the open deck (div. 3) --------------------------
+   The deck's end-slide Share opens the .hlmenu inside .tdeck; it sits above
+   the deck's own strips so closing the menu never means closing the deck. */
+.tdeck .hlmenu { z-index: 47; }

@@ -46,7 +46,7 @@ describe('site defaults', () => {
     expect(SITE_DEFAULTS).toMatchObject({
       slug: 'blog0',
       brandName: 'blog0',
-      wordmark: 'log0',
+      wordmark: 'blog0',
       publisherName: 'smallTech',
       tagline: 'the meaning of life, universe, and everything',
       contactEmail: 'hello@logzero.blog',
@@ -57,6 +57,24 @@ describe('site defaults', () => {
     });
     expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toHaveLength(2);
     expect(SITE_DEFAULTS.aboutBodyMd).not.toMatch(/Placeholder/);
+  });
+
+  it('brand the site blog0 (divergence 25): no whole-word "log0" in any seeded text', () => {
+    for (const value of Object.values(SITE_DEFAULTS)) {
+      if (typeof value === 'string') expect(value).not.toMatch(/\blog0\b/);
+    }
+    expect(SITE_DEFAULTS.wordmark.slice(-1)).toBe('0'); // the nought that spins
+  });
+
+  it('seed the design ABOUT_BODY_FULL verbatim, one paragraph per entry', () => {
+    const src = readFileSync(path.join(process.cwd(), 'spec', 'design', 'design-app.js'), 'utf8');
+    const start = src.indexOf('var ABOUT_BODY_FULL = [');
+    const end = src.indexOf('\n];', start) + 3;
+    const design = new Function(`${src.slice(start, end)}\nreturn ABOUT_BODY_FULL;`)() as string[];
+
+    expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toEqual(design);
+    expect(SITE_DEFAULTS.aboutStand).toBe(/var ABOUT_STAND = '([^']+)';/.exec(src)?.[1]);
+    expect(SITE_DEFAULTS.aboutStrap).toBe(/var ABOUT_STRAP = '([^']+)';/.exec(src)?.[1]);
   });
 });
 

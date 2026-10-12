@@ -48,7 +48,7 @@ export function scrollToNewsletter(): void {
 }
 
 export interface MastheadProps {
-  /** Site wordmark (e.g. "log0"). */
+  /** Site wordmark from the site record (e.g. "blog0"). */
   wordmark: string;
   /** Site tagline, typed in under the wordmark. */
   tagline: string;
