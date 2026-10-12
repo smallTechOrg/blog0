@@ -4,7 +4,7 @@
 // LLM_NOT_CONFIGURED when no key is set, and — with the real OpenRouter key — one real Generate
 // plus the save/publish/update transactions completing on PGlite (spike quirk 1: an outer-`db`
 // query inside a transaction deadlocks there, so this suite would hang on such a bug).
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -21,21 +21,24 @@ import { verifyPassword } from '@/server/auth/password';
 import { loadConfig, resetConfigForTests } from '@/server/config';
 import { closeDb, getDb, getDbHandle, initDb, resetDbForTests } from '@/server/db/client';
 import { getMigrationStatus, runMigrations } from '@/server/db/migrate';
-import { aiGeneration, appUser, article } from '@/server/db/schema';
+import { aiGeneration, appUser, article, articleFormat, mediaAsset } from '@/server/db/schema';
 import { DESIGNER_ADMIN_EMAIL, ensureDesignerAdmin } from '@/server/designer/admin';
 import { DesignerSecretError, ensureDesignerSessionSecret } from '@/server/designer/secret';
-import { designerAdminFileFor } from '@/server/designer/setup';
+import { designerAdminFileFor, formatSampleListenSummary, SAMPLE_LISTEN_SLUG, seedSampleListen } from '@/server/designer/setup';
+import { readListenPayload } from '@/server/formats/payload';
 import { ApiError } from '@/server/http/api';
 import { resetLlmClientForTests } from '@/server/llm';
 import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
 import { resetLoggerForTests } from '@/server/log';
 import { seedPosts } from '@/server/seed/seed-posts';
 import { seedSite } from '@/server/seed/site';
+import { getPublishedArticle } from '@/server/public/articles';
 import { resetCurrentSiteForTests } from '@/server/site/current';
+import { resetStorageForTests } from '@/server/storage';
 
 const ORIGIN = 'http://localhost:3410';
 const routeCtx = { params: Promise.resolve({}) };
-const SAVED_ENV = ['BLOG0_DATABASE_URL', 'BLOG0_OPENROUTER_API_KEY'] as const;
+const SAVED_ENV = ['BLOG0_DATABASE_URL', 'BLOG0_OPENROUTER_API_KEY', 'BLOG0_STORAGE_DIR'] as const;
 const saved: Record<string, string | undefined> = {};
 const realKey = process.env.BLOG0_OPENROUTER_API_KEY;
 const keyStatus = openRouterKeyStatus(realKey);
@@ -44,12 +47,18 @@ if (pendingKey && process.env.CI !== 'true') console.warn(`[designer-mode] ${PEN
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'blog0-designer-'));
 const adminFile = path.join(tmp, 'designer-admin.txt');
+const storageDir = path.join(tmp, 'storage');
+const SAMPLE_MP3 = path.join(process.cwd(), 'tests', 'fixtures', 'audio', 'sample.mp3');
+const SAMPLE_META = JSON.parse(readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'audio', 'sample.json'), 'utf8')) as {
+  mp3: { durationMs: number; bytes: number };
+};
 
 function resetSingletons(): void {
   resetConfigForTests();
   resetLlmClientForTests();
   resetCurrentSiteForTests();
   resetLoggerForTests();
+  resetStorageForTests();
 }
 
 /** Fails (instead of hanging the suite) if a PGlite transaction deadlocks. */
@@ -73,6 +82,7 @@ beforeAll(async () => {
   for (const name of SAVED_ENV) saved[name] = process.env[name];
   process.env.BLOG0_DATABASE_URL = 'pglite://memory';
   process.env.BLOG0_OPENROUTER_API_KEY = ''; // designer machine: no key
+  process.env.BLOG0_STORAGE_DIR = storageDir;
   await resetDbForTests();
   resetSingletons();
   const handle = await initDb();
@@ -132,6 +142,60 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
     expect(n).toBe(5);
 
     ctx = { siteId, user: { id: row.id, siteId, email: row.email, displayName: row.displayName } };
+  });
+
+  it('seeds ONE published sample recording on humans-are-software (estimated timing, file via the storage interface); a re-run adds nothing', async () => {
+    const db = getDb();
+    const designer = ctx.user.id;
+
+    const first = await seedSampleListen(db, siteId, designer);
+    const second = await seedSampleListen(db, siteId, designer);
+
+    expect(first).toEqual({ status: 'seeded', slug: SAMPLE_LISTEN_SLUG, timing: 'estimated' });
+    expect(formatSampleListenSummary(first)).toBe('listen: sample recording seeded on humans-are-software (estimated timing)');
+    expect(second).toEqual({ status: 'exists', slug: SAMPLE_LISTEN_SLUG });
+    const assets = await db.select().from(mediaAsset);
+    expect(assets).toHaveLength(1);
+    expect(assets[0]).toMatchObject({ kind: 'audio', mimeType: 'audio/mpeg', byteSize: SAMPLE_META.mp3.bytes });
+    expect(existsSync(path.join(storageDir, assets[0].storageKey))).toBe(true);
+    const formats = await db.select().from(articleFormat).where(eq(articleFormat.kind, 'listen'));
+    expect(formats).toHaveLength(1);
+    const published = readListenPayload(formats[0].publishedPayload);
+    expect(published?.audio.key).toBe(assets[0].storageKey);
+    expect(published?.marks).toEqual([]);
+
+    const reader = await getPublishedArticle(SAMPLE_LISTEN_SLUG);
+    expect(reader?.listen).toMatchObject({ timing: 'estimated', mimeType: 'audio/mpeg', audioUrl: `/media/${assets[0].storageKey}` });
+    expect(Math.abs(reader!.listen!.durationMs - SAMPLE_META.mp3.durationMs)).toBeLessThanOrEqual(500);
+    expect(reader!.listen!.marks.length).toBeGreaterThan(0);
+  });
+
+  it('restores the sample file when only the storage dir was wiped; never re-adds a recording the designer removed', async () => {
+    const db = getDb();
+    const [asset] = await db.select().from(mediaAsset);
+    const file = path.join(storageDir, asset.storageKey);
+    rmSync(storageDir, { recursive: true, force: true });
+
+    const restored = await seedSampleListen(db, siteId, ctx.user.id);
+
+    expect(restored).toEqual({ status: 'restored', slug: SAMPLE_LISTEN_SLUG });
+    expect(readFileSync(file).equals(readFileSync(SAMPLE_MP3))).toBe(true);
+    // A Listen row the designer emptied stays empty (status 'exists', nothing written).
+    await db.update(articleFormat).set({ draftPayload: null, publishedPayload: null }).where(eq(articleFormat.kind, 'listen'));
+    expect(await seedSampleListen(db, siteId, ctx.user.id)).toEqual({ status: 'exists', slug: SAMPLE_LISTEN_SLUG });
+    expect(await db.select().from(mediaAsset)).toHaveLength(1);
+  });
+
+  it('skips (never throws) when the fixture or the article is missing, writing nothing', async () => {
+    const db = getDb();
+
+    const noFile = await seedSampleListen(db, siteId, ctx.user.id, { slug: 'ai-is-expensive', file: path.join(tmp, 'missing.mp3') });
+    const noArticle = await seedSampleListen(db, siteId, ctx.user.id, { slug: 'no-such-post' });
+
+    expect(noFile).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/missing\.mp3 is missing$/) });
+    expect(formatSampleListenSummary(noArticle)).toBe('listen: sample recording skipped — no-such-post is not in this site');
+    expect(await db.select().from(mediaAsset)).toHaveLength(1);
+    expect(await db.select().from(articleFormat).where(eq(articleFormat.kind, 'listen'))).toHaveLength(1);
   });
 
   it('rotates the designer password only on request and rewrites the file', async () => {

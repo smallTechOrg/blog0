@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 
 import { e2eAdmin, originOf, signIn } from './helpers/admin';
 import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
-import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGNER_ENV } from './designer.global-setup';
+import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGN_E2E_STORAGE_DIR, DESIGNER_ENV } from './designer.global-setup';
 
 // Designer mode end to end (spec/capabilities/designer-mode.md → Success Criteria): the site
 // served by `pnpm dev:design` on embedded PGlite from a clean state, with no OpenRouter key and no
@@ -23,8 +23,8 @@ const SEED_TITLES = [
 ];
 const EDITORS_DISCLOSURE = 'Lines selected by the editors, verbatim from the article.';
 const NO_KEY_NOTICE = 'No OpenRouter key configured';
-/** Designer mode sets no BLOG0_STORAGE_DIR: uploads land in the default ./var/storage. */
-const DEFAULT_STORAGE_DIR = 'var/storage';
+/** The upload round trip uses another seeded article, so the seeded sample on SLUG stays as seeded. */
+const UPLOAD_SLUG = 'ai-is-expensive';
 
 interface DeckFixture {
   slug: string;
@@ -61,6 +61,12 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect(serverConsole.match(/^designer admin: designer@blog0\.local \/ /gm)).toHaveLength(1);
     expect(serverConsole).toMatch(/^5 posts: 5 created$/m);
     expect(serverConsole).toMatch(/^decks: 5 seeded \(0 calls\)$/m);
+    expect(serverConsole).toMatch(/^listen: sample recording seeded on humans-are-software \(estimated timing\)$/m);
+    // The banner: URL, admin login, the (only) credentials line, how to start over.
+    expect(serverConsole).toMatch(new RegExp(`^site: +http://localhost:${DESIGN_E2E_PORT}$`, 'm'));
+    expect(serverConsole).toMatch(/^designer admin: designer@blog0\.local \/ \S+ +\(new — shown once; also saved in var\/pglite-e2e\.designer-admin\.txt\)$/m);
+    // …naming THIS run's dirs (the designer's defaults are var/pglite var/storage …).
+    expect(serverConsole).toMatch(/^start over: +.*rm -rf var\/pglite-e2e var\/storage-design-e2e var\/pglite-session-secret var\/pglite-e2e\.designer-admin\.txt$/m);
   });
 
   test('home shows Featured Editorial and the 5 seeded articles', async ({ page }) => {
@@ -106,6 +112,28 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
       await expect(segs.nth(i + 1)).toHaveAttribute('aria-selected', 'true');
       await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(FIXTURE_LINES[i]);
     }
+  });
+
+  test('the seeded sample recording plays: /p/<slug>/listen shows the player, /media answers 206 (estimated timing)', async ({ page }) => {
+    const audioMeta = audioFixtureMeta();
+    const api = await page.request.get(`/api/public/articles/${SLUG}/listen`);
+    expect(api.status()).toBe(200);
+    const listen = ((await api.json()) as { data: { audio: { url: string; durationMs: number }; timing: string; marks: unknown[] } }).data;
+    expect(listen.timing).toBe('estimated');
+    expect(listen.marks.length).toBeGreaterThan(0);
+    expect(Math.abs(listen.audio.durationMs - audioMeta.mp3.durationMs)).toBeLessThanOrEqual(500);
+    const key = listen.audio.url.replace(/^\/media\//, '');
+    expect(existsSync(path.join(DESIGN_E2E_STORAGE_DIR, key)), 'seeded file in the storage dir').toBe(true);
+    await expectRange206(page.request, listen.audio.url, audioMeta.mp3.bytes);
+
+    const res = await page.goto(`/p/${SLUG}/listen`);
+    expect(res?.status()).toBe(200);
+    const view = page.locator('section.listenview');
+    await expect(view.locator('.audio')).toBeVisible();
+    await expect(view.locator('audio source')).toHaveAttribute('src', listen.audio.url);
+    await view.getByRole('button', { name: 'Play' }).click();
+    await expect.poll(() => view.locator('audio').evaluate((a: HTMLAudioElement) => a.currentTime), { timeout: 15_000 }).toBeGreaterThan(0.3);
+    await expect(view.locator('.para.is-live')).toHaveCount(1);
   });
 
   test('the generated designer admin signs in; the desk lists 5 published articles with TLDR ready', async ({ page }) => {
@@ -158,27 +186,27 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect(await res.json()).toMatchObject({ ok: false, error: { code: 'LLM_NOT_CONFIGURED' } });
   });
 
-  test('an mp3 upload streams back from /media/<key> (206) on PGlite; the file lands in ./var/storage and Remove deletes it', async ({ page }, testInfo) => {
+  test('an mp3 upload streams back from /media/<key> (206) on PGlite; the file lands in the storage dir and Remove deletes it', async ({ page }, testInfo) => {
     const origin = originOf(testInfo);
     const audioMeta = audioFixtureMeta();
     await signIn(page, designer());
     const list = await page.request.get('/api/admin/articles');
     expect(list.status()).toBe(200);
     const articles = ((await list.json()) as { data: { articles: { id: string; slug: string }[] } }).data.articles;
-    const article = articles.find((a) => a.slug === SLUG);
-    expect(article, `seeded article ${SLUG}`).toBeTruthy();
+    const article = articles.find((a) => a.slug === UPLOAD_SLUG);
+    expect(article, `seeded article ${UPLOAD_SLUG}`).toBeTruthy();
 
     const uploaded = await uploadSampleMp3(page.request, article!.id, origin);
 
     expect(uploaded.status).toBe('ready');
     expect(uploaded.audio).toMatchObject({ mimeType: 'audio/mpeg', bytes: audioMeta.mp3.bytes, url: `/media/${uploaded.audio.key}` });
     expect(Math.abs(uploaded.audio.durationMs - audioMeta.mp3.durationMs)).toBeLessThanOrEqual(500);
-    const stored = path.join(DEFAULT_STORAGE_DIR, uploaded.audio.key);
+    const stored = path.join(DESIGN_E2E_STORAGE_DIR, uploaded.audio.key);
     expect(existsSync(stored), `${stored} exists`).toBe(true);
     const head = await expectRange206(page.request, uploaded.audio.url, audioMeta.mp3.bytes);
     expect(head.equals(readFileSync(stored).subarray(0, 2))).toBe(true);
 
-    // Clean up the designer's storage dir: removing the (never published) recording deletes the file.
+    // Removing the (never published) recording deletes the file.
     const removed = await page.request.delete(`/api/admin/articles/${article!.id}/audio`, { headers: { origin } });
     expect(removed.status(), await removed.text()).toBe(200);
     expect(((await removed.json()) as { data: { listen: { status: string } } }).data.listen.status).toBe('missing');

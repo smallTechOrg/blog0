@@ -239,7 +239,7 @@ curl -fsS http://localhost:3410/p/humans-are-software/tldr | grep -c "tdeck" # >
 
 **Final gate 2 — designer mode, clean state, no Postgres, no `.env` values:**
 ```bash
-rm -rf var/pglite var/pglite-e2e var/pglite-e2e.designer-admin.txt var/pglite-session-secret var/designer-admin.txt
+rm -rf var/pglite var/storage var/pglite-e2e var/storage-design-e2e var/pglite-e2e.designer-admin.txt var/pglite-session-secret var/designer-admin.txt
 pnpm test:e2e:design                      # playwright.design.config.ts (spec/architecture.md → Test wiring)
 env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design   # background tool; prints the designer admin ONCE, then the dev server on 3410
 curl -fsS http://localhost:3410/api/health                                   # "dbEngine":"pglite"
@@ -250,7 +250,7 @@ BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify                      # "
 
 **The designer one-liner (README):** `pnpm install && pnpm dev:design` → `http://localhost:3410`
 with the 5 articles + decks; admin at `/admin` (credentials printed once, kept in
-`var/designer-admin.txt`). Start over: `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret`.
+`var/designer-admin.txt`). Start over: `rm -rf var/pglite var/storage var/pglite-session-secret var/designer-admin.txt`.
 
 **How the user tests it:**
 1. *Designer path* (Node + pnpm only): `pnpm install && pnpm dev:design`, open

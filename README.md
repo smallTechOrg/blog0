@@ -6,6 +6,40 @@ platform (public wordmark **blog0**). Writers author Markdown; readers take each
 
 Specs live in [`spec/`](spec/) (start with [`spec/roadmap.md`](spec/roadmap.md)).
 
+## For designers
+
+You need **Node 22** and **pnpm** — nothing else (no Postgres, no Docker, no `.env`, no browser
+downloads). From a fresh clone:
+
+```bash
+pnpm install && pnpm dev:design
+```
+
+When it is ready (first run: about 10–20 s after the install) the terminal prints a banner with:
+
+- **Site:** <http://localhost:3410> — home, the 5 articles, their TLDR decks, and a sample
+  **Listen** recording on *Humans are Software* (`/p/humans-are-software/listen`).
+- **Admin:** <http://localhost:3410/admin/login> as `designer@blog0.local`. The password is
+  generated on the first run, shown **once** in that banner, and kept in `var/designer-admin.txt`
+  (`cat var/designer-admin.txt`). Lost it? `pnpm dev:design --reset-designer-password`.
+
+Where to change the design (saved edits show in the browser at once, no reload):
+
+| What | Where |
+|---|---|
+| The ported design's styles (verbatim from the design) | `src/styles/design.css` |
+| Styles added on top of it | `src/styles/additions.css` |
+| Admin desk styles | `src/styles/admin.css` |
+| Components | `src/components/design` (wordmark, icons, typewriter…), `src/components/site` (home, masthead, cards…), `src/components/reader` (Read, TLDR deck, Listen) |
+
+**Start over** (fresh database, articles and password): stop the server (Ctrl+C), then
+
+```bash
+rm -rf var/pglite var/storage var/pglite-session-secret var/designer-admin.txt
+```
+
+Port 3410 taken? `BLOG0_PORT=3420 pnpm dev:design`. Details below.
+
 ## Designer mode — run it with only Node + pnpm
 
 No Postgres, no Docker, no `.env`:
@@ -23,9 +57,15 @@ pnpm install && pnpm dev:design      # → http://localhost:3410
 3. seeds the site, the **designer admin** `designer@blog0.local` with a generated password —
    printed **once** on the first run and kept in `var/designer-admin.txt` (mode 0600) — and the
    5 design articles; then their TLDR decks (`pnpm seed:tldr`: the committed fixture when there
-   is no OpenRouter key, 0 calls);
+   is no OpenRouter key, 0 calls); then **one sample Listen recording**
+   (`tests/fixtures/audio/sample.mp3`, 21 s) published on *Humans are Software* with estimated
+   timing, stored in `var/storage` (designer mode only — never in the Postgres seeds);
 4. closes PGlite and starts the hot-reload dev server (`scripts/serve.mjs dev`, Turbopack) on
-   `BLOG0_PORT` (default 3410).
+   `BLOG0_PORT` (default 3410); once it answers (and the home page is compiled) it prints the
+   banner: URL, admin login, the password line, where to edit, how to start over.
+
+A port already in use stops it before the database is touched (usually a second `pnpm dev:design`
+— two processes must never open the same PGlite dir).
 
 Verify (another terminal):
 
@@ -38,8 +78,9 @@ Then open <http://localhost:3410/> (home, archive, about, the 5 articles) and si
 <http://localhost:3410/admin/login> with the printed credentials (`cat var/designer-admin.txt`).
 Edit any component under `src/` and the browser updates in place.
 
-- **Re-running is safe:** the second run prints `5 posts: 0 created`, `decks: 0 seeded (0 calls)`
-  and no new password.
+- **Re-running is safe:** the second run prints `5 posts: 0 created`, `decks: 0 seeded (0 calls)`,
+  `listen: humans-are-software already has a recording` and no new password (a recording you
+  removed in the admin is not re-added).
 - **Jev without a key:** the TLDR tab shows "No OpenRouter key configured" and **Generate** is
   disabled (the API answers `503 LLM_NOT_CONFIGURED`). Add `BLOG0_OPENROUTER_API_KEY=<key>` to
   `.env` and restart `pnpm dev:design` to use Jev for real.
@@ -49,7 +90,9 @@ Edit any component under `src/` and the browser updates in place.
   `BLOG0_OPENROUTER_API_KEY= pnpm dev:design` (an empty value counts as absent; `.env` never
   overrides a variable that is already set).
 - **Rotate the designer password:** `pnpm dev:design --reset-designer-password`.
-- **Start over:** stop the server, then `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret`.
+- **Start over:** stop the server, then `rm -rf var/pglite var/storage var/pglite-session-secret var/designer-admin.txt`.
+- **The `⨯ turbopackFileSystemCacheForDev` line** under "Experiments" in the dev server's output is
+  expected — that cache is switched off on purpose (it caused a reload loop); it is not an error.
 - **One process per data dir:** PGlite has no directory lock — never run `pnpm db:*` against
   `pglite://./var/pglite` while the dev server is running.
 

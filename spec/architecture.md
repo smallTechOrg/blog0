@@ -608,10 +608,17 @@ base64url, writes `var/pglite-session-secret` with mode `0o600`, reads it back o
 `BLOG0_DATABASE_URL` from `.env` is ignored (only a `pglite://` value is honoured for the dir). It
 runs `runDesignerSetup()` (`src/server/designer/setup.ts`) **in-process** — ensure dir → migrate →
 seed site + designer admin `designer@blog0.local` (+ `BLOG0_ADMIN_*` when set) → seed posts → seed
-decks (`source: 'auto'`: Jev with a real key, else the fixture) → `closeDb()` (single opener per
-dir) — then spawns the hot-reload dev server. It prints `database: … (new — first boot runs
-initdb | existing)` and, only when a password is created or rotated (`--reset-designer-password`),
-one `designer admin: <email> / <password> … (shown once …)` line. Credentials file
+decks (`source: 'auto'`: Jev with a real key, else the fixture) → `seedSampleListen()` (designer
+mode only: `tests/fixtures/audio/sample.mp3` through `uploadAudio()` + `publishArticle()` on
+`humans-are-software`, estimated timing; idempotent per Listen row; restores the file under the same
+key when it vanished from storage) → `closeDb()` (single opener per dir) — then spawns the
+hot-reload dev server. Before setup it refuses a taken port (exit 1, before PGlite opens); during
+setup `BLOG0_LOG_LEVEL` is `warn` unless the user set it. It prints one progress line per step
+(`database: … (new — first boot runs initdb | existing)`, …, `listen: …`), then — after
+`/api/health` answers and `/` has compiled — the ready banner (`site:`, `admin:`, one `designer
+admin:` line carrying `<email> / <password> … (new|rotated — shown once …)` only when a password was
+just created or rotated, else where it is kept; edit locations; rotate; start over:
+`rm -rf var/pglite var/storage var/pglite-session-secret var/designer-admin.txt`). Credentials file
 (`designerAdminFileFor(dir)`): `var/designer-admin.txt` for the default dir,
 `<dir>.designer-admin.txt` for any other PGlite dir (mode 0600). Hot reload: `next.config.ts` sets
 `allowedDevOrigins` = loopback + every LAN IPv4 of the machine + the `BLOG0_PUBLIC_BASE_URL` host,

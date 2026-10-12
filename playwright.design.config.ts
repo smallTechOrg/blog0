@@ -5,14 +5,16 @@ import {
   DESIGN_E2E_DIR,
   DESIGN_E2E_PORT,
   DESIGN_E2E_SERVER_LOG,
+  DESIGN_E2E_STORAGE_DIR,
 } from './tests/e2e/designer.global-setup';
 
 // Designer-mode E2E (capability designer-mode): the app exactly as a designer runs it —
 // `pnpm dev:design` (embedded PGlite + the hot-reload dev server), from a clean state, with no
 // Postgres and no `.env` values for the database, the session secret or the OpenRouter key.
 //
-//   - own port 3413 and own PGlite dir ./var/pglite-e2e (credentials: var/pglite-e2e.designer-admin.txt),
-//     so a designer's ./var/pglite and the main E2E (3411, blog0_test) are never touched;
+//   - own port 3413, own PGlite dir ./var/pglite-e2e (credentials: var/pglite-e2e.designer-admin.txt)
+//     and own storage dir ./var/storage-design-e2e (the seeded sample recording + uploads), so a
+//     designer's ./var/pglite + ./var/storage and the main E2E (3411, blog0_test) are never touched;
 //   - Playwright starts the web server BEFORE globalSetup, so the clean-state wipe of var/pglite-e2e*
 //     is the first step of the web server command itself; globalSetup then checks that the boot really
 //     was a first boot and hands the generated designer credentials to the tests;
@@ -30,7 +32,7 @@ const baseURL = `http://localhost:${DESIGN_E2E_PORT}`;
 // own `rm -rf`; wiping it here would sign a designer out of their running ./var/pglite site).
 const wipe =
   `node -e "const fs=require('node:fs');` +
-  `for (const p of ['${DESIGN_E2E_DIR}','${DESIGN_E2E_ADMIN_FILE}']) fs.rmSync(p,{recursive:true,force:true});` +
+  `for (const p of ['${DESIGN_E2E_DIR}','${DESIGN_E2E_ADMIN_FILE}','${DESIGN_E2E_STORAGE_DIR}']) fs.rmSync(p,{recursive:true,force:true});` +
   `fs.mkdirSync('test-results',{recursive:true})"`;
 
 export default defineConfig({
@@ -56,6 +58,7 @@ export default defineConfig({
     env: {
       BLOG0_PORT: String(DESIGN_E2E_PORT),
       BLOG0_DATABASE_URL: `pglite://./${DESIGN_E2E_DIR}`,
+      BLOG0_STORAGE_DIR: `./${DESIGN_E2E_STORAGE_DIR}`,
       BLOG0_PUBLIC_BASE_URL: baseURL,
       BLOG0_SESSION_SECRET: '',
       BLOG0_OPENROUTER_API_KEY: '',
