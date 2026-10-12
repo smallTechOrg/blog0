@@ -14,11 +14,11 @@ import {
   NEWSLETTER_MAX_PER_EMAIL,
   NEWSLETTER_MAX_PER_WINDOW,
   NEWSLETTER_WINDOW_MS,
-  NewsletterRateLimiter,
   NewsletterThrottle,
   resetNewsletterRateLimiterForTests,
 } from '@/server/newsletter/rate-limit';
 import { subscribersToCsv } from '@/server/newsletter/service';
+import { MemoryRateLimitStore } from '@/server/rate-window';
 import type { NewsletterSubscribeResponse, SubscriberListResponse } from '@/lib/api/dto';
 import { siteSeedFor } from '@/server/site/defaults';
 import { resetCurrentSiteForTests } from '@/server/site/current';
@@ -244,37 +244,38 @@ describe('POST /api/newsletter — rate limit', () => {
     expect((await post({ email: 'x@example.com' })).res.status).toBe(429);
   });
 
-  it('counts per window: the window resets after an hour', () => {
-    const limiter = new NewsletterRateLimiter();
+  it('counts per window: the window resets after an hour', async () => {
+    const throttle = new NewsletterThrottle({}, new MemoryRateLimitStore());
+    const key = (i: number) => ({ ip: '203.0.113.9', email: `w${i}@x.io`, siteId: 's' });
     const t0 = 1_000_000;
-    for (let i = 0; i < NEWSLETTER_MAX_PER_WINDOW; i += 1) expect(limiter.attempt('ip', t0 + i).limited).toBe(false);
-    const blocked = limiter.attempt('ip', t0 + 60_000);
-    expect(blocked).toEqual({ limited: true, retryAfterSec: (NEWSLETTER_WINDOW_MS - 60_000) / 1000 });
-    expect(limiter.attempt('ip', t0 + NEWSLETTER_WINDOW_MS).limited).toBe(false);
+    for (let i = 0; i < NEWSLETTER_MAX_PER_WINDOW; i += 1) expect((await throttle.attempt(key(i), t0 + i)).limited).toBe(false);
+    const blocked = await throttle.attempt(key(99), t0 + 60_000);
+    expect(blocked).toEqual({ limited: true, retryAfterSec: (NEWSLETTER_WINDOW_MS - 60_000) / 1000, bucket: 'ip' });
+    expect((await throttle.attempt(key(100), t0 + NEWSLETTER_WINDOW_MS)).limited).toBe(false);
   });
 
-  it('throttle: unknown IPs skip the per-IP bucket; a refusal in one bucket counts in none; windows reset', () => {
-    const throttle = new NewsletterThrottle({ perIp: 2, perEmail: 2, siteWide: 100 });
+  it('throttle: unknown IPs skip the per-IP bucket; a refusal in one bucket counts in none; windows reset', async () => {
+    const throttle = new NewsletterThrottle({ perIp: 2, perEmail: 2, siteWide: 100 }, new MemoryRateLimitStore());
     const t0 = 5_000_000;
     for (const ip of ['direct', 'unknown']) {
-      for (let i = 0; i < 5; i += 1) expect(throttle.attempt({ ip, email: `${ip}${i}@x.io`, siteId: 's' }, t0).limited).toBe(false);
+      for (let i = 0; i < 5; i += 1) expect((await throttle.attempt({ ip, email: `${ip}${i}@x.io`, siteId: 's' }, t0)).limited).toBe(false);
     }
     expect(isKnownClientIp('direct')).toBe(false);
     expect(isKnownClientIp('unknown')).toBe(false);
     expect(isKnownClientIp('203.0.113.7')).toBe(true);
 
-    expect(throttle.attempt({ ip: '1.1.1.1', email: 'a@x.io', siteId: 's' }, t0).limited).toBe(false);
-    expect(throttle.attempt({ ip: '1.1.1.1', email: 'b@x.io', siteId: 's' }, t0).limited).toBe(false);
-    const ipBlocked = throttle.attempt({ ip: '1.1.1.1', email: 'c@x.io', siteId: 's' }, t0 + 1000);
+    expect((await throttle.attempt({ ip: '1.1.1.1', email: 'a@x.io', siteId: 's' }, t0)).limited).toBe(false);
+    expect((await throttle.attempt({ ip: '1.1.1.1', email: 'b@x.io', siteId: 's' }, t0)).limited).toBe(false);
+    const ipBlocked = await throttle.attempt({ ip: '1.1.1.1', email: 'c@x.io', siteId: 's' }, t0 + 1000);
     expect(ipBlocked).toEqual({ limited: true, retryAfterSec: NEWSLETTER_WINDOW_MS / 1000 - 1, bucket: 'ip' });
     // c@x.io was not counted by the refused attempt: two more from another IP still pass
-    expect(throttle.attempt({ ip: '2.2.2.2', email: 'c@x.io', siteId: 's' }, t0).limited).toBe(false);
-    expect(throttle.attempt({ ip: '3.3.3.3', email: 'c@x.io', siteId: 's' }, t0).limited).toBe(false);
-    expect(throttle.attempt({ ip: '4.4.4.4', email: 'c@x.io', siteId: 's' }, t0)).toMatchObject({ limited: true, bucket: 'email' });
+    expect((await throttle.attempt({ ip: '2.2.2.2', email: 'c@x.io', siteId: 's' }, t0)).limited).toBe(false);
+    expect((await throttle.attempt({ ip: '3.3.3.3', email: 'c@x.io', siteId: 's' }, t0)).limited).toBe(false);
+    expect(await throttle.attempt({ ip: '4.4.4.4', email: 'c@x.io', siteId: 's' }, t0)).toMatchObject({ limited: true, bucket: 'email' });
     // per-email buckets are per site
-    expect(throttle.attempt({ ip: '4.4.4.4', email: 'c@x.io', siteId: 'other' }, t0).limited).toBe(false);
+    expect((await throttle.attempt({ ip: '4.4.4.4', email: 'c@x.io', siteId: 'other' }, t0)).limited).toBe(false);
     // after the window everything resets
-    expect(throttle.attempt({ ip: '1.1.1.1', email: 'c@x.io', siteId: 's' }, t0 + NEWSLETTER_WINDOW_MS).limited).toBe(false);
+    expect((await throttle.attempt({ ip: '1.1.1.1', email: 'c@x.io', siteId: 's' }, t0 + NEWSLETTER_WINDOW_MS)).limited).toBe(false);
   });
 });
 

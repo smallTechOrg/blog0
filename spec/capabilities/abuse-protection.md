@@ -79,6 +79,12 @@ scripts, framing, MIME sniffing and needless powerful features.
 > **Assumed:** database-store windows are epoch-aligned (a burst straddling a boundary can see up
 > to 2× a cap for one window) — accepted for these low caps; the in-memory store keeps first-hit
 > windows so existing unit tests stand.
+> **Assumed (S5.3):** the limiter wrappers keep their names but become async and site-scoped —
+> `LoginRateLimiter.attempt(siteId, email, ip, now?)` / `recordSuccess(siteId, email, ip, now?)` and
+> `NewsletterThrottle.attempt(key, now?)`, each with an optional injected `RateLimitStore` (default:
+> `getRateLimitStore()` per call); the in-memory-only `NewsletterRateLimiter` and the sync
+> `check`/`recordFailure`/`prune`/`size` helpers are removed (the store owns counting and pruning).
+> The reset helpers keep an opted-in database store (its rows are wiped by the test's table reset).
 
 ## Success Criteria
 - [ ] Integration (DB store, real `blog0_test`): 20 concurrent `attempt()` calls on a 5-cap bucket → exactly 5 allowed, 15 limited, the row's `count` = 5.

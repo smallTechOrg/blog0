@@ -1,46 +1,25 @@
 import 'server-only';
 
 import { DIRECT_CLIENT, UNKNOWN_CLIENT } from '../auth/login';
-import { FixedWindowCounter } from '../rate-window';
+import type { RateBucket, RateLimitStore, RateScope } from '../rate-window';
+import { getRateLimitStore, peekRateLimitStore, resetRateLimitStoreForTests } from '../rate-window-store';
 
-// Newsletter throttle (capability newsletter-signup, spec/api.md POST /api/newsletter). Three
-// fixed-window buckets, in memory per process (FixedWindowCounter, as the login limiter):
+// Newsletter throttle (capabilities newsletter-signup, abuse-protection; spec/api.md POST
+// /api/newsletter). Three fixed-window buckets, all per site, counted in the throttle store
+// (Postgres by default — survives restarts, shared across instances):
 //   - per client IP:  10 / hour — ONLY when the IP is known (BLOG0_TRUSTED_PROXY_HOPS > 0 and an
 //     address was derived). With hops=0 every request maps to "direct"; bucketing on that would let
 //     one visitor lock the whole site out, so an unknown IP skips this bucket.
 //   - per email:       3 / hour — always.
 //   - site-wide:     300 / hour — always.
-// `attempt()` checks every applicable bucket first and counts in all of them only when none is
-// full, synchronously, so concurrent requests cannot slip past and a rejected request never
-// consumes budget. Callers invoke it only after validation (rejected-before-validation requests
-// don't count).
+// `attempt()` is atomic in the store: refused when any applicable bucket is full (nothing counted),
+// else counted in all. Callers invoke it only after validation (rejected-before-validation requests
+// don't count). This module holds no counts of its own — only the (test-overridable) limits.
 
 export const NEWSLETTER_MAX_PER_WINDOW = 10;
 export const NEWSLETTER_MAX_PER_EMAIL = 3;
 export const NEWSLETTER_MAX_SITE_WIDE = 300;
 export const NEWSLETTER_WINDOW_MS = 60 * 60 * 1000;
-
-export type NewsletterRateCheck = { limited: false } | { limited: true; retryAfterSec: number };
-
-/** One fixed-window bucket: `attempt` counts unless `key` is already at the cap. */
-export class NewsletterRateLimiter extends FixedWindowCounter {
-  constructor(max: number = NEWSLETTER_MAX_PER_WINDOW, windowMs: number = NEWSLETTER_WINDOW_MS) {
-    super(max, windowMs);
-  }
-
-  /** Reports whether `key` is at the cap for the current window, without counting. */
-  peek(key: string, now: number = Date.now()): NewsletterRateCheck {
-    const retryAfterSec = this.lockedFor(key, now);
-    return retryAfterSec === null ? { limited: false } : { limited: true, retryAfterSec };
-  }
-
-  /** Counts one submission for `key` unless it is already at the cap for the current window. */
-  attempt(key: string, now: number = Date.now()): NewsletterRateCheck {
-    const check = this.peek(key, now);
-    if (!check.limited) this.add(key, now);
-    return check;
-  }
-}
 
 export interface NewsletterThrottleLimits {
   perIp: number;
@@ -72,50 +51,53 @@ export function isKnownClientIp(ip: string): boolean {
   return ip !== '' && ip !== DIRECT_CLIENT && ip !== UNKNOWN_CLIENT;
 }
 
+const BUCKET_OF: Partial<Record<RateScope, NewsletterBucket>> = {
+  'newsletter.ip': 'ip',
+  'newsletter.email': 'email',
+  'newsletter.site': 'site',
+};
+
+/** The buckets one signup counts in (the per-IP one only for a known client IP). */
+export function newsletterBuckets(key: NewsletterThrottleKey, limits: NewsletterThrottleLimits = DEFAULT_NEWSLETTER_LIMITS): RateBucket[] {
+  const buckets: RateBucket[] = [];
+  if (isKnownClientIp(key.ip)) buckets.push({ scope: 'newsletter.ip', key: key.ip, max: limits.perIp, windowMs: limits.windowMs });
+  buckets.push({ scope: 'newsletter.email', key: key.email, max: limits.perEmail, windowMs: limits.windowMs });
+  buckets.push({ scope: 'newsletter.site', key: key.siteId, max: limits.siteWide, windowMs: limits.windowMs });
+  return buckets;
+}
+
 export class NewsletterThrottle {
   readonly limits: NewsletterThrottleLimits;
-  readonly #ip: NewsletterRateLimiter;
-  readonly #email: NewsletterRateLimiter;
-  readonly #site: NewsletterRateLimiter;
+  readonly #store: RateLimitStore | null;
 
-  constructor(limits: Partial<NewsletterThrottleLimits> = {}) {
+  /** `store` defaults to the process-wide store (`getRateLimitStore()`, resolved per call). */
+  constructor(limits: Partial<NewsletterThrottleLimits> = {}, store?: RateLimitStore) {
     this.limits = { ...DEFAULT_NEWSLETTER_LIMITS, ...limits };
-    this.#ip = new NewsletterRateLimiter(this.limits.perIp, this.limits.windowMs);
-    this.#email = new NewsletterRateLimiter(this.limits.perEmail, this.limits.windowMs);
-    this.#site = new NewsletterRateLimiter(this.limits.siteWide, this.limits.windowMs);
+    this.#store = store ?? null;
   }
 
   /** Counts one signup in every applicable bucket, or none when any bucket is full. */
-  attempt(key: NewsletterThrottleKey, now: number = Date.now()): NewsletterThrottleCheck {
-    const buckets: Array<[NewsletterBucket, NewsletterRateLimiter, string]> = [];
-    if (isKnownClientIp(key.ip)) buckets.push(['ip', this.#ip, key.ip]);
-    buckets.push(['email', this.#email, `${key.siteId}\u0000${key.email}`]);
-    buckets.push(['site', this.#site, key.siteId]);
-
-    let worst: NewsletterThrottleCheck = { limited: false };
-    for (const [bucket, limiter, k] of buckets) {
-      const check = limiter.peek(k, now);
-      if (check.limited && (!worst.limited || check.retryAfterSec > worst.retryAfterSec)) {
-        worst = { limited: true, retryAfterSec: check.retryAfterSec, bucket };
-      }
-    }
-    if (worst.limited) return worst;
-    for (const [, limiter, k] of buckets) limiter.attempt(k, now);
-    return { limited: false };
+  async attempt(key: NewsletterThrottleKey, now: number = Date.now()): Promise<NewsletterThrottleCheck> {
+    const store = this.#store ?? getRateLimitStore();
+    const check = await store.attempt(key.siteId, newsletterBuckets(key, this.limits), now);
+    if (!check.limited) return { limited: false };
+    return { limited: true, retryAfterSec: check.retryAfterSec, bucket: BUCKET_OF[check.scope] ?? 'site' };
   }
 }
 
-const globalKey = Symbol.for('blog0.newsletterThrottle');
-type GlobalWithThrottle = typeof globalThis & { [globalKey]?: NewsletterThrottle };
+const limitsKey = Symbol.for('blog0.newsletterLimits');
+type GlobalWithLimits = typeof globalThis & { [limitsKey]?: NewsletterThrottleLimits };
 
-/** Process-wide throttle (on globalThis so dev-mode module reloads share it). */
+/** The newsletter throttle on the process-wide store, with the current limits. */
 export function getNewsletterThrottle(): NewsletterThrottle {
-  const g = globalThis as GlobalWithThrottle;
-  g[globalKey] ??= new NewsletterThrottle();
-  return g[globalKey];
+  return new NewsletterThrottle((globalThis as GlobalWithLimits)[limitsKey] ?? DEFAULT_NEWSLETTER_LIMITS);
 }
 
-/** Fresh throttle for tests; `limits` overrides individual caps (e.g. a small site-wide cap). */
+/**
+ * Tests: `limits` overrides individual caps (e.g. a small site-wide cap); in-memory counts start
+ * fresh (a test that opted into the database store keeps it — its rows are wiped by the table reset).
+ */
 export function resetNewsletterRateLimiterForTests(limits: Partial<NewsletterThrottleLimits> = {}): void {
-  (globalThis as GlobalWithThrottle)[globalKey] = new NewsletterThrottle(limits);
+  (globalThis as GlobalWithLimits)[limitsKey] = { ...DEFAULT_NEWSLETTER_LIMITS, ...limits };
+  if (peekRateLimitStore()?.kind !== 'db') resetRateLimitStoreForTests();
 }

@@ -1,5 +1,9 @@
+import { randomBytes } from 'node:crypto';
+
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isHttpsOrigin, runtimeSecurityHeaders } from '@/lib/http/csp';
+import { getConfig } from '@/server/config';
 import { log } from '@/server/log';
 import { publishedSlugExists } from '@/server/public/articles';
 
@@ -12,9 +16,27 @@ import { publishedSlugExists } from '@/server/public/articles';
 // So unknown, malformed and unpublished slugs are rewritten here to an unmatched internal path:
 // the reader keeps the /p/<slug> address and gets a real 404 with the full chrome server-rendered.
 // The page's own notFound() stays as the fallback (e.g. an article unpublished between the two reads).
+//
+// Per-request CSP nonce (Phase 5, spec/architecture.md §6), production server only (`pnpm start` /
+// the container; never `pnpm dev` / designer mode, so HMR and the error overlay keep working): a
+// fresh nonce goes on the request as `x-nonce` + `content-security-policy` (Next 16 reads the nonce
+// from the request CSP and stamps its own scripts; the root layout reads `x-nonce` for the theme
+// script) and the same CSP (+ HSTS over https) on the response. Prefetches, API, static assets and
+// /media are not matched (except the article paths, matched as before).
 
 export const config = {
-  matcher: ['/p/:slug', '/p/:slug/tldr', '/p/:slug/listen'],
+  matcher: [
+    '/p/:slug',
+    '/p/:slug/tldr',
+    '/p/:slug/listen',
+    {
+      source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml).*)',
+      missing: [
+        { type: 'header', key: 'next-router-prefetch' },
+        { type: 'header', key: 'purpose', value: 'prefetch' },
+      ],
+    },
+  ],
 };
 
 /** An internal path no route matches, so the root not-found renders with a 404 status. */
@@ -47,9 +69,35 @@ function routeShape(pathname: string): string {
   return '/p/:slug';
 }
 
+interface PageSecurity {
+  requestHeaders: Headers;
+  responseHeaders: Record<string, string>;
+}
+
+/** The nonce'd request + response headers in production; null in development/test (no CSP). */
+export function pageSecurity(request: NextRequest, nodeEnv: string | undefined = process.env.NODE_ENV): PageSecurity | null {
+  if (nodeEnv !== 'production') return null;
+  const nonce = randomBytes(16).toString('base64');
+  const responseHeaders = runtimeSecurityHeaders({ nonce, https: isHttpsOrigin(getConfig().publicBaseUrl) });
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('content-security-policy', responseHeaders['content-security-policy']);
+  return { requestHeaders, responseHeaders };
+}
+
+function withSecurity(response: NextResponse, security: PageSecurity | null): NextResponse {
+  if (security) for (const [name, value] of Object.entries(security.responseHeaders)) response.headers.set(name, value);
+  return response;
+}
+
+function next(security: PageSecurity | null): NextResponse {
+  return withSecurity(security ? NextResponse.next({ request: { headers: security.requestHeaders } }) : NextResponse.next(), security);
+}
+
 export async function proxy(request: NextRequest): Promise<NextResponse> {
+  const security = pageSecurity(request);
   const slug = slugFromArticlePath(request.nextUrl.pathname);
-  if (slug === null) return NextResponse.next();
+  if (slug === null) return next(security);
 
   let exists: boolean;
   try {
@@ -63,11 +111,14 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
       path: routeShape(request.nextUrl.pathname),
       err_code: errorCode(err),
     });
-    return NextResponse.next();
+    return next(security);
   }
-  if (exists) return NextResponse.next();
+  if (exists) return next(security);
 
   const target = request.nextUrl.clone();
   target.pathname = ARTICLE_NOT_FOUND_PATH;
-  return NextResponse.rewrite(target);
+  return withSecurity(
+    security ? NextResponse.rewrite(target, { request: { headers: security.requestHeaders } }) : NextResponse.rewrite(target),
+    security,
+  );
 }

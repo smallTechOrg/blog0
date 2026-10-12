@@ -6,6 +6,8 @@ node_modules/
 # alternate build dirs (BLOG0_DIST_DIR, e.g. .next-gate)
 .next-*/
 out/
+# release-step bundle (pnpm build:release → dist/release.mjs; built inside the image)
+dist/
 next-env.d.ts
 *.tsbuildinfo
 

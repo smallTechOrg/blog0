@@ -92,9 +92,10 @@ export async function login(input: LoginInput): Promise<LoginSuccess> {
   const email = normalizeUserEmail(input.email);
   const limiter = getLoginRateLimiter();
 
-  // Check AND reserve this attempt synchronously (before the first await), so concurrent wrong
-  // attempts are all counted; a correct password clears the reservation below.
-  const check = limiter.attempt(email, input.ip, now.getTime());
+  // Check AND reserve this attempt atomically in the throttle store (one DB transaction with row
+  // locks on the database store), so concurrent wrong attempts — on any instance — are all counted;
+  // a correct password clears the reservation below. A store failure propagates (fail closed → 500).
+  const check = await limiter.attempt(input.siteId, email, input.ip, now.getTime());
   if (check.limited) {
     logAttempt('rate_limited', email, input.requestId);
     throw new ApiError('RATE_LIMITED', 429, rateLimitMessage(check.retryAfterSec), undefined, {
@@ -113,7 +114,7 @@ export async function login(input: LoginInput): Promise<LoginSuccess> {
     throw new ApiError('BAD_CREDENTIALS', 401, BAD_CREDENTIALS_MESSAGE);
   }
 
-  limiter.recordSuccess(email, input.ip);
+  await limiter.recordSuccess(input.siteId, email, input.ip, now.getTime());
   const db = getDb();
   // Expired sessions are purged lazily at login (spec/data.md → Session).
   await db.delete(session).where(and(eq(session.siteId, input.siteId), lt(session.expiresAt, now)));

@@ -1,14 +1,15 @@
 import 'server-only';
 
-import { FixedWindowCounter } from '../rate-window';
+import type { RateBucket, RateLimitStore } from '../rate-window';
+import { getRateLimitStore, peekRateLimitStore, resetRateLimitStoreForTests } from '../rate-window-store';
 
-// Login throttling (spec/architecture.md §6; capability admin-auth):
+// Login throttling (spec/architecture.md §6; capabilities admin-auth, abuse-protection):
 // - 5 failed attempts for the same (lower-cased email, client IP) within 15 minutes, and
 // - 20 failed attempts for the same lower-cased email across all IPs within 15 minutes
-// → further attempts are refused for the rest of that window. `attempt()` checks AND reserves a
-// failure synchronously, so concurrent requests cannot all pass the check before any of them is
-// counted; a correct password then calls `recordSuccess()`. Counters live in memory per process
-// (FixedWindowCounter; single instance — see the roadmap assumption).
+// → further attempts are refused for the rest of that window. Both buckets are per site.
+// `attempt()` checks AND reserves a failure atomically in the throttle store (in Postgres by
+// default, so the cap holds across restarts and instances); a correct password then calls
+// `recordSuccess()` with the attempt's `now`. This module holds no state of its own.
 
 export const LOGIN_MAX_FAILURES = 5;
 export const LOGIN_EMAIL_MAX_FAILURES = 20;
@@ -20,52 +21,42 @@ function normalize(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function pairKey(email: string, ip: string): string {
-  return `${normalize(email)}\u0000${ip}`;
+/** The two buckets one sign-in attempt counts in: (email, IP) pair first, then the email alone. */
+export function loginBuckets(email: string, ip: string): [RateBucket, RateBucket] {
+  const normalized = normalize(email);
+  return [
+    { scope: 'login.pair', key: `${normalized}\u0000${ip}`, max: LOGIN_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS },
+    { scope: 'login.email', key: normalized, max: LOGIN_EMAIL_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS },
+  ];
 }
 
 export class LoginRateLimiter {
-  readonly #pairs = new FixedWindowCounter(LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS);
-  readonly #emails = new FixedWindowCounter(LOGIN_EMAIL_MAX_FAILURES, LOGIN_WINDOW_MS);
+  readonly #store: RateLimitStore | null;
 
-  /** Whether an attempt for (email, ip) is currently refused, and for how long. Does not count. */
-  check(email: string, ip: string, now: number = Date.now()): RateLimitCheck {
-    const pair = this.#pairs.lockedFor(pairKey(email, ip), now);
-    const perEmail = this.#emails.lockedFor(normalize(email), now);
-    if (pair === null && perEmail === null) return { limited: false };
-    return { limited: true, retryAfterSec: Math.max(pair ?? 0, perEmail ?? 0) };
+  /** `store` defaults to the process-wide store (`getRateLimitStore()`, resolved per call). */
+  constructor(store?: RateLimitStore) {
+    this.#store = store ?? null;
+  }
+
+  #resolve(): RateLimitStore {
+    return this.#store ?? getRateLimitStore();
   }
 
   /**
-   * Check + reserve in one synchronous step: when allowed, the attempt is counted as a failure
-   * immediately (before the caller awaits anything). Call `recordSuccess` if the password matches.
+   * Check + reserve atomically: when allowed, the attempt is already counted as a failure in both
+   * buckets. Call `recordSuccess` (same `now`) if the password matches.
    */
-  attempt(email: string, ip: string, now: number = Date.now()): RateLimitCheck {
-    const result = this.check(email, ip, now);
-    if (!result.limited) this.recordFailure(email, ip, now);
-    return result;
+  async attempt(siteId: string, email: string, ip: string, now: number = Date.now()): Promise<RateLimitCheck> {
+    const check = await this.#resolve().attempt(siteId, loginBuckets(email, ip), now);
+    return check.limited ? { limited: true, retryAfterSec: check.retryAfterSec } : { limited: false };
   }
 
-  recordFailure(email: string, ip: string, now: number = Date.now()): void {
-    this.#pairs.add(pairKey(email, ip), now);
-    this.#emails.add(normalize(email), now);
-  }
-
-  /** Clears the (email, ip) count and refunds the reservation this attempt made on the email cap. */
-  recordSuccess(email: string, ip: string): void {
-    this.#pairs.delete(pairKey(email, ip));
-    this.#emails.refund(normalize(email));
-  }
-
-  /** Drops expired windows (and, if still over capacity, the oldest entries). */
-  prune(now: number = Date.now()): void {
-    this.#pairs.prune(now);
-    this.#emails.prune(now);
-  }
-
-  /** Number of tracked (email, IP) pairs. */
-  size(): number {
-    return this.#pairs.size;
+  /** Clears the (email, IP) count and refunds the reservation this attempt made on the email cap. */
+  async recordSuccess(siteId: string, email: string, ip: string, now: number = Date.now()): Promise<void> {
+    const [pair, perEmail] = loginBuckets(email, ip);
+    const store = this.#resolve();
+    await store.clear(siteId, pair, now);
+    await store.refund(siteId, perEmail, now);
   }
 }
 
@@ -75,16 +66,15 @@ export function rateLimitMessage(retryAfterSec: number): string {
   return `Too many attempts — try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
 }
 
-const globalKey = Symbol.for('blog0.loginRateLimiter');
-type GlobalWithLimiter = typeof globalThis & { [globalKey]?: LoginRateLimiter };
-
-/** Process-wide limiter (kept on globalThis so dev-mode module reloads share it). */
+/** The login limiter on the process-wide store (stateless; cheap to create per call). */
 export function getLoginRateLimiter(): LoginRateLimiter {
-  const g = globalThis as GlobalWithLimiter;
-  g[globalKey] ??= new LoginRateLimiter();
-  return g[globalKey];
+  return new LoginRateLimiter();
 }
 
+/**
+ * Fresh in-memory counts for tests. A test that opted into the database store keeps it (its rows
+ * are wiped by the test's own table reset).
+ */
 export function resetLoginRateLimiterForTests(): void {
-  (globalThis as GlobalWithLimiter)[globalKey] = new LoginRateLimiter();
+  if (peekRateLimitStore()?.kind !== 'db') resetRateLimitStoreForTests();
 }

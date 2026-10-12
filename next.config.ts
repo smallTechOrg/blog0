@@ -26,7 +26,22 @@ function devOrigins(): string[] {
   return [...hosts];
 }
 
+/**
+ * Static, env-independent security headers on every response (spec/architecture.md §6). The
+ * per-request CSP (nonce) and HSTS come from src/proxy.ts in production only.
+ */
+const SECURITY_HEADERS = [
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()' },
+];
+
 const nextConfig: NextConfig = {
+  // Standalone output only for the container image build (Dockerfile sets BLOG0_STANDALONE=1,
+  // spec/architecture.md §12.1): the local `pnpm start` runs `next start`, which warns under it.
+  output: process.env.BLOG0_STANDALONE === '1' ? 'standalone' : undefined,
   // BLOG0_DIST_DIR: a separate build directory (e.g. `.next-gate`) so a gate/CI `pnpm build` never
   // overwrites the `.next` a running `pnpm start` is serving. `pnpm start` must use the same value.
   distDir: (process.env.BLOG0_DIST_DIR ?? '').trim() || '.next',
@@ -41,6 +56,9 @@ const nextConfig: NextConfig = {
     // ~10×/s until the dev server was restarted. A cold dev cache costs a few seconds per start and
     // removes that state; production builds keep their cache.
     turbopackFileSystemCacheForDev: false,
+  },
+  async headers() {
+    return [{ source: '/:path*', headers: SECURITY_HEADERS }];
   },
   poweredByHeader: false,
   typedRoutes: false,

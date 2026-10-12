@@ -87,8 +87,13 @@ export interface Config {
   e2eBaseUrl: string | null;
   /** Reverse proxies in front of the app that append to X-Forwarded-For (0 = none: never trust it). */
   trustedProxyHops: number;
+  /** BLOG0_RATE_LIMIT_STORE: `auto` = Postgres-backed on postgres://, in-memory on pglite:// (§6). */
+  rateLimitStore: RateLimitStoreSetting;
   isProduction: boolean;
 }
+
+export type RateLimitStoreSetting = 'auto' | 'db' | 'memory';
+export const RATE_LIMIT_STORES: readonly RateLimitStoreSetting[] = ['auto', 'db', 'memory'];
 
 export const CONFIG_DEFAULTS = {
   port: 3410,
@@ -104,6 +109,7 @@ export const CONFIG_DEFAULTS = {
   maxAudioMinutes: 30,
   maxImageMb: 8,
   trustedProxyHops: 0,
+  rateLimitStore: 'auto' as RateLimitStoreSetting,
 } as const;
 
 export class ConfigError extends Error {
@@ -318,6 +324,12 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
 
   const trustedProxyHops = int(problems, env, 'BLOG0_TRUSTED_PROXY_HOPS', CONFIG_DEFAULTS.trustedProxyHops, 0, 10);
 
+  const rateLimitStoreRaw = plain(env, 'BLOG0_RATE_LIMIT_STORE') ?? CONFIG_DEFAULTS.rateLimitStore;
+  const rateLimitStore = RATE_LIMIT_STORES.includes(rateLimitStoreRaw as RateLimitStoreSetting)
+    ? (rateLimitStoreRaw as RateLimitStoreSetting)
+    : null;
+  if (rateLimitStore === null) problems.push(`BLOG0_RATE_LIMIT_STORE must be one of ${RATE_LIMIT_STORES.join('|')}`);
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const target = database as ParsedDatabaseUrl;
@@ -348,6 +360,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     maxImageMb,
     e2eBaseUrl,
     trustedProxyHops,
+    rateLimitStore: rateLimitStore as RateLimitStoreSetting,
     isProduction,
   };
 }

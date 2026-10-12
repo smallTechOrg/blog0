@@ -1,11 +1,14 @@
 import type { Metadata } from 'next';
 import { JetBrains_Mono, Source_Serif_4, Space_Grotesk } from 'next/font/google';
+import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
 
 import '@/styles/index.css';
 
 // Root layout: self-hosted design fonts, the no-flash theme script, global CSS.
-// Reads no config and no DB, so `next build` stays env-free.
+// Reads no config and no DB, so `next build` stays env-free. In production the proxy puts a
+// per-request CSP nonce on the request (`x-nonce`); the theme script carries it so it still runs
+// before first paint under the strict script policy (spec/architecture.md §6).
 
 const head = Space_Grotesk({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--nf-head', display: 'swap' });
 const body = Source_Serif_4({
@@ -32,11 +35,12 @@ d.setAttribute('data-theme',t);
 if(!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches)){d.setAttribute('data-printing','');window.setTimeout(function(){d.removeAttribute('data-printing')},2500)}
 }catch(e){}})();`;
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html lang="en" className={`${head.variable} ${body.variable} ${mono.variable}`} suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body>{children}</body>
     </html>

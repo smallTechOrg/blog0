@@ -20,6 +20,7 @@ export default defineConfig([
     '.next/**',
     '.next-*/**',
     'out/**',
+    'dist/**',
     'build/**',
     'next-env.d.ts',
     'node_modules/**',

@@ -90,6 +90,12 @@ gracefully when the platform stops it.
 > **Assumed:** the image runs only `postgres://`; an explicit `pglite://` in a container is
 > unsupported (PGlite is loaded through a runtime `createRequire` that standalone tracing does not
 > follow).
+> **Assumed (S5.1):** `dist/release.mjs` keeps only `@node-rs/argon2` (native) and `next` external;
+> `postgres` (pure JS) is bundled and `@electric-sql/pglite` is replaced by a throwing stub. Reason:
+> Next's standalone output under pnpm exposes `@node-rs/argon2` at `/app/node_modules` but reaches
+> `postgres`/`pglite` only through hashed `.next/node_modules` links, so a bare import from
+> `/app/release.mjs` cannot resolve them; the release step refuses `pglite://` before opening a DB.
+> The banner aliases `createRequire` and defines `__filename`/`__dirname` (bundled CommonJS needs them).
 > **Assumed:** default drain timeout 8 s so Docker's default 10 s stop grace suffices; long
 > Generate calls (≤ 120 s) can be cut by a stop — the runbook says to raise both values when that
 > matters.

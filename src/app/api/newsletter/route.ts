@@ -9,7 +9,8 @@ import { getCurrentSite } from '@/server/site/current';
 // POST /api/newsletter — { email, name? } → { subscribed: true } (spec/api.md, capability
 // newsletter-signup). Public, same-origin only (403 FORBIDDEN_ORIGIN), 400 VALIDATION_FAILED on a
 // bad address, 429 RATE_LIMITED (+ Retry-After) past any cap: 10 / known client IP / hour (skipped
-// when the IP is unknown, e.g. BLOG0_TRUSTED_PROXY_HOPS=0), 3 / email / hour, 300 / site / hour.
+// when the IP is unknown, e.g. BLOG0_TRUSTED_PROXY_HOPS=0), 3 / email / hour, 300 / site / hour —
+// counted in the throttle store (Postgres by default; a store failure is a 500, never an allow).
 // Only validated requests are counted. The same success is returned whether or not the address
 // already existed (no enumeration).
 
@@ -23,7 +24,7 @@ export const POST = withApi(
   },
   async ({ request, body }): Promise<NewsletterSubscribeResponse> => {
     const site = await getCurrentSite();
-    const check = getNewsletterThrottle().attempt({ ip: clientIpFromRequest(request), email: body.email, siteId: site.id });
+    const check = await getNewsletterThrottle().attempt({ ip: clientIpFromRequest(request), email: body.email, siteId: site.id });
     if (check.limited) {
       throw new ApiError('RATE_LIMITED', 429, 'Too many signups right now — try again later.', undefined, {
         'retry-after': String(check.retryAfterSec),
