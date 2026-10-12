@@ -199,7 +199,7 @@ Preview renders are not cached.
 ```ts
 export const FORMAT_KINDS = ['read', 'tldr', 'listen'] as const;
 export type FormatKind = (typeof FORMAT_KINDS)[number];
-export type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'text_changed' | 'unavailable';   // Phase 3 fix: needs_sync → removed, text_changed added
+export type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'text_changed';   // Phase 3 fix: needs_sync → removed, text_changed added; refactor: 'unavailable' removed (every kind implemented)
 export const FORMATS: Record<FormatKind, { label: string; icon: 'text' | 'bolt' | 'headphones'; availableFromPhase: number }> = {
   read: { label: 'Read', icon: 'text', availableFromPhase: 1 },
   tldr: { label: 'TLDR', icon: 'bolt', availableFromPhase: 1 },
@@ -224,8 +224,8 @@ Status rules: **read** → `ready` if the current revision body is non-empty els
 **tldr** → `generating` if the latest generation is `running` and < 3 min old; else `ready` if a
 draft payload exists and its `sentences` fingerprint equals the current revision's; `stale` if it
 exists and differs; `failed` if no draft and the latest generation failed; else `missing`.
-**listen** (Phase 1 adapter returns `unavailable`; Phase 3, S3.3 takes over
-`src/server/formats/listen.ts`; **revised by the Phase 3 fix**, F1) — with
+**listen** (`src/server/formats/listen.ts`, S3.3; **revised by the Phase 3 fix**, F1; there is
+no `unavailable` status — every format kind is implemented) — with
 `draft = readListenPayload(row?.draftPayload)` and `baseline = draft.uploadFingerprint ??
 draft.syncFingerprint`: `missing` if no draft; `text_changed` if `baseline !== null &&
 baseline !== currentRevision.paragraphsFingerprint`; else `ready`. Stored marks never affect
@@ -309,8 +309,8 @@ listed in `spec/api.md`. Admin client components render every API error inline w
 path (never a blank screen). Public page errors: `src/app/(site)/error.tsx` (client boundary,
 inside site chrome).
 
-**Unknown/unpublished slugs (`src/proxy.ts`).** Next 16 proxy, `matcher: ['/p/:slug', '/p/:slug/tldr']`
-only (Phase 3, S3.5 takes over: `+ '/p/:slug/listen'`). It calls `publishedSlugExists(slug)` (`src/server/public/articles.ts`, same published-only
+**Unknown/unpublished slugs (`src/proxy.ts`).** Next 16 proxy, `matcher: ['/p/:slug', '/p/:slug/tldr', '/p/:slug/listen']`
+only. It calls `publishedSlugExists(slug)` (`src/server/public/articles.ts`, same published-only
 filter as the page queries); when false it rewrites to an unmatched internal path so the root
 `src/app/not-found.tsx` server-renders a 404 **with site chrome**. If the DB check throws, the
 proxy logs and falls through to the page, whose own `notFound()` remains the fallback. Reason:
@@ -675,7 +675,7 @@ the requirements.
 | Media probing (Phase 3) | `music-metadata`, `image-size` | Pure JS duration/format probe for mp3/m4a and dimensions/type for images; no native ffmpeg dependency. |
 | Lint | ESLint 9 flat config + `eslint-config-next` (core-web-vitals, typescript) | Standard for Next; `next lint` is not used. |
 
-> **Assumed:** Next.js **16** is current stable in Oct 2026 (Turbopack default; `params`/`searchParams` are Promises; Middleware renamed Proxy). blog0 has exactly **one** proxy file, `src/proxy.ts` (404 pre-check for `/p/:slug` and `/p/:slug/tldr` only; see §8); auth is never enforced there (layouts and route handlers own it). If 16 is unavailable, use 15.5 and rename the file to `src/middleware.ts` (same matcher and logic).
+> **Assumed:** Next.js **16** is current stable in Oct 2026 (Turbopack default; `params`/`searchParams` are Promises; Middleware renamed Proxy). blog0 has exactly **one** proxy file, `src/proxy.ts` (404 pre-check for `/p/:slug`, `/p/:slug/tldr` and `/p/:slug/listen` only; see §8); auth is never enforced there (layouts and route handlers own it). If 16 is unavailable, use 15.5 and rename the file to `src/middleware.ts` (same matcher and logic).
 > **Assumed:** Drizzle over Prisma (rationale above).
 > **Assumed:** plain `<textarea>` editor (monospace, tab inserts two spaces) instead of CodeMirror — fewer moving parts for v0.1; swap later behind `MarkdownEditor`.
 > **Assumed:** pnpm ≥10 blocks dependency build scripts by default; `pnpm-workspace.yaml` lists `onlyBuiltDependencies: [esbuild, sharp]`. If `pnpm install` warns about ignored builds, run `pnpm approve-builds` and commit the result.
@@ -751,7 +751,7 @@ blog0/
 │   │   ├── admin/               # LoginForm, DeskHeader, ArticleTable, FormatChips, editor/* (P3: + ImageUploadButton, insert-image.ts), tldr/*, listen/* (P3 fix: AudioUploader, listen-api.ts — SyncPanel, MarkList, useTapSync.ts, save-sync.ts deleted)
 │   │   └── StubNotice.tsx
 │   ├── lib/                     # isomorphic, pure, no I/O
-│   │   ├── api/envelope.ts  api/dto.ts  api/dto-phase2.ts  api/dto-phase3.ts (P3, S3.3)
+│   │   ├── api/envelope.ts  api/dto.ts   # ALL API DTOs, one file grouped by domain sections; no phase-suffixed files
 │   │   ├── listen/marks.ts      # P3 (S3.3): validateMarks, activeMarkIndex, listenMinutes, fmtClock (§9.4)
 │   │   ├── listen/estimate.ts   # P3 fix (F1): countWords, estimateMarks, resolveMarks, toTimedParagraphs (§9.4)
 │   │   ├── content/types.ts
@@ -778,19 +778,24 @@ blog0/
 │   │   └── ai-usage/ (P4)
 │   └── styles/
 │       ├── index.css            # @import design.css, additions.css (admin.css imported by admin layout)
-│       ├── design.css           # VERBATIM copy of spec/design/design-app.css
+│       ├── design.css           # ported from spec/design/design-app.css minus dropped-feature rules (spec/ui.md §1 rule 1)
 │       ├── additions.css        # new rules only (see spec/ui.md → CSS additions)
 │       └── admin.css
 ├── tests/
 │   ├── setup/global-setup.ts    # vitest integration: create blog0_test if missing, drop+recreate schema, migrate
 │   ├── setup/integration-env.ts # loads .env, sets BLOG0_DATABASE_URL = BLOG0_TEST_DATABASE_URL, resets singletons
 │   ├── helpers/{db,session,env,logs}.ts   # resetDb() truncates all tables + seeds site; loginAs(); captureLogs()
-│   ├── unit/**  integration/**  e2e/**
+│   ├── unit/**  integration/**  e2e/**   # unit tests live in domain folders (unit/site, unit/helpers, unit/reader, …) — no catch-all folder (e.g. no unit/leftovers); e2e specs are named by feature: e2e/{smoke,tldr,reader,listen,designer-mode}.spec.ts
 │   ├── e2e/designer-mode.spec.ts  e2e/designer.global-setup.ts   # S2.9: own Playwright config `playwright.design.config.ts` (root), port 3413
 │   └── fixtures/articles/{hard-cases.md,e2e-article.md}  fixtures/audio/{sample.mp3,sample.m4a,sample.json,not-audio.wav} (P3)  fixtures/images/{sample.png,sample.jpg,sample.webp,tiny.gif,sample.svg,sample.json} (P3)
 ├── spec/spikes/pglite.md        # S2.0 verdict (the only spec file a slice writes)
 └── var/                         # gitignored runtime data (storage, backups, pglite/, pglite-e2e/, pglite-session-secret, designer-admin.txt)
 ```
+
+> **Assumed:** (refactor, Oct 2026) E2E specs renamed `phase1-tldr` → `tldr`, `phase2-reader` →
+> `reader`, `phase3-listen` → `listen` (`.spec.ts`); `tests/unit/leftovers/wordmark.test.tsx` →
+> `tests/unit/site/`, `tests/unit/leftovers/env-helper.test.ts` → `tests/unit/helpers/`; test
+> content unchanged.
 
 Test wiring: `vitest.config.ts` defines projects `unit` (`tests/unit/**/*.test.ts(x)`, env node)
 and `integration` (`tests/integration/**/*.test.ts`, `globalSetup`, `setupFiles`,
@@ -964,7 +969,8 @@ the question for the user.
 22. **Retired design code not ported:** margin notes/threads, `AnnotationLayerLegacy`,
     `TldrPanel` (design already routes TLDR into the deck), `FeaturedRotator`, `SentenceBuilder`,
     `GoDeeper`, `PullQuote`, `WordCloud`, `Tiers`, `ExpandCard`, `Thumb` (`SHOW_IMAGES=false`).
-    Their CSS stays in `design.css` untouched (verbatim copy) but is unused.
+    Their CSS is removed from `design.css` (the original stays in `spec/design/design-app.css`
+    for reference; `spec/ui.md` §1 rule 1).
 23. **Fonts self-hosted** via `next/font` with the same three families; the footer canvas reads
     the mono family from the `--font-mono` CSS variable instead of the literal
     `"JetBrains Mono"` name. Pixel-identical intent.

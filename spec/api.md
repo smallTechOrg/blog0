@@ -12,10 +12,13 @@ Every response has header `x-request-id`. Auth column: **admin** = valid `blog0_
 (else 401 `UNAUTHENTICATED`); **none** = public. All mutating routes (POST/PUT/PATCH/DELETE)
 require a same-origin `Origin` header (else 403 `FORBIDDEN_ORIGIN`). Bodies are validated with
 zod (else 400 `VALIDATION_FAILED`, `details` = flattened zod issues). Ids are uuids (malformed →
-404 `NOT_FOUND`). The shared DTOs and Phase 1 types below are transcribed verbatim into
-`src/lib/api/dto.ts` by the scaffold; DTOs introduced in Phase N ≥ 2 go into
-`src/lib/api/dto-phase<N>.ts`, owned by that phase's first-listed backend slice (S2.2, S3.3,
-S4.1), and other slices of that phase code against the shapes written here.
+404 `NOT_FOUND`). Every API DTO below lives in **one file, `src/lib/api/dto.ts`**, grouped by
+domain sections (shared/formats, articles, TLDR, listen, media, public, site/newsletter, …);
+there are no phase-suffixed DTO files. A slice that introduces a DTO adds it to the matching
+section of `dto.ts`; other slices code against the shapes written here.
+
+> **Assumed:** (refactor, Oct 2026) the earlier `dto-phase2.ts` / `dto-phase3.ts` split is
+> folded into `dto.ts`; behaviour is unchanged. `TldrStateDto` includes `jevAvailable`.
 
 ## Error codes
 
@@ -51,8 +54,9 @@ S4.1), and other slices of that phase code against the shapes written here.
 
 ```ts
 type FormatKind = 'read' | 'tldr' | 'listen';
-type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'text_changed' | 'unavailable';
+type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'text_changed';
 // Phase 3 fix: 'needs_sync' removed (unreachable — upload ⇒ ready); 'text_changed' added (Listen only, non-blocking warning)
+// Refactor: 'unavailable' removed — every format kind is implemented (Assumed)
 type ArticleStatus = 'draft' | 'submitted' | 'approved' | 'published';
 
 interface UserDto { id: string; email: string; displayName: string }
@@ -138,7 +142,7 @@ interface TldrStateDto {
 | GET `/api/admin/site` | admin | — | `{ site: { tagline, contactEmail, aboutStrap, aboutStand, aboutBodyMd, socialXUrl, socialLinkedinUrl } }` |
 | PATCH `/api/admin/site` | admin | any subset of the above | `{ site: … }` |
 
-## Phase 3 DTOs (`src/lib/api/dto-phase3.ts`, owned by S3.3)
+## Phase 3 DTOs (listen + media sections of `src/lib/api/dto.ts`)
 
 ```ts
 // Phase 3 fix: missing = no draft audio; ready = audio uploaded and the paragraph text unchanged since;

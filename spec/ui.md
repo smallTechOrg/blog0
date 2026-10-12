@@ -7,9 +7,16 @@ only those in `spec/architecture.md` → `## Design divergences (ask user)`. Qua
 
 ## 1. Porting rules
 
-1. `src/styles/design.css` is a **byte-for-byte copy** of `spec/design/design-app.css`. Never edit
-   it; put every new or overriding rule in `src/styles/additions.css` (loaded after it) or
-   `src/styles/admin.css`.
+1. `src/styles/design.css` is **ported from** `spec/design/design-app.css` with the rules for
+   features the user dropped removed: search, reactions, margin notes/threads/notetip/notesheet,
+   the preview-only op-ed/toc/tiers/cloud/pullquote blocks, the sentence builder (`sb*`),
+   preview pages (`pv*`, xcard, bignum, circ, callout), the old `tldr__*` panel, `tdpoll*`, and
+   the rotator. Every rule that styles a class blog0 renders stays **verbatim** (same selector,
+   same declarations, same order). The original stays in `spec/design/` for reference. Never
+   restyle inside `design.css`; put every new or overriding rule in `src/styles/additions.css`
+   (loaded after it) or `src/styles/admin.css`.
+   > **Assumed:** (refactor, Oct 2026) dead design rules are pruned instead of shipped unused;
+   > rendered output is unchanged because no rendered class loses a rule.
 2. Components keep the design's **class names, DOM structure, text, constants and timings**
    (e.g. `TDECK_STEP_MS = 720`, `TDECK_WHEEL = 90`, `TDECK_SWIPE = 56`, `TYPE_RUN_MS = 820`,
    `SPLIT_STAGGER = 55`, `BOOT_LINE_MS = 70`, dwell/type formulas). Translate `h(...)` calls into
@@ -154,7 +161,9 @@ following the audio (divergence 28) on **estimated** paragraph timing (divergenc
 `spec/capabilities/listen-sync.md`). The player is the primary control; the text is secondary. Data: `ArticleViewModel.listen` (published only). Entry points: capsule
 Listen (enabled only when `times.listen != null`; otherwise `disabled` with
 `title="No recording yet"` and `aria-label="Listen — no recording yet"`, mirroring TLDR),
-the deck end slide's Listen (already wired via `onListen`), and loading `/p/<slug>/listen`
+the TLDR deck's mode switcher / end slide Listen (wired via `onListen`; when disabled it uses
+the **same copy as `ModeCapsule`**: `title="No recording yet"`, `aria-label="Listen — no
+recording yet"`), and loading `/p/<slug>/listen`
 directly (`initialMode: 'listen'`; without a published Listen the page renders Read at
 `/p/<slug>`). Opening/closing uses `history.replaceState` between `/p/<slug>` and
 `/p/<slug>/listen` exactly like the deck; the modebar reads **Listen** and its X returns to Read.
@@ -179,15 +188,25 @@ directly (`initialMode: 'listen'`; without a published Listen the page renders R
   `timeupdate` and `seeked`.
 - **Auto-follow** (state `following`, `true` each time the view opens): while following, a
   change of live paragraph scrolls it to the viewport centre (`scrollIntoView({ block:
-  'center', behavior: 'smooth' })`, `'auto'` under reduced motion). A manual scroll — `wheel`,
-  `touchmove`, or `keydown` PageUp/PageDown/Home/End/↑/↓ on the window outside form controls —
-  sets `following = false` and reveals **Follow audio**; programmatic scrolls never count.
+  'center', behavior: 'smooth' })`, `'auto'` under reduced motion). **Opening the view**
+  highlights the live paragraph **without scrolling** (the first follow scroll happens on the
+  next change of live paragraph). A manual scroll — `wheel`, `touchmove`, or a scroll-key
+  `keydown` on the window (PageUp/PageDown/Home/End/↑/↓, and Space when the focus is not on a
+  button and Space is not consumed as play/pause below) — sets `following = false` and reveals
+  **Follow audio**, **unless** focus is in a text-entry control (`input`, `textarea`, `select`,
+  or a `contentEditable` element); a focused `BUTTON` does **not** suppress it (e.g. PageDown
+  with ▶ focused pauses following). Programmatic scrolls never count.
+  > **Assumed:** (refactor, Oct 2026) the follow-pause check uses a text-entry predicate
+  > (`input`/`textarea`/`select`/`contentEditable`), not the player-key form-control predicate;
+  > window Space keeps its play/pause role, so in practice Space only counts as a scroll where
+  > that role does not apply.
   Clicking **Follow audio** sets `following = true`, hides the button, immediately scrolls the
   current live paragraph to centre, and moves focus to `button.audio__play` (so focus is not
   lost on the hidden button). The highlight keeps moving while following is paused.
 - Paragraph click (not on `a`/`button`/figure) → `audio.currentTime = tMs / 1000` (play state
   unchanged) and `following = true`; Enter/Space on a focused paragraph does the same.
-- Keyboard (window, ignored when the focus is in a form control): Space play/pause, ← / →
+- Keyboard (window, ignored when the focus is in a form control — `input`/`textarea`/`select`/
+  `contentEditable` or a `button`, whose own Space/Enter activation wins): Space play/pause, ← / →
   ±5 s. Reduced motion: no smooth scroll, no transition on the highlight.
 - Foot: the Read view's `.artfoot` is not shown in Listen (design: "nothing else on screen"); the
   capsule still floats at the base.
@@ -228,7 +247,8 @@ primary button **Sign in** (disabled + "Signing in…" while pending). Errors in
 Title "Desk", primary **New article**. Table (`ArticleTable`): Title (link to editor) · Topic ·
 Status pill (Draft / Submitted / Approved / Published, plus "· unpublished changes") · Format
 chips (`FormatChips`: Read ✓, TLDR `missing|generating|ready|stale|failed`, Listen
-`later phase` greyed in Phases 1–2; from Phase 3 (fix) `missing|ready|text changed` with the
+`missing|ready|text changed` (no "later phase" / "arrives in Phase N" state — every format kind
+is implemented, so there is no `unavailable` status) with the
 same live dot when published — `text changed` uses the warning chip style `.fchip--text_changed`,
 never a blocking look; no component change beyond the label map)
 · Updated (relative time, by name). Empty: "No articles yet.

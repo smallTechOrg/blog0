@@ -88,8 +88,9 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
   `.audio__note` reads "Read by <byline> · N min" instead of the design's placeholder text.
 - Listen is offered to readers (capsule enabled, card button shown, deck's Listen enabled,
   `/p/<slug>/listen` served) **only** when the article is published and its published Listen
-  payload exists; otherwise the capsule's Listen is disabled with title "No recording yet"
-  (divergence 9 resolved) and `/p/<slug>/listen` renders the article in Read mode at `/p/<slug>`.
+  payload exists; otherwise the capsule's Listen — and the TLDR deck's mode-switcher Listen,
+  with identical copy — is disabled with `title="No recording yet"` and
+  `aria-label="Listen — no recording yet"` (divergence 9 resolved) and `/p/<slug>/listen` renders the article in Read mode at `/p/<slug>`.
 - `times.listen` everywhere (capsule, cards, deck capsule, public DTOs) is the published
   recording's minutes — never the draft's.
 - Designer mode needs nothing new: the default storage dir `./var/storage` is created on first
@@ -104,5 +105,5 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
 - [ ] Integration (`tests/integration/media.test.ts`), against real stored files: `GET /media/<key>` → 200, `Content-Length` = size, `Accept-Ranges: bytes`, `ETag: "<sha256>"`, `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, correct `Content-Type`; `Range: bytes=0-1023` → 206, `Content-Range: bytes 0-1023/<size>`, body exactly the first 1024 bytes of the file; `Range: bytes=-100` → 206 with the last 100 bytes; `Range: bytes=<size>-` and `bytes=999999999-` → 416 with `Content-Range: bytes */<size>`; `If-None-Match: "<sha256>"` → 304 empty body; `HEAD` → 200 with the same headers and no body.
 - [ ] `/media/..%2F..%2Fetc%2Fpasswd`, `/media/%2Fetc/passwd`, `/media/blog0/audio/2026/10/x.exe`, and a well-formed key with no `media_asset` row → 404 `NOT_FOUND` (JSON envelope) and no `error` log line.
 - [ ] Public queries: a published article with a published Listen has `times.listen === max(1, round(durationMs/60000))` on the article page, in `PostCardViewModel`, in `GET /api/public/articles/:slug/tldr` and in `GET /api/public/articles/:slug/listen`; a published article with only a draft Listen has `times.listen === null` everywhere.
-- [ ] E2E (`tests/e2e/phase3-listen.spec.ts`, Chromium): on a published article with Listen, the capsule reads `Listen` + `N min`; clicking it shows `section.listenview` with a `.audio` player whose `<audio>` has `src` ending in `.mp3`, pressing the play button advances `audio.currentTime` past 1 s within 3 s; `/media/<that key>` answers 206 to `Range: bytes=0-1`. On a card, **Listen** opens the `.sheetfull` overlay with the same player and the address bar is unchanged.
+- [ ] E2E (`tests/e2e/listen.spec.ts`, Chromium): on a published article with Listen, the capsule reads `Listen` + `N min`; clicking it shows `section.listenview` with a `.audio` player whose `<audio>` has `src` ending in `.mp3`, pressing the play button advances `audio.currentTime` past 1 s within 3 s; `/media/<that key>` answers 206 to `Range: bytes=0-1`. On a card, **Listen** opens the `.sheetfull` overlay with the same player and the address bar is unchanged.
 - [ ] Designer-mode E2E (`tests/e2e/designer-mode.spec.ts`, taken over): the same upload → stream round trip succeeds on PGlite with no `BLOG0_STORAGE_DIR` set (files land in `./var/storage`).
