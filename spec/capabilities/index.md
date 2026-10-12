@@ -17,8 +17,10 @@
 | Media images | `media-images.md` | 3 | Inline image upload from the editor toolbar / drag-drop, alt prompt, Markdown inserted at the cursor |
 | Revision history | `revision-history.md` | **deferred** | Browse, view, restore versions (not scheduled) |
 | Publication record | `publication-record.md` | 4 (**on hold**) | Published/Updated dates, corrections note, optional sign-off |
-| Container image, backup/restore, abuse protection | written at start of Phase 5 | 5 | Deploy hardening (see `spec/roadmap.md`) |
+| Container image | `container-image.md` | 5 | One non-root OCI image: web server + release step (migrate/verify/seed), live/ready probes, storage volume, graceful shutdown, deploy runbook |
+| Backup and restore | `backup-restore.md` | 5 | Snapshot-consistent Postgres dump + storage archive + manifest; restore into a named DB/dir with a row/file-count check |
+| Abuse protection | `abuse-protection.md` | 5 | Login/newsletter caps counted atomically in Postgres (survive restarts, shared across instances); nonce CSP + security headers |
 | Alignment worker, alignment jobs, sentence-level Listen | written at start of Phase 6 | 6 | Local faster-whisper auto-sync (see `spec/roadmap.md`) |
 
-Phases 1–3 are done; Phase 4 is on hold (user decision, 2026-10-13) and revision history is
+Phases 1–3 are done; Phase 5 is specified (capability files above); Phase 4 is on hold (user decision, 2026-10-13) and revision history is
 deferred outright (`spec/roadmap.md` → Phase 4).

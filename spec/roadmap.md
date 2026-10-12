@@ -47,7 +47,8 @@ explicit click, cached forever, never per reader view).
 5. Editing text after a deck exists never auto-regenerates; the deck shows **stale** and the
    published deck keeps serving until the writer acts.
 6. Every gate runs against real Postgres and the real OpenRouter key from `.env`. Without a key,
-   real-key tests skip as `PENDING KEY` (never a pass); in CI or with a real key present a key
+   real-key tests skip as `PENDING KEY` (never a pass); when a real key is required
+   (`BLOG0_REQUIRE_REAL_KEY=1`, or `CI=true` when that is unset) or a real key is present, a key
    problem fails — see `spec/architecture.md` → `## Conventions` → Real-key tests. A separate
    designer-mode gate boots the app from a clean state with no Postgres and no `.env` values
    (embedded engine) and smokes home, one article and its deck.
@@ -79,7 +80,7 @@ rotator, sentence builder, in-deck poll).
 > **Assumed:** If Jev fails, the writer hand-picks lines; there is no heuristic fallback (user has not chosen one).
 > **Decided (user):** seeded posts get their decks from the explicit `pnpm seed:tldr` (Jev once per post with a real key; the committed fixture `src/server/seed/decks/*.json` without one); the design's paraphrased TLDR arrays are never seeded.
 > **Assumed:** `pnpm seed:tldr -- --write-fixture` (real key) keeps the committed fixture equal to real Jev output; a unit test validates the fixture against the seed articles.
-> **Assumed:** Login and newsletter throttling are in-memory per process (single instance); Phase 5 moves them to Postgres.
+> **Assumed:** Login and newsletter throttling are in-memory per process (single instance) through Phase 4; Phase 5 counts them in Postgres (`spec/capabilities/abuse-protection.md`; in-memory remains for designer mode and tests).
 > **Assumed:** Hand-edited decks allow 1–12 lines and reordering (Jev itself picks 4–8 in document order).
 > **Assumed:** A published deck whose lines vanished from the text blocks publishing of new changes until fixed (the old deck keeps serving meanwhile); publishing without any deck is allowed.
 > **Assumed:** Admins are all equal (no roles); approve-your-own-article is allowed in v0.1.
@@ -90,8 +91,8 @@ rotator, sentence builder, in-deck poll).
 
 ## Phases of Development
 
-Scaffold and Phases 1–3 (with the Phase 3 fix) are **done**; Phase 4 is **on hold**; Phases 5–6
-are planned.
+Scaffold and Phases 1–3 (with the Phase 3 fix) are **done**; Phase 4 is **on hold**; Phase 5 is
+**specified** (capability files written); Phase 6 is planned.
 
 ### Planning rules (Phase 4 onward)
 
@@ -138,6 +139,11 @@ are planned.
 | `test` | `vitest run` |
 | `test:e2e` | `playwright test` |
 | `test:e2e:design` | `playwright test -c playwright.design.config.ts` |
+| `release` | `tsx scripts/release.ts` (Phase 5: migrate + verify + seed site/admin) |
+| `build:release` | `node scripts/build-release.mjs` (Phase 5: `dist/release.mjs` for the image) |
+| `backup` | `tsx scripts/backup.ts` (`pnpm backup -- --out <dir>`) |
+| `restore` | `tsx scripts/restore.ts` (`pnpm restore -- --in <dir> --db <name> --storage <dir> [--force] [--check-only]`) |
+| `test:container` | `bash scripts/container-e2e.sh` (exit 3 = `PENDING DOCKER`) |
 
 `check:openrouter` prints only booleans/numbers, never the key: key present, `GET {base}/key`
 valid, configured model (and the `spec/agent.md` §3 fallback list) listed on `GET {base}/models`,
@@ -353,32 +359,100 @@ second admin; sign in as them; their saves show their name on the desk.
 
 ---
 
-### Phase 5 — Production hardening (deploy-ready)
+### Phase 5 — Production hardening (deploy-ready, target-agnostic)
 
-**Goal:** a 12-factor container that runs anywhere: Dockerfile (multi-stage, Next standalone,
-non-root, migrations as a release step), production config validation (HTTPS cookie, required
-secrets), security headers + CSP, persistent rate limits on login and newsletter, graceful
-shutdown, liveness vs readiness endpoints, backup/restore scripts (Postgres dump + storage dir),
-and a deploy runbook. Capabilities: `container-image`, `backup-restore`, `abuse-protection`
-(capability files written at the start of this phase).
+**Goal:** one non-root container image that runs on any platform: the web server plus a separate
+release step (migrate + verify + seed site/admin), liveness vs readiness probes, graceful
+shutdown, uploads on a volume; login/newsletter caps counted in Postgres (survive restarts, shared
+across instances); nonce CSP + security headers; snapshot-consistent backup/restore with a
+count check; GitHub Actions CI; a deploy runbook. Capabilities: `container-image`,
+`backup-restore`, `abuse-protection` (`spec/capabilities/`). HOW: `spec/architecture.md` §6, §10,
+§12. No user-visible feature changes; no deploy target is chosen (no deploy job).
 
-Slices (planned): S5.1 Dockerfile + `.dockerignore` + `scripts/release.ts`, adds
-`output: 'standalone'` to `next.config.ts` (the container runs `node .next/standalone/server.js`);
-S5.2 backups (`scripts/backup.ts`, `scripts/restore.ts`, docs); S5.3 security headers/CSP in
-`next.config.ts` (after S5.1's edit lands) + DB-backed rate limits behind the
-`FixedWindowCounter` call sites (migration owned by this slice); S5.4 readiness/liveness +
-graceful shutdown (`src/app/api/health/{live,ready}/route.ts`); S5.5 E2E against the container.
+**Before fan-out (orchestrator, one commit):** `package.json` scripts `release`,
+`build:release`, `backup`, `restore`, `test:container` (table above) + devDependency `esbuild`
+pinned to the version tsx already resolves in `pnpm-lock.yaml` (no new runtime dependency);
+`pnpm install` to refresh the lockfile.
 
-**Gate (exact):**
+**Slices** — at most **2 code-generators run concurrently**, in three waves. Within a wave the
+two slices own disjoint files; "takes over" = edits an existing file; a later wave may take over a
+file an earlier wave touched.
+
+| Wave | Slice | Owns (exclusive within its wave) | Depends on |
+|---|---|---|---|
+| 1 | **S5.1 Container image + release step** (`container-image`) | `Dockerfile`, `.dockerignore`, `.gitignore` (takes over: `dist/`), `next.config.ts` (takes over: `output` when `BLOG0_STANDALONE=1`, static security `headers()` — exact values §6), `scripts/release.ts`, `scripts/build-release.mjs`, `scripts/lib/empty-module.mjs`, `src/server/ops/release.ts`, `tests/integration/release.test.ts` | — |
+| 1 | **S5.3 Abuse protection** (`abuse-protection`) | `src/server/db/schema.ts` (takes over: `rateLimitBucket`, `ALL_TABLE_NAMES`), `src/server/db/migrations/0001_rate_limit_bucket.sql` + `meta/_journal.json` + `meta/0001_snapshot.json` (generated: `pnpm db:generate --name rate_limit_bucket`), `src/server/rate-window.ts` (takes over), `src/server/rate-window-store.ts`, `src/server/auth/{rate-limit,login}.ts` (take over), `src/server/newsletter/rate-limit.ts` + `src/app/api/newsletter/route.ts` (take over), `src/server/config.ts` (takes over: `rateLimitStore`), `.env.example` (takes over: `BLOG0_RATE_LIMIT_STORE`), `tests/setup/integration-env.ts` (takes over: `memory`), `src/lib/http/csp.ts`, `src/proxy.ts` (takes over), `src/app/layout.tsx` (takes over: async + nonce), `tests/unit/http/csp.test.ts`, `tests/unit/proxy.test.ts` (takes over), `tests/unit/auth/rate-limit.test.ts` (takes over: async API on `MemoryRateLimitStore`), `tests/integration/rate-limit-db.test.ts`, `tests/integration/{auth,newsletter}.test.ts` (take over: `await` the new API only) | — |
+| 2 | **S5.4 Probes + graceful shutdown** (`container-image`) | `src/app/api/health/live/route.ts`, `src/app/api/health/ready/route.ts`, `src/server/ops/{readiness,lifecycle}.ts`, `src/instrumentation.ts` (takes over), `scripts/serve.mjs` (takes over), `src/server/http/api.ts` (takes over: `logLevel`), `src/lib/api/dto.ts` (takes over: health section), `src/server/config.ts` + `.env.example` (take over: `BLOG0_SHUTDOWN_TIMEOUT_MS`), `tests/integration/health-probes.test.ts`, `tests/unit/ops/lifecycle.test.ts` | S5.3 (sequential edits of `config.ts` / `.env.example`) |
+| 2 | **S5.2 Backup + restore** (`backup-restore`) | `src/server/ops/{pg-tools,backup-manifest,backup,restore}.ts`, `scripts/backup.ts`, `scripts/restore.ts`, `tests/unit/ops/backup-manifest.test.ts`, `tests/integration/backup-restore.test.ts` | S5.3 (`rate_limit_bucket` in `ALL_TABLE_NAMES`) |
+| 3 | **S5.5 Container E2E + runbook** (`container-image`) | `scripts/container-e2e.sh`, `scripts/lib/container-env.mjs`, `tests/e2e/global-setup.ts` (takes over: empty `var/storage-e2e`, never remove it), `tests/e2e/helpers/logs.ts` (takes over: `BLOG0_E2E_LOG_FILE`), `tests/e2e/smoke.spec.ts` (takes over: header + CSP-console assertions, log-test skip rule, boot port), `tests/e2e/tldr.spec.ts` (takes over: log-test skip rule only), `docs/deploy.md`, `README.md` (takes over: Deploy section), `.env.example` (takes over: `BLOG0_E2E_LOG_FILE`, `BLOG0_REQUIRE_REAL_KEY`) | S5.1–S5.4 |
+| 3 | **S5.6 CI + real-key switch** | `.github/workflows/ci.yml`, `src/server/llm/key.ts` (takes over: `realKeyRequired`), `tests/helpers/env.ts`, `tests/e2e/helpers/jev-key.ts`, `scripts/eval-jev.ts`, `tests/integration/{jev-openrouter,tldr-flow,seed-tldr,designer-mode}.test.ts` (take over: replace `process.env.CI` checks with `realKeyRequired` only), `tests/unit/helpers/env-helper.test.ts` (takes over), `tests/unit/llm/key.test.ts` | S5.1–S5.4 (CI runs their tests and builds the image) |
+
+Slice notes (rules live in the capability files and architecture; these are only the hand-offs):
+- S5.1's `docker build` self-check needs S5.4's `/api/health/live` for the `HEALTHCHECK` to pass;
+  in wave 1 S5.1 verifies only `docker build`, `id -u` = 1000, the file checks and
+  `docker run … node release.mjs` against `blog0_test` (`PENDING DOCKER` when Colima is down).
+- S5.3 keeps every existing login/newsletter behaviour test green on the memory store, and proves
+  the DB store in `rate-limit-db.test.ts` (opt-in via `resetRateLimitStoreForTests(new DbRateLimitStore())`).
+- S5.4's lifecycle unit test injects `exit`, `closeDb`, timers; the real signal path is proven by
+  S5.5 step 10 and the boot check below.
+- `release.test.ts` (S5.1) and `backup-restore.test.ts` (S5.2) work in their own databases —
+  `BLOG0_TEST_DATABASE_URL` with the name suffixed `_release` / `_restore`, created with
+  `ensurePostgresDatabase` and dropped-schema'd by the test itself — and never drop `blog0_test`'s
+  schema (other integration files share it).
+- S5.2's integration test needs `pg_dump`/`pg_restore` 18 on `PATH` (Homebrew `postgresql@18`
+  locally, PGDG `postgresql-client-18` in CI); it is not skipped when they are missing — it fails
+  with the install hint.
+
+> **Assumed:** three waves of two (S5.1‖S5.3, S5.4‖S5.2, S5.5‖S5.6) — the pairs are disjoint and
+> the only shared files (`config.ts`, `.env.example`, `next.config.ts`) are edited in different
+> waves; S5.3 owns the only migration.
+> **Assumed:** `pnpm start` stays `node scripts/serve.mjs start` → `next start`; standalone output is
+> produced only by the image build (`BLOG0_STANDALONE=1`), so the local run command never prints
+> the standalone warning and the existing E2E path (`pnpm start` on 3411) is untouched.
+
+**Gate (exact)** — `.env` as in the planning rules; Colima running for the container step:
 ```bash
-docker build -t blog0:local .
-pnpm db:migrate && pnpm db:verify
-pnpm test:unit && pnpm test:integration
-BLOG0_E2E_BASE_URL=http://localhost:3412 pnpm test:e2e   # container started (background tool) with: docker run --rm -p 3412:3410 --env-file .env -e BLOG0_DATABASE_URL=postgres://sai@host.docker.internal:5432/blog0_test blog0:local
-pnpm tsx scripts/backup.ts --out var/backups && pnpm tsx scripts/restore.ts --in var/backups/<latest> --db blog0_restore_check   # prints row counts equal
+pnpm install --frozen-lockfile
+pnpm db:migrate && pnpm db:verify            # "blog0_dev @ PostgreSQL 18.x — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK"
+pnpm release                                 # "release: blog0_dev @ PostgreSQL 18.x — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK" then "site blog0 ok, admin <masked> ok"
+pnpm typecheck && pnpm lint && pnpm test:unit
+pnpm test:integration                        # + rate-limit-db, release, health-probes, backup-restore — real blog0_test + real OpenRouter (PENDING KEY rule)
+BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_DIST_DIR=.next-gate pnpm test:e2e      # production server: CSP enforced, 0 CSP console messages, security headers
+test ! -e .next-gate/standalone              # local builds are not standalone
+pnpm test:e2e:design                         # designer mode unaffected (no CSP/HSTS in dev)
+pnpm test:container                          # exit 0 → "container-e2e: PASS"; exit 3 → report "PENDING DOCKER" (never a pass); anything else → fail
+docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color   # CI syntax; no Docker → "PENDING DOCKER"
+pnpm backup -- --out var/backups             # last line = the backup dir
+pnpm restore -- --in "$(ls -td var/backups/blog0-* | head -1)" --db blog0_restore_check --storage var/restore-check/storage --force   # "restore-check: OK (…)"
+BLOG0_DATABASE_URL=postgres://sai@localhost:5432/blog0_restore_check pnpm db:verify   # "… 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK"
+# Boot check (background tool): pnpm start   then:
+curl -fsS http://localhost:3410/api/health/live      # "status":"live"
+curl -fsS http://localhost:3410/api/health/ready     # "status":"ready" … "pending":0
+curl -fsS http://localhost:3410/api/health           # unchanged body, "db":"ok"
+curl -sI http://localhost:3410/ | grep -ci "content-security-policy: default-src 'self'; script-src 'self' 'nonce-"   # 1
+# stop that background server with SIGTERM → its output has app.shutdown "phase":"closed","outcome":"drained" and it exits within 10 s
 ```
-**How the user tests it:** build and run the container per the README, open
-`http://localhost:3412/`, sign in, run a backup and a restore into a scratch DB.
+The CI workflow itself is proven by its first run on push (`gh run watch`); until the branch is
+pushed that line is reported `PENDING CI`, never as passed.
+
+**How the user tests it:**
+1. `colima start`, then `pnpm test:container` → ends with `container-e2e: PASS` (builds
+   `blog0:local`, runs the release step, starts the container on 3412, runs the whole E2E suite
+   against it, stops it gracefully).
+2. Follow `docs/deploy.md` → First deploy with your `.env` values against a scratch database:
+   release step, `docker run -p 3412:3410 -v $PWD/var/storage-deploy:/data/storage …`; open
+   `http://localhost:3412/`, sign in, upload an image in an article — the file appears under
+   `var/storage-deploy/`. `curl localhost:3412/api/health/ready` → ready; `docker stop` → stops in
+   a couple of seconds with an `app.shutdown … drained` log line.
+3. Type a wrong password 6 times → "Too many attempts…"; restart the container → still locked
+   (the count lives in Postgres).
+4. View source / devtools on any page: `Content-Security-Policy` with a nonce, no console
+   violations, dark mode still applied before paint.
+5. `pnpm backup -- --out var/backups`, then `pnpm restore -- --in <printed dir> --db
+   blog0_restore_check --storage var/restore-check/storage` → `restore-check: OK`.
+6. Push the branch: the **ci** workflow runs check, integration, e2e and image jobs; without an
+   `OPENROUTER_API_KEY` secret the real-key tests skip with a visible `PENDING KEY` warning; with
+   it they run and must pass.
 
 ---
 

@@ -36,7 +36,12 @@
     "db:seed:posts": "tsx scripts/db-seed-posts.ts",
     "seed:tldr": "tsx scripts/seed-tldr.ts",
     "dev:design": "node scripts/dev-design.mjs",
-    "test:e2e:design": "playwright test -c playwright.design.config.ts"
+    "test:e2e:design": "playwright test -c playwright.design.config.ts",
+    "release": "tsx scripts/release.ts",
+    "build:release": "node scripts/build-release.mjs",
+    "backup": "tsx scripts/backup.ts",
+    "restore": "tsx scripts/restore.ts",
+    "test:container": "bash scripts/container-e2e.sh"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.16",
@@ -67,6 +72,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "drizzle-kit": "0.31.11",
+    "esbuild": "^0.28.2",
     "eslint": "9.39.5",
     "eslint-config-next": "16.4.0",
     "prettier": "3.9.10",

@@ -8,7 +8,7 @@ and the list of deliberate design divergences.
 ## 1. System overview
 
 One Next.js (App Router) process serves everything on a single origin (default
-`http://localhost:3410`):
+`http://localhost:3410`; in production the same process runs from the container image, §12):
 
 ```
                     ┌──────────────────────────── Next.js process (Node 22) ─────────────────────────────┐
@@ -41,7 +41,8 @@ One Next.js (App Router) process serves everything on a single origin (default
 | DB | `src/server/db/*` | Drizzle over either engine (postgres.js for `postgres://`, PGlite for `pglite://` — §11), schema, programmatic migrator. |
 | HTTP kit | `src/server/http/api.ts` | `withApi()` wrapper: request id, auth guard, origin check, zod/multipart body parsing, envelope, error mapping, request/response log line. |
 | Auth | `src/server/auth/*` | Sessions, password hashing, login + throttle, guards for route handlers and pages. |
-| Throttle core | `src/server/rate-window.ts` | `FixedWindowCounter` shared by the login and newsletter limits (§6). |
+| Throttle core | `src/server/rate-window.ts`, `src/server/rate-window-store.ts` | `FixedWindowCounter`, `RateLimitStore` (memory + Postgres-backed) shared by the login and newsletter limits (§6). |
+| Ops | `src/server/ops/*` | Release step, readiness check, graceful-shutdown lifecycle, backup/restore (§12). |
 | Site | `src/server/site/*` | Resolve the current site (`BLOG0_SITE_SLUG`), cache it (§11.4), admin edits. |
 | Content pipeline | `src/server/content/*` | Markdown → `RenderedArticle` (blocks, paragraphs, sentences, stats, fingerprints, warnings). Deterministic. |
 | Formats | `src/server/formats/*` | One adapter per format kind (`read`, `tldr`, `listen`) implementing status, chip flags, validation, publish (§5). |
@@ -270,17 +271,50 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `/admin/login?next=<path>`).
 - CSRF: every mutating `/api/*` route requires an `Origin` header whose origin equals
   `BLOG0_PUBLIC_BASE_URL`'s origin or the request's own `Host` → else 403 `FORBIDDEN_ORIGIN`.
-- Throttle core: `src/server/rate-window.ts` `FixedWindowCounter(max, windowMs)` — in-memory per
-  process, fixed windows keyed by string, bounded at 10 000 keys (expired windows pruned first,
-  then the oldest); `lockedFor(key, now)` (seconds until unlock when at the cap, else null; does
-  not count), `add(key, now)`, `refund(key)`, `delete(key)`. Login (`src/server/auth/rate-limit.ts`)
-  and newsletter (`src/server/newsletter/rate-limit.ts`) limits are built from it. Phase 5 moves
-  limits to Postgres.
+- Throttle core (`src/server/rate-window.ts`): `FixedWindowCounter(max, windowMs)` stays as is
+  (in-memory, first-hit windows keyed by string, bounded at 10 000 keys; `lockedFor`, `add`,
+  `refund`, `delete`, `prune`). Phase 5 puts an async **store** in front of it (capability
+  `abuse-protection.md`):
+
+  ```ts
+  export type RateScope = 'login.pair' | 'login.email' | 'newsletter.ip' | 'newsletter.email' | 'newsletter.site';
+  export interface RateBucket { scope: RateScope; key: string; max: number; windowMs: number }
+  export type RateCheck = { limited: false } | { limited: true; retryAfterSec: number; scope: RateScope };
+  export interface RateLimitStore {
+    readonly kind: 'memory' | 'db';
+    /** Atomic: any bucket at its cap → limited (nothing counted; the longest wait is reported); else +1 in every bucket. */
+    attempt(siteId: string, buckets: readonly RateBucket[], now: number): Promise<RateCheck>;
+    /** −1 in the window containing `now` (never below 0; missing → no-op). */
+    refund(siteId: string, bucket: RateBucket, now: number): Promise<void>;
+    /** Removes the bucket's count for the window containing `now`. */
+    clear(siteId: string, bucket: RateBucket, now: number): Promise<void>;
+    /** Deletes expired windows; returns how many. */
+    prune(now: number): Promise<number>;
+  }
+  export class MemoryRateLimitStore implements RateLimitStore {}   // one FixedWindowCounter per (scope, max, windowMs); keys siteId\0key
+  ```
+  `src/server/rate-window-store.ts`: `DbRateLimitStore(db?: Db)` (default `getDb()`), and the
+  selection `getRateLimitStore()` (globalThis singleton) / `resetRateLimitStoreForTests(store?)`:
+  `BLOG0_RATE_LIMIT_STORE` `auto` → `DbRateLimitStore` when `dbEngine === 'postgres'`, else
+  `MemoryRateLimitStore`; `db`/`memory` force one. `DbRateLimitStore.attempt` = one
+  `db.transaction(async (tx) => …)` (every statement on `tx` — §11.3): compute
+  `window_start = floor(now / windowMs) × windowMs` and `key_hash = sha256hex(key)` per bucket →
+  `insert … (count 0, expires_at = window_start + windowMs) on conflict do nothing` →
+  `select … for update` of those rows ordered by `(scope, key_hash)` (deadlock-free) → any
+  `count >= max` → return limited with `retryAfterSec = max(1, ceil((expires_at − now)/1000))`
+  → else `update … set count = count + 1`. After the transaction, at most once per 10 min per
+  process (`globalThis` timestamp), `prune(now)` = `delete from rate_limit_bucket where expires_at
+  <= now` (failure → `warn` `rate_limit.prune_failed`, swallowed). DB errors in `attempt` propagate
+  (fail closed → 500). Login (`src/server/auth/rate-limit.ts`) and newsletter
+  (`src/server/newsletter/rate-limit.ts`) are thin async wrappers that build their buckets and call
+  `getRateLimitStore()` per call (no state of their own; `resetLoginRateLimiterForTests()` /
+  `resetNewsletterRateLimiterForTests(limits?)` keep their names and reset the store / limits).
 - Login throttling: 5 failures per (lower-cased email, client IP) per 15 min, and 20 failures per
   lower-cased email across all IPs per 15 min → 429 `RATE_LIMITED` with `Retry-After` (even for
-  the right password). Each allowed attempt is reserved synchronously at the check, before any
-  `await`, so concurrent attempts cannot overrun the limit; a correct password clears the
-  (email, IP) count and refunds its reservation on the per-email count. Client IP:
+  the right password). Each allowed attempt is reserved atomically by `store.attempt()` (buckets
+  `login.pair` + `login.email`) **before** the password is verified, so concurrent attempts — on
+  any instance — cannot overrun the limit; a correct password `clear`s the pair bucket and
+  `refund`s the email bucket at the attempt's `now`. Client IP:
   `BLOG0_TRUSTED_PROXY_HOPS` = 0 (default, no proxy) ignores `X-Forwarded-For` and `X-Real-IP`
   (client-controlled) and uses the constant `direct`, so the login limit is effectively per email
   (and the newsletter per-IP bucket is skipped — next bullet); N > 0 takes the Nth entry from the
@@ -292,6 +326,32 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   is skipped (a shared constant would otherwise let one caller exhaust it for everyone). Any cap →
   429 `RATE_LIMITED` with `Retry-After`. Production behind a reverse proxy MUST set
   `BLOG0_TRUSTED_PROXY_HOPS`, or the per-IP cap is inert.
+- **Security headers (Phase 5).** Static, env-independent headers come from `next.config.ts`
+  `headers()` for `source: '/:path*'` (every response: pages, API, `/media`, `/_next/static`):
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin`,
+  `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`.
+  Runtime headers come from the proxy (`src/proxy.ts`) and only when `NODE_ENV === 'production'`:
+  per request `nonce = randomBytes(16).toString('base64')`, then the request headers
+  `x-nonce` + `content-security-policy` (Next 16 reads the nonce from the request CSP and stamps
+  its own scripts) and the same `Content-Security-Policy` response header, plus
+  `Strict-Transport-Security: max-age=31536000; includeSubDomains` when
+  `getConfig().publicBaseUrl` is https. The policy is built by the pure
+  `buildContentSecurityPolicy({ nonce, https })` in `src/lib/http/csp.ts`; for
+  `{ nonce: 'abc', https: false }` it is exactly:
+  `default-src 'self'; script-src 'self' 'nonce-abc' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; worker-src 'self' blob:; manifest-src 'self'`
+  and `https: true` appends `; upgrade-insecure-requests`. The same file exports
+  `runtimeSecurityHeaders({ nonce, https }): Record<string, string>` (`content-security-policy`,
+  plus `strict-transport-security` when `https`) — the proxy only adds the production gate and
+  the nonce. Proxy matcher: the three article
+  paths (always, as before — §8) plus
+  `{ source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml).*)', missing: [{ type: 'header', key: 'next-router-prefetch' }, { type: 'header', key: 'purpose', value: 'prefetch' }] }`;
+  the article 404 rewrite passes the same request headers (`NextResponse.rewrite(url, { request: { headers } })`)
+  and sets the same response headers. The root layout becomes `async`, reads
+  `(await headers()).get('x-nonce') ?? undefined` and renders the theme script as
+  `<script nonce={nonce} dangerouslySetInnerHTML=…>` (every HTML route is already dynamic, so
+  this costs nothing). `/media/[...key]` keeps its own headers (§9.2); `nosniff` from both sources
+  is the same value.
 - Raw HTML in Markdown is never rendered. Uploaded files are validated by content (§9.3), stored
   under unguessable uuid keys, and served with their stored MIME type,
   `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`; the `/media/` route never
@@ -309,7 +369,7 @@ tests (`captureLogs()`).
 
 | Event | Emitted by | Fields |
 |---|---|---|
-| `api.request` | `withApi` (one line per API request, at completion) | `request_id, method, path, status, latency_ms, user_id?, input_summary, output_summary, err_code?` |
+| `api.request` | `withApi` (one line per API request, at completion; `withApi({ logLevel: 'debug' })` — used only by `/api/health/live` and `/api/health/ready` — logs 2xx at `debug`, anything else at the normal level) | `request_id, method, path, status, latency_ms, user_id?, input_summary, output_summary, err_code?` |
 | `llm.call` | OpenRouter adapter (one line per HTTP attempt) | `request_id, model, prompt_version, attempt, latency_ms, prompt_tokens, completion_tokens, cost_usd, provider_generation_id, outcome ('ok'|'http_error'|'timeout'|'invalid_json'), http_status?` |
 | `jev.run` | `runJev` | `request_id, article_id, revision_id, sentence_count, bounds, picks, attempts, outcome, err_code?` |
 | `auth.login` | login route | `outcome ('ok'|'bad_credentials'|'rate_limited'), email_masked` |
@@ -317,6 +377,8 @@ tests (`captureLogs()`).
 | `media.upload` | audio/image ingest (`logMediaUpload`) | `request_id, kind ('audio'\|'image'), mime, bytes, duration_ms?, width?, height?, article_id?, outcome ('ok'\|'rejected'), err_code?` |
 | `media.request` | `/media/[...key]` (not `withApi`; one line per request) | `request_id, key, status (200\|206\|304\|404\|416), range?, bytes_sent, latency_ms` |
 | `media.remove` / `media.cleanup` / `listen.sync` | `removeAudio` / file cleanup failures (`warn`) / `saveMarks` | ids and counts only |
+| `app.shutdown` | `src/server/ops/lifecycle.ts` (production only) | `signal, phase ('draining'\|'closed'), timeout_ms` (draining); `outcome ('drained'\|'timeout'), duration_ms, exit_code` (closed) |
+| `rate_limit.prune_failed` | `DbRateLimitStore` (`warn`) | `err_code` |
 | `error` | anywhere unexpected | `err_message, err_stack (non-prod only), request_id` |
 
 `input_summary` / `output_summary` are small objects of counts and ids (e.g.
@@ -544,9 +606,14 @@ payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`
 | `BLOG0_NEW_ADMIN_PASSWORD` | no | — | non-interactive `pnpm admin:create` |
 | `BLOG0_STORAGE_DIR` | no | `./var/storage` | uploads root (§9.1) |
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | upload limits, read at request time |
+| `BLOG0_RATE_LIMIT_STORE` | no | `auto` | `auto` \| `db` \| `memory` (§6): `auto` = Postgres-backed on `postgres://`, in-memory on `pglite://`. `tests/setup/integration-env.ts` sets `memory` |
+| `BLOG0_SHUTDOWN_TIMEOUT_MS` | no | `8000` | integer 1000–120000: drain deadline after SIGTERM/SIGINT (§12.2); also read by `scripts/serve.mjs` (kills the child after timeout + 5 s) |
+| `BLOG0_STANDALONE` | no | — | not read by `config.ts`: `next.config.ts` sets `output: 'standalone'` only when it is `1` (the Dockerfile build stage sets it; local `pnpm build`/`pnpm start` never do) |
 | `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server (no `webServer` started) |
+| `BLOG0_E2E_LOG_FILE` | no | — | test harness only: host path of the external server's JSON log (the container writes it through a bind mount); with `BLOG0_E2E_BASE_URL` set, the log-asserting E2E tests run only when this is set (else they skip with a reason) |
+| `BLOG0_REQUIRE_REAL_KEY` | no | — | test harness/scripts only: `1` → a missing/placeholder OpenRouter key FAILS the real-key tests; `0` → it SKIPS as `PENDING KEY`; unset → `CI === 'true'` decides (Conventions → Real-key tests). CI sets it from secret presence |
 | `BLOG0_DIST_DIR` | no | `.next` | not read by `config.ts`: `next.config.ts` `distDir`. A separate build dir (e.g. `.next-gate`) so a gate/CI `pnpm build` never overwrites the `.next` a running `pnpm start` serves; build and start with the same value (`scripts/serve.mjs` and the E2E `webServer` inherit it); `.next-*/` is gitignored |
-| `CI` | no | — | not a `BLOG0_*` setting: `CI=true` turns a missing/placeholder OpenRouter key from a `PENDING KEY` skip into a failure (Conventions → Real-key tests) and enables Playwright `forbidOnly` |
+| `CI` | no | — | not a `BLOG0_*` setting: enables Playwright `forbidOnly`; when `BLOG0_REQUIRE_REAL_KEY` is unset, `CI=true` turns a missing/placeholder OpenRouter key from a `PENDING KEY` skip into a failure (Conventions → Real-key tests) |
 | (derived) `dbEngine` | — | — | not an env var: `getConfig().dbEngine` is `'postgres' \| 'pglite'`, from the URL scheme; reported by `app.boot` and `/api/health` |
 
 Rules: `loadConfig(env)` is pure (unit-testable) and `getConfig()` caches it; values are trimmed
@@ -676,6 +743,181 @@ increments `generation` and clears/replaces `row`; a read captures `generation` 
 and stores its result only if `generation` is unchanged afterwards — so a read racing a save never
 re-stores the old row.
 
+## 12. Deployment (Phase 5)
+
+Product rules: `spec/capabilities/{container-image,backup-restore,abuse-protection}.md`. Runbook:
+`docs/deploy.md`.
+
+### 12.1 Image (`Dockerfile`, `.dockerignore`)
+
+Three stages, `ARG NODE_VERSION=22.23.1` (must equal `package.json` `devEngines.runtime.version`):
+
+1. **deps** — `FROM node:${NODE_VERSION}-slim`; `npm install -g pnpm@11.7.0` (= `packageManager`;
+   not corepack — no signature-key drift); `WORKDIR /app`; `COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./`;
+   `RUN pnpm fetch --frozen-lockfile` (cache layer keyed only by the lockfile).
+2. **build** — `FROM deps`; `COPY . .`; `RUN pnpm install --offline --frozen-lockfile`;
+   `ENV NEXT_TELEMETRY_DISABLED=1 BLOG0_STANDALONE=1`; `RUN pnpm build && pnpm build:release`.
+   No `BLOG0_*` runtime value exists at build time (the build is env-free — Conventions → Modules).
+3. **runtime** — `FROM node:${NODE_VERSION}-slim`; `WORKDIR /app`;
+   `ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3410 BLOG0_PORT=3410 HOSTNAME=0.0.0.0 BLOG0_STORAGE_DIR=/data/storage`;
+   copy from build: `.next/standalone/` → `/app/`, `.next/static/` → `/app/.next/static/`,
+   `public/` → `/app/public/` (if present), `src/server/db/migrations/` → same path,
+   `src/server/jev/prompts/` → same path (both are read via `process.cwd()` paths — §11.2 migrator,
+   `jev/prompt.ts`), `dist/release.mjs` → `/app/release.mjs`. Files stay root-owned;
+   `mkdir -p /data/storage /app/.next/cache && chown node:node /data/storage /app/.next/cache`;
+   `VOLUME /data/storage`; `USER node`; `EXPOSE 3410`; `STOPSIGNAL SIGTERM`;
+   `HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 CMD ["node","-e","fetch('http://127.0.0.1:'+(process.env.PORT||3410)+'/api/health/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]`;
+   `CMD ["node","server.js"]`.
+
+`.dockerignore`: `.git`, `node_modules`, `.next`, `.next-*`, `dist`, `var`, `test-results`,
+`playwright-report`, `blob-report`, `coverage`, `.env`, `.env.*` then `!.env.example`, `spec`,
+`docs`, `tests`, `workers`, `.github`, `playwright.config.ts`, `playwright.design.config.ts`,
+`vitest.config.ts`, `*.tsbuildinfo`, `.DS_Store` (the build's type-check must not see a config
+that imports the excluded `tests/`).
+
+`next.config.ts` additions: `output: process.env.BLOG0_STANDALONE === '1' ? 'standalone' : undefined`
+(so local `next start` never warns), and the static `headers()` block of §6. Native/external
+packages (`serverExternalPackages`) are copied into `.next/standalone/node_modules` by Next's
+tracing; if a runtime `Cannot find module` appears inside the container, the fix is an
+`outputFileTracingIncludes` entry for that package (never a full `node_modules` copy).
+
+**Release step.** `src/server/ops/release.ts` — `runRelease({ env, slug, out }: { env: Record<string, string | undefined>; slug: string; out: (line: string) => void }): Promise<void>`:
+`loadDatabaseTarget(env)` (a `pglite://` target → `ReleaseUsageError`, exit 2) → `createDbHandle(target, { max: 1 })`
+→ `runMigrations` → `getMigrationStatus` (pending > 0 → throw) → `out('release: ' + <db:verify line>)`
+→ `seedSite(db, slug)` → when `BLOG0_ADMIN_EMAIL` and `BLOG0_ADMIN_PASSWORD` are both
+non-empty: `seedAdmin(db, siteId, adminCredentialsFromEnv(env), { resetPassword: false })` → one
+`site … , admin …` line in `db:seed`'s format (else `site <slug> <status>, admin skipped (BLOG0_ADMIN_* not set)`)
+→ close. `scripts/release.ts` (`pnpm release` locally) loads `.env` with `@next/env`, validates
+`BLOG0_SITE_SLUG` with the same rule as `siteSlugFromEnv`, prints `release failed: <message>` and
+exits 1 (2 for `ReleaseUsageError`); it must **not** import `scripts/lib/cli.ts` (that pulls the
+content pipeline in through `seed-posts`, which would bloat the bundle with Shiki).
+`scripts/build-release.mjs` (`pnpm build:release`) bundles `scripts/release.ts` with esbuild into
+`dist/release.mjs`: `platform: 'node'`, `format: 'esm'`, `target: 'node22'`, `bundle: true`,
+tsconfig paths honoured (`@/*`), `alias: { 'server-only': './scripts/lib/empty-module.mjs' }`,
+`external: ['@node-rs/argon2', 'postgres', '@electric-sql/pglite']` (resolved at runtime from the
+standalone `node_modules` next to `release.mjs`), banner
+`import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);`.
+The container runs it as `node release.mjs` with the same env as the web server.
+
+### 12.2 Probes and graceful shutdown
+
+- `src/server/ops/lifecycle.ts`: `isShuttingDown(): boolean`, `installShutdownHandlers(opts?: { timeoutMs?: number; exit?: (code: number) => never; closeDb?: () => Promise<void>; now?: () => number }): void`
+  (idempotent via `globalThis[Symbol.for('blog0.shutdown')]`; the options exist for unit tests).
+  `src/instrumentation.ts` calls it after `app.boot` **only when `NODE_ENV === 'production'`**.
+  On the first SIGTERM/SIGINT: set the shutting-down flag; log `app.shutdown` `phase:'draining'`;
+  wrap `process.exit` once so that Next's own exit — Next's built-in handler (`next start` and the
+  standalone server alike) stops accepting connections and waits for in-flight requests, then
+  calls `process.exit(143 | 130)` — first runs `closeDb()` (capped at 3 s), logs
+  `app.shutdown` `phase:'closed', outcome:'drained'`, then exits with Next's code; start an
+  unref'd deadline timer of `getConfig().shutdownTimeoutMs` that, if it fires first, logs
+  `outcome:'timeout'`, closes the DB (3 s cap) and exits 1. Further signals are ignored.
+  > **Assumed:** wrapping `process.exit` is the hook point — Next 16 exposes no post-drain
+  > callback, and `NEXT_MANUAL_SIG_HANDLE` would remove the server-close/drain we want to keep.
+- `scripts/serve.mjs` (local `pnpm start`/`pnpm dev`): keeps forwarding SIGINT/SIGTERM/SIGHUP; on
+  the first SIGTERM/SIGINT it also arms a kill timer of `BLOG0_SHUTDOWN_TIMEOUT_MS` (default
+  8000) + 5000 ms that `SIGKILL`s the child, prints `blog0: server did not exit within <n> ms —
+  killed`, and exits 1; the child's exit code is mirrored as today.
+- `src/server/ops/readiness.ts`: `checkReadiness(): Promise<ReadinessResult>` — shutting down →
+  `{ ready: false, reason: 'SHUTTING_DOWN' }`; `getDbHandle().ping()` raced with 3 s (failure →
+  driver error logged as `/api/health` does, `reason: 'DB_UNAVAILABLE'`); then
+  `getMigrationStatus(getDbHandle())` (the open app handle, left open) → `pending.length > 0` →
+  `reason: 'MIGRATIONS_PENDING', pending`; else ready with latency, engine, applied count, latest
+  tag. Routes (`withApi({ auth: 'none', logLevel: 'debug' })`, `dynamic = 'force-dynamic'`,
+  `Cache-Control: no-store`): `src/app/api/health/live/route.ts` (never touches the DB or config
+  beyond `APP_VERSION`), `src/app/api/health/ready/route.ts`. Contract: `spec/api.md` → health.
+  `/api/health` is unchanged.
+
+### 12.3 Backup / restore (`src/server/ops/{pg-tools,backup-manifest,backup,restore}.ts`)
+
+- `pg-tools.ts`: `findPgTool('pg_dump' | 'pg_restore')` (spawn `<tool> --version` on `PATH`;
+  ENOENT → `BackupError` with the install hint from the capability), major-version check against
+  the server's `server_version`; `pgEnv(url)` → `{ PGPASSWORD }` + a password-less `--dbname` URI.
+  `tar` is spawned the same way (`tar -czf` / `tar -xzf`, `-C <dir> .`).
+- `backup-manifest.ts` (pure): zod `backupManifestSchema` (`format: 'blog0-backup/1'`, shape in the
+  capability), `BACKUP_TABLES = ALL_TABLE_NAMES` minus `rate_limit_bucket`,
+  `compareRestore(manifest, observed): { ok: boolean; lines: string[] }`, `backupDirName(now)`.
+- `backup.ts` — `createBackup({ databaseUrl, outDir, storageDir, now?, out })`: one postgres.js
+  connection (`max: 1`), `begin isolation level repeatable read read only` → `select
+  pg_export_snapshot()` → `count(*)` per `BACKUP_TABLES` + migration status → spawn
+  `pg_dump --format=custom --no-owner --no-acl --snapshot=<id> --exclude-table-data=public.rate_limit_bucket --file=<dir>/db.dump`
+  while the transaction is open → commit → walk the storage dir (regular files only) → tar it →
+  sha256 both files → write `manifest.json` last. Any failure removes the new backup dir.
+- `restore.ts` — `restoreBackup({ inDir, target, storageDir, force, checkOnly, out })`: parse +
+  checksum-verify → `ensurePostgresDatabase(target)` → emptiness check (tables in `public` or a
+  `drizzle` schema) → `--force` wipe (`drop schema if exists drizzle cascade; drop schema public
+  cascade; create schema public`) → `pg_restore --no-owner --no-acl --single-transaction --exit-on-error`
+  → storage (refuse/empty with guards, extract) → restore-check (`compareRestore`).
+- `scripts/backup.ts`, `scripts/restore.ts`: `runCli` + flag parsing (a leading `--` from
+  `pnpm <script> -- …` is ignored); usage errors exit 2.
+
+### 12.4 CI (`.github/workflows/ci.yml`)
+
+Triggers: `push` (all branches) and `pull_request`; `permissions: contents: read`; concurrency
+per ref with cancel-in-progress. Workflow-level env:
+`BLOG0_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY || 'pending-placeholder' }}` (a
+placeholder passes the boot check, is classified `placeholder` by `openRouterKeyStatus`),
+`BLOG0_REQUIRE_REAL_KEY: ${{ secrets.OPENROUTER_API_KEY != '' && '1' || '0' }}`,
+`HAS_OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}`,
+`BLOG0_DATABASE_URL: postgres://postgres:postgres@localhost:5432/blog0_dev`,
+`BLOG0_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/blog0_test`,
+`BLOG0_ADMIN_EMAIL: ci-admin@example.test`, `BLOG0_ADMIN_PASSWORD: ci-admin-password-0001`,
+`NEXT_TELEMETRY_DISABLED: 1`. Every job: `actions/checkout@v4`, `pnpm/action-setup@v4` (version from
+`packageManager`), `actions/setup-node@v4` with `node-version: 22.23.1` and `cache: pnpm`,
+`pnpm install --frozen-lockfile`, and a step writing `BLOG0_SESSION_SECRET=$(openssl rand -base64 48)`
+to `$GITHUB_ENV`. Jobs:
+- `check`: `pnpm typecheck`, `pnpm lint`, `pnpm test:unit`.
+- `integration`: service `postgres:18` (`POSTGRES_PASSWORD: postgres`, port 5432, `pg_isready`
+  health options); install `postgresql-client-18` from the PGDG apt repo (backup test);
+  `pnpm db:create && pnpm db:migrate && pnpm db:verify`; `pnpm test:integration`.
+- `e2e`: same service; `pnpm exec playwright install --with-deps chromium`; `pnpm build`;
+  `pnpm test:e2e`; `pnpm test:e2e:design`; on failure upload `playwright-report/` and
+  `test-results/` as artifacts.
+- `image`: `docker build -t blog0:ci .`; `docker run --rm blog0:ci id -u` = `1000`; run detached
+  with an unreachable DB URL (`postgres://nobody@127.0.0.1:1/none`), a random session secret and
+  the placeholder key; poll `/api/health/live` → 200 and `/api/health/ready` → 503 `NOT_READY`;
+  `docker stop` → exit code 143 and an `app.shutdown` `closed` log line.
+- Each of `integration` and `e2e` ends with a step `if: env.HAS_OPENROUTER_KEY != 'true'` that
+  prints `::warning::PENDING KEY — real-key tests were skipped (no OPENROUTER_API_KEY secret)`.
+No deploy job, no registry push.
+
+### 12.5 Container E2E (`scripts/container-e2e.sh`, `pnpm test:container`)
+
+`set -euo pipefail`, run from the repo root, image `blog0:local`, container `blog0-e2e`, host port
+3412. Steps, each echoing `container-e2e: <step>`; any failure prints `container-e2e: FAIL <step>`
+and exits 1; a `trap` always runs `docker rm -f blog0-e2e`:
+1. `docker info` fails → print `PENDING DOCKER: docker daemon not reachable (start it: colima start)` and **exit 3** (a gate reports this as pending, never as passed).
+2. `docker build -t blog0:local .`
+3. `node scripts/lib/container-env.mjs` writes `var/container-e2e.env` (mode 0600) — the
+   `BLOG0_*` values from `.env` + shell (via `@next/env`), minus `BLOG0_DATABASE_URL`,
+   `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_PUBLIC_BASE_URL`, `BLOG0_STORAGE_DIR`,
+   `BLOG0_LOG_FILE`, `BLOG0_DIST_DIR`, `BLOG0_E2E_*`, `BLOG0_ADMIN_*`, `BLOG0_NEW_ADMIN_PASSWORD`,
+   `BLOG0_REQUIRE_REAL_KEY`, values unquoted, one `KEY=value` per line — and prints the container
+   DB URL: `BLOG0_TEST_DATABASE_URL` with host `localhost`/`127.0.0.1` replaced by
+   `host.docker.internal`.
+4. `BLOG0_DATABASE_URL=$BLOG0_TEST_DATABASE_URL pnpm db:create`, then the release step:
+   `docker run --rm --add-host=host.docker.internal:host-gateway --env-file var/container-e2e.env -e BLOG0_DATABASE_URL=<container url> blog0:local node release.mjs`
+   → output contains `0 pending: OK`.
+5. `mkdir -p var/storage-e2e test-results`, then
+   `docker run -d --name blog0-e2e --add-host=host.docker.internal:host-gateway -p 3412:3410 --env-file var/container-e2e.env -e BLOG0_DATABASE_URL=<container url> -e BLOG0_PUBLIC_BASE_URL=http://localhost:3412 -e BLOG0_LOG_FILE=/logs/e2e-server.log -v "$PWD/var/storage-e2e:/data/storage" -v "$PWD/test-results:/logs" blog0:local`.
+6. Poll `curl -fsS http://localhost:3412/api/health/live` (≤ 60 s), then
+   `docker inspect -f '{{.State.Health.Status}}' blog0-e2e` = `healthy` (≤ 60 s), then
+   `/api/health/ready` contains `"status":"ready"`.
+7. `docker exec blog0-e2e id -u` = `1000`. **No page request before step 8**: a page would cache
+   the site row (§11.4, 60 s) that global setup is about to replace.
+8. `BLOG0_E2E_BASE_URL=http://localhost:3412 BLOG0_E2E_LOG_FILE=test-results/e2e-server.log pnpm test:e2e`
+   (global setup resets `blog0_test` and empties — never removes — the bind-mounted
+   `var/storage-e2e`).
+9. At least one `var/storage-e2e/blog0/audio/*/*/*.mp3` exists on the host (written by the
+   container through the volume); `curl -sI http://localhost:3412/` has `content-security-policy`
+   with `'nonce-` and `x-frame-options: DENY`.
+10. `docker stop -t 20 blog0-e2e` finishes in < 12 s; exit code (`docker inspect -f '{{.State.ExitCode}}'`)
+    is 143; `docker logs blog0-e2e` has an `app.shutdown` line with `"outcome":"drained"`.
+11. Print `container-e2e: PASS`, exit 0.
+
+> **Assumed:** Colima's bind mounts accept writes from the container's uid 1000 into the host
+> user's directories (Colima maps them to the host user); a Linux host with a different uid must
+> `chmod`/`chown` `var/storage-e2e` and `test-results` first (the runbook notes it).
+
 ---
 
 ## Stack
@@ -720,15 +962,27 @@ Deploy-time dependencies (`dependencies`, not `devDependencies`): `next`, `react
 `drizzle-orm`, `postgres`, `@electric-sql/pglite` (so `pnpm dev:design` works on a plain
 `pnpm install`), `tsx`, `zod`, `@node-rs/argon2`, all unified/remark/rehype packages, `shiki`,
 `@shikijs/rehype`, `@next/env`, `music-metadata`, `image-size`, `server-only`. Dev-only:
-`drizzle-kit`, `vitest`, `@playwright/test`, `typescript`, `@types/*`, `eslint*`, `prettier`.
+`drizzle-kit`, `vitest`, `@playwright/test`, `typescript`, `@types/*`, `eslint*`, `prettier`,
+`esbuild` (Phase 5: `pnpm build:release`; already allowed in `allowBuilds`).
 
 `next.config.ts`: `distDir: process.env.BLOG0_DIST_DIR?.trim() || '.next'` (§10),
 `serverExternalPackages: ['@node-rs/argon2', 'shiki', 'postgres', '@electric-sql/pglite']`
 (PGlite loads a WASM binary from its package dir and must not be bundled), `allowedDevOrigins`
 and `experimental.turbopackFileSystemCacheForDev: false` (§11.1), `poweredByHeader: false`,
-`typedRoutes: false`. **No** `output: 'standalone'` before Phase 5: the documented local run
-command is `next start` (via `scripts/serve.mjs`), which warns under standalone output; Phase 5
-adds it for the container.
+`typedRoutes: false`. `output: 'standalone'` only when `BLOG0_STANDALONE=1` (the image build,
+§12.1): the documented local run command stays `next start` (via `scripts/serve.mjs`), which warns
+under standalone output. Phase 5 adds the static security `headers()` (§6).
+
+**Deploy (Phase 5, §12).**
+
+| Concern | Choice | Rationale |
+|---|---|---|
+| Container base | `node:22.23.1-slim` (Debian, glibc), multi-stage | Exact Node pin of `devEngines`; glibc prebuilds for argon2/SWC; full ICU keeps sentence splitting identical. Alpine rejected (musl prebuild variance, no gain for one image). |
+| App packaging | Next `output: 'standalone'` (image build only) | Traced minimal `node_modules`; `node server.js` keeps Next's built-in graceful drain. |
+| Release step | esbuild bundle `dist/release.mjs` (esbuild devDependency, pinned to the lockfile's version) | Migrations run from the same image without `tsx`, dev deps or the full `node_modules`. |
+| Backups | system `pg_dump`/`pg_restore` (PostgreSQL 18 client) + `tar` | Custom-format dumps are the Postgres-native, version-checked path; no new npm dependency. |
+| CI | GitHub Actions, `postgres:18` service | Repo host; gates run on the production engine; no deploy job. |
+| Container runtime (local gate) | Docker via Colima | Already on the dev machine; gate step reports `PENDING DOCKER` when the daemon is down. |
 
 ## Layout
 
@@ -742,14 +996,19 @@ blog0/
 ├── README.md  .env.example  .gitignore  .nvmrc  .prettierrc  package.json  pnpm-lock.yaml  pnpm-workspace.yaml
 ├── tsconfig.json  next.config.ts  drizzle.config.ts  vitest.config.ts  eslint.config.mjs
 ├── playwright.config.ts  playwright.design.config.ts          # main E2E (3411) / designer-mode E2E (3413)
+├── Dockerfile  .dockerignore                                  # Phase 5 image (§12.1)
+├── .github/workflows/ci.yml                                   # Phase 5 CI (§12.4)
+├── docs/deploy.md                                             # Phase 5 runbook
+├── dist/                        # gitignored build output: release.mjs (pnpm build:release)
 ├── spec/                                    # this spec + design reference (never edited by generators); spikes/pglite.md = spike verdict
 ├── scripts/
-│   ├── serve.mjs                # loads .env via @next/env, runs `next <dev|start> -p ${BLOG0_PORT||3410}`, forwards signals; inherits BLOG0_DIST_DIR
+│   ├── serve.mjs                # loads .env via @next/env, runs `next <dev|start> -p ${BLOG0_PORT||3410}`, forwards signals + kill timer (§12.2); inherits BLOG0_DIST_DIR
 │   ├── db-create.ts  db-migrate.ts  db-verify.ts  db-seed.ts  db-seed-posts.ts  create-admin.ts
 │   ├── check-openrouter.ts  eval-jev.ts  seed-tldr.ts  spike-pglite.ts
+│   ├── release.ts  build-release.mjs  backup.ts  restore.ts  container-e2e.sh    # Phase 5 (§12)
 │   ├── dev-design.mjs           # `dev:design`: runDesignerSetup() in-process, then the hot-reload dev server
 │   ├── make-image-fixtures.ts  make-audio-fixture.sh     # regenerate tests/fixtures/{images,audio}
-│   └── lib/{cli,allow-server-only}.ts                    # shared CLI helpers; lets scripts import server-only modules
+│   └── lib/{cli,allow-server-only}.ts  lib/empty-module.mjs  lib/container-env.mjs   # CLI helpers; server-only shim; esbuild alias target; container env file
 ├── src/
 │   ├── instrumentation.ts       # register(): getConfig() (fail fast, exit 1) + initDb() on PGlite + app.boot log; skipped during next build
 │   ├── proxy.ts                 # Next 16 proxy: /p/:slug, /p/:slug/tldr, /p/:slug/listen unknown/unpublished → rewrite to root 404 (§8); no auth
@@ -767,7 +1026,7 @@ blog0/
 │   │   │       └── ai-usage/  team/                       # Phase 4 (on hold) — not yet created
 │   │   ├── media/[...key]/route.ts                        # GET/HEAD, 200/206/304/416 (§9.2)
 │   │   └── api/
-│   │       ├── health/route.ts  newsletter/route.ts  auth/{login,logout,me}/route.ts
+│   │       ├── health/route.ts  health/{live,ready}/route.ts  newsletter/route.ts  auth/{login,logout,me}/route.ts
 │   │       ├── public/articles/[slug]/{tldr,listen}/route.ts
 │   │       └── admin/{preview,site,subscribers}/route.ts  admin/uploads/images/route.ts
 │   │           admin/articles/route.ts  admin/articles/[id]/{route.ts, publish/, unpublish/, tldr/, tldr/generate/, audio/, listen/}
@@ -783,14 +1042,16 @@ blog0/
 │   ├── lib/                     # isomorphic, pure, no I/O
 │   │   ├── api/envelope.ts  api/dto.ts   # ALL API DTOs, one file grouped by domain sections
 │   │   ├── articles/limits.ts   # ARTICLE_LIMITS (spec/api.md PATCH)
+│   │   ├── http/csp.ts          # buildContentSecurityPolicy (§6)
 │   │   ├── content/types.ts  formats/registry.ts  view-models.ts  format-date.ts
 │   │   ├── deck/timing.ts       # tldrDwell, tldrType, tldrMinutes, slide words (ported verbatim)
 │   │   ├── listen/marks.ts  listen/estimate.ts                 # §9.4
 │   │   ├── media/image-markdown.ts                             # image snippet builder
 │   │   └── share-links.ts  share-surface.ts                    # share texts/URLs; native-sheet decision
 │   ├── server/                  # server-only (each file starts with `import 'server-only'`)
-│   │   ├── config.ts  log.ts  rate-window.ts
-│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql + meta/)
+│   │   ├── config.ts  log.ts  rate-window.ts  rate-window-store.ts
+│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql + meta/)
+│   │   ├── ops/{release,readiness,lifecycle,pg-tools,backup-manifest,backup,restore}.ts   # Phase 5 (§12)
 │   │   ├── designer/{secret,admin,setup}.ts
 │   │   ├── http/api.ts
 │   │   ├── auth/{session,guard,password,login,rate-limit}.ts
@@ -811,10 +1072,12 @@ blog0/
 │       ├── additions.css        # new rules only (spec/ui.md §5)
 │       └── admin.css
 ├── tests/
-│   ├── setup/{global-setup,integration-env}.ts   # vitest integration: create/reset + migrate blog0_test; env + singleton resets, BLOG0_STORAGE_DIR=var/storage-test
+│   ├── setup/{global-setup,integration-env}.ts   # vitest integration: create/reset + migrate blog0_test; env + singleton resets, BLOG0_STORAGE_DIR=var/storage-test, BLOG0_RATE_LIMIT_STORE=memory
 │   ├── helpers/{db,session,env,logs,storage,api,seed-articles}.ts
 │   ├── unit/<domain>/**         # admin, auth, content, db, deck, formats, helpers, jev, listen, llm, media, reader, site, … — no catch-all folder
 │   ├── integration/*.test.ts
+│   ├── integration/  # Phase 5 adds rate-limit-db, release, health-probes, backup-restore
+│   ├── unit/ops/  unit/http/  # Phase 5: lifecycle, backup-manifest, release-args; csp, proxy-headers
 │   ├── e2e/{tldr,reader,listen,smoke,designer-mode}.spec.ts  e2e/{global-setup,designer.global-setup}.ts
 │   │   e2e/helpers/{admin,article-text,db,jev-key,logs,share,upload}.ts
 │   └── fixtures/articles/{hard-cases,e2e-article}.md  fixtures/audio/{sample.mp3,sample.m4a,sample.json,not-audio.wav}
@@ -841,7 +1104,13 @@ Test wiring:
   BLOG0_STORAGE_DIR: 'var/storage-e2e' }` merged over the inherited environment (so
   `BLOG0_DIST_DIR` reaches it), `reuseExistingServer: false`, 120 s. E2E runs the **same**
   `pnpm start` as production (test path = run path); `pnpm build` (same `BLOG0_DIST_DIR`) must have
-  run first.
+  run first. **Against the container** (Phase 5, §12.5): `BLOG0_E2E_BASE_URL=http://localhost:3412`
+  + `BLOG0_E2E_LOG_FILE=test-results/e2e-server.log`; global setup still resets `blog0_test` (the
+  container connects lazily) and **empties** `var/storage-e2e` without removing the directory (it
+  is the container's bind-mounted `/data/storage`); the log-asserting tests read
+  `BLOG0_E2E_LOG_FILE` (default `test-results/e2e-server.log`) and skip — with the reason "log file
+  not wired for the external server" — only when the base URL is external and that variable is
+  unset; the smoke boot-line assertion expects `port: 3411` locally and any number externally.
 - `playwright.design.config.ts` (`pnpm test:e2e:design`; does **not** load `.env`):
   `testMatch: 'designer-mode.spec.ts'`, one project `designer`, port 3413. Playwright starts the
   web server **before** `globalSetup`, so the clean-state wipe is the first step of the web-server
@@ -903,14 +1172,20 @@ key check is `openRouterKeyStatus(raw)` (`src/server/llm/key.ts`): `'missing'` w
 `'placeholder'` when the value matches `PLACEHOLDER_RE` (starts with `replace`, `pending`,
 `placeholder`, `changeme`, `change-me`, `your`, `xxx`, `todo` or `<`, or contains `placeholder` /
 `replace-with`), else `'real'` — broader than the boot check in §10 (which rejects only the
-`replace-with-` prefix, and only on `postgres://`). When the status is not `'real'` **and** `CI` is
-not `true`, each test SKIPS with a visible reason containing `PENDING KEY`
-(`PENDING_KEY_REASON = 'PENDING KEY: BLOG0_OPENROUTER_API_KEY not set'`; `eval:jev` prints it and
-exits 0 without scoring). They are never stubbed into a pass — no stub `LlmClient`, no recorded
-fixture, no `<stub:jev>` output on these paths. When `CI=true`, a missing/placeholder key is a
-FAILURE. Whenever a real key is present, an invalid/rejected key (401/403) or any provider error
-is a FAILURE, never a skip. A gate run that skipped any `PENDING KEY` test is reported as
-"pending key", not as passed.
+`replace-with-` prefix, and only on `postgres://`). Whether a non-real key fails or skips is
+decided by `realKeyRequired(env)` in the same file (Phase 5): `BLOG0_REQUIRE_REAL_KEY === '1'` →
+true; `=== '0'` → false; unset/other → `env.CI === 'true'`. It is the **only** place that reads
+`CI` for this rule — `tests/helpers/env.ts` (`shouldSkipRealKeyTests`),
+`tests/e2e/helpers/jev-key.ts` (`jevKeyPlan`), `scripts/eval-jev.ts` and the integration tests
+`jev-openrouter`, `tldr-flow`, `seed-tldr`, `designer-mode` call it. When the status is not
+`'real'` **and** `realKeyRequired` is false, each test SKIPS with a visible reason containing
+`PENDING KEY` (`PENDING_KEY_REASON = 'PENDING KEY: BLOG0_OPENROUTER_API_KEY not set'`; `eval:jev`
+prints it and exits 0 without scoring). They are never stubbed into a pass — no stub `LlmClient`,
+no recorded fixture, no `<stub:jev>` output on these paths. When `realKeyRequired` is true, a
+missing/placeholder key is a FAILURE. Whenever a real key is present, an invalid/rejected key
+(401/403) or any provider error is a FAILURE, never a skip. CI sets `BLOG0_REQUIRE_REAL_KEY` from
+the secret's presence (§12.4), so a fork PR without the secret skips visibly instead of failing.
+A gate run that skipped any `PENDING KEY` test is reported as "pending key", not as passed.
 
 **Commits.** `phase-N: <what>`; fixes `phase-N fix: <what>`; spec-only `spec: <what>`; refactors
 `refactor: <what>`.

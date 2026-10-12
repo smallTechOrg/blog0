@@ -1,9 +1,9 @@
 # blog0 — Data model
 
 PostgreSQL 18 in production and in every gate; the identical schema also runs on embedded PGlite
-(PG 17 WASM) in designer mode (`spec/architecture.md` §11). All tables are created by the single
-migration `0000_init` (Phase 4 needs no further migration; Phases 5 and 6 add their own, each
-owned by one named slice). Conventions:
+(PG 17 WASM) in designer mode (`spec/architecture.md` §11). All v0.1 tables are created by
+migration `0000_init`; Phase 5 adds `0001_rate_limit_bucket` (slice S5.3); Phase 6 adds its own
+(Phase 4 needs none). Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
 (except `site` itself) and every query filters by it. Foreign keys `on delete cascade` from child
@@ -234,6 +234,26 @@ Rules: an `audio` row (and its file) is deleted when the recording is replaced o
 automatically (v0.1). Deleting an article leaves its media rows (`article_id` → null) and files
 in place (> **Assumed:** acceptable orphan cost for < 100 articles).
 
+### rate_limit_bucket
+Phase 5, migration `0001_rate_limit_bucket` (owned by slice S5.3; generated with
+`pnpm db:generate --name rate_limit_bucket`). One fixed throttle window per (site, scope, key) —
+capability `abuse-protection.md`, logic `spec/architecture.md` §6. Ephemeral: its rows are not
+backed up (`backup-restore.md`) and expired rows are pruned.
+
+| Column | Type | Notes |
+|---|---|---|
+| site_id | uuid fk → site on delete cascade | |
+| scope | text not null | `login.pair` \| `login.email` \| `newsletter.ip` \| `newsletter.email` \| `newsletter.site` (no CHECK — new scopes need no migration) |
+| key_hash | text not null | sha256 hex of the raw key (email / IP / pair / site id) — never the raw value |
+| window_start | timestamptz not null | `floor(now / window) × window` (UTC epoch-aligned) |
+| expires_at | timestamptz not null | `window_start + window` |
+| count | integer not null default 0 | check `count >= 0` |
+
+Primary key (site_id, scope, key_hash, window_start) — no `id` column (exception to the uuid-pk
+convention: the natural key is the upsert target). Index (expires_at) for the prune. Drizzle:
+`rateLimitBucket` in `src/server/db/schema.ts`; `ALL_TABLE_NAMES` gains `'rate_limit_bucket'` as
+its **first** entry (children first).
+
 ## Relationships
 
 ```
@@ -242,6 +262,7 @@ site 1─* article 1─* article_revision
 article ─ current_revision_id ─► article_revision ; article ─ published_revision_id ─► article_revision
 article 1─* article_format (one per kind)      article 1─* ai_generation ─► article_revision
 site 1─* newsletter_subscriber                  site 1─* media_asset ─(0..1)► article
+site 1─* rate_limit_bucket                      (Phase 5)
 ```
 
 ## Lifecycles

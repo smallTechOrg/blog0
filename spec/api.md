@@ -8,7 +8,8 @@ type Ok<T> = { ok: true; data: T };
 type Err = { ok: false; error: { code: string; message: string; details?: unknown; requestId: string } };
 ```
 
-Every response has header `x-request-id`. Auth column: **admin** = valid `blog0_session` cookie
+Every response has header `x-request-id` (and, from Phase 5, the static security headers of
+`spec/architecture.md` §6). Auth column: **admin** = valid `blog0_session` cookie
 (else 401 `UNAUTHENTICATED`); **none** = public. All mutating routes (POST/PUT/PATCH/DELETE)
 require a same-origin `Origin` header (else 403 `FORBIDDEN_ORIGIN`). Bodies are validated with
 zod (else 400 `VALIDATION_FAILED`, `details` = flattened zod issues). Ids are uuids (malformed →
@@ -41,9 +42,10 @@ new DTO goes into the matching section.
 | LLM_INVALID_OUTPUT | 502 | Model output invalid twice |
 | LLM_RATE_LIMITED / LLM_UNAVAILABLE / LLM_TIMEOUT | 503 | Transient provider failure |
 | LLM_NOT_CONFIGURED | 503 | Designer mode without an OpenRouter key; Generate refused before any row is written |
-| RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header |
+| RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header (Phase 5: counted in Postgres — `spec/capabilities/abuse-protection.md`) |
 | PAYLOAD_TOO_LARGE / UNSUPPORTED_MEDIA | 413 / 415 | Uploads: over `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_IMAGE_MB` (declared `Content-Length` and actual bytes) / content not in the allowlist (detected from bytes; message names the detected type) |
 | DB_UNAVAILABLE | 503 | Health check only |
+| NOT_READY | 503 | `/api/health/ready` only; `details.reason` = `SHUTTING_DOWN` \| `DB_UNAVAILABLE` \| `MIGRATIONS_PENDING` |
 | INTERNAL | 500 | Unexpected |
 
 ## Shared DTOs
@@ -109,7 +111,12 @@ schemas and the editor forms): title 1–200, dek ≤ 400, topic ≤ 40, slug �
 
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
-| GET `/api/health` | none | — | `{ status: 'ok', db: 'ok', dbLatencyMs: number, version: string, uptimeSec: number, dbEngine: 'postgres' \| 'pglite' }` (`dbEngine` always present); DB down → 503 `DB_UNAVAILABLE` (generic envelope; fixed message, no `details`, never the raw driver error — that is logged server-side) |
+| GET `/api/health` | none | — | `{ status: 'ok', db: 'ok', dbLatencyMs: number, version: string, uptimeSec: number, dbEngine: 'postgres' \| 'pglite' }` (`dbEngine` always present); DB down → 503 `DB_UNAVAILABLE` (generic envelope; fixed message, no `details`, never the raw driver error — that is logged server-side). **Unchanged in Phase 5.** |
+| GET `/api/health/live` | none | — | `HealthLiveDto = { status: 'live', version: string, uptimeSec: number, shuttingDown: boolean }` — always 200 while the process serves (also during the shutdown drain); never touches the DB. `Cache-Control: no-store`. Liveness probe + Docker `HEALTHCHECK`. |
+| GET `/api/health/ready` | none | — | `HealthReadyDto = { status: 'ready', db: 'ok', dbLatencyMs: number, dbEngine: 'postgres' \| 'pglite', migrations: { applied: number, pending: 0, latest: string \| null }, version: string }`. Not ready → 503 `NOT_READY` with `details: { reason: 'SHUTTING_DOWN' \| 'DB_UNAVAILABLE' \| 'MIGRATIONS_PENDING', pending?: string[] }` (fixed messages; never driver text). DB ping and migration check share a 3 s budget. `Cache-Control: no-store`. Readiness probe. |
+
+Both probe routes log their `api.request` line at `debug` when 2xx (probe noise), at the normal
+level otherwise (`spec/architecture.md` §7); DTOs live in the health section of `src/lib/api/dto.ts`.
 
 > **Assumed:** `dbEngine` is part of the contract (the route always sets it); the optional `?` on
 > `HealthDto.dbEngine` in `src/lib/api/dto.ts` is a leftover to tighten, not a behaviour.
