@@ -26,5 +26,5 @@ export default async function ArticleTldrPage({ params }: Props) {
   const { slug } = await params;
   const page = await loadArticlePage(slug);
   if (!page) notFound();
-  return <ArticleView article={page.article} initialMode="tldr" />;
+  return <ArticleView article={page.article} initialMode="tldr" brand={page.site.wordmark} />;
 }

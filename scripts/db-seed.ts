@@ -1,15 +1,14 @@
 // pnpm db:seed [--reset-admin-password] — upserts the site row (BLOG0_SITE_SLUG) and the first admin
-// (BLOG0_ADMIN_EMAIL / BLOG0_ADMIN_PASSWORD / BLOG0_ADMIN_NAME) into BLOG0_DATABASE_URL.
+// (BLOG0_ADMIN_EMAIL / BLOG0_ADMIN_PASSWORD / BLOG0_ADMIN_NAME) into BLOG0_DATABASE_URL
+// (postgres:// or pglite://<dir>; designer mode seeds its own admin via `pnpm dev:design`).
 // Prints e.g. "site blog0 ok, admin s***@smalltech.in ok" (email masked; the password is never printed).
 // Idempotent: an existing site/admin is left untouched (the password only changes with the flag).
 import './lib/allow-server-only';
 
 import { loadEnvConfig } from '@next/env';
-import { drizzle } from 'drizzle-orm/postgres-js';
 
-import { CONFIG_DEFAULTS, loadDatabaseUrl } from '../src/server/config';
-import { createSqlClient } from '../src/server/db/client';
-import * as schema from '../src/server/db/schema';
+import { CONFIG_DEFAULTS, loadDatabaseTarget } from '../src/server/config';
+import { createDbHandle } from '../src/server/db/client';
 import { maskEmail } from '../src/server/log';
 import { adminCredentialsFromEnv, seedAdmin, SeedError } from '../src/server/seed/admin';
 import { seedSite } from '../src/server/seed/site';
@@ -36,18 +35,18 @@ async function main(): Promise<void> {
   const resetPassword = args.includes('--reset-admin-password');
 
   // Validate everything before touching the database.
-  const url = loadDatabaseUrl(process.env);
+  const target = loadDatabaseTarget(process.env);
   const slug = siteSlugFromEnv();
   const credentials = adminCredentialsFromEnv(process.env);
 
-  const sql = createSqlClient(url, { max: 1 });
+  const handle = await createDbHandle(target, { max: 1 });
   try {
-    const db = drizzle(sql, { schema });
+    const { db } = handle;
     const siteResult = await seedSite(db, slug);
     const adminResult = await seedAdmin(db, siteResult.site.id, credentials, { resetPassword });
     console.log(`site ${slug} ${describe(siteResult.status)}, admin ${maskEmail(adminResult.email)} ${describe(adminResult.status)}`);
   } finally {
-    await sql.end({ timeout: 5 });
+    await handle.close();
   }
 }
 

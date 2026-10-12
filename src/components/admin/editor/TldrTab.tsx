@@ -13,6 +13,7 @@ import type {
   SentenceDto,
   TldrStateDto,
 } from '@/lib/api/dto';
+import type { TldrStateDto as TldrStatePhase2 } from '@/lib/api/dto-phase2';
 
 import { apiRequest } from '../api';
 import { boundsHint, FORMAT_STATUS_LABEL, generationMeta } from '../labels';
@@ -286,6 +287,8 @@ export function TldrTab(props: TldrTabProps) {
         ? 'Remove the lines that are no longer in the article before saving.'
         : null;
   const readMinutes = Math.max(1, Math.ceil(article.currentRevision.wordCount / 230));
+  // Designer mode with no OpenRouter key (spec/ui.md §4, Phase 2): Generate disabled + notice.
+  const jevAvailable = (tldr as TldrStatePhase2 | null)?.jevAvailable !== false;
 
   return (
     <div className="tldrtab">
@@ -300,15 +303,23 @@ export function TldrTab(props: TldrTabProps) {
           type="button"
           className="admin-btn admin-btn--primary"
           onClick={() => void generate()}
-          disabled={inFlight || busy !== null || noSentences}
+          disabled={inFlight || busy !== null || noSentences || !jevAvailable}
           aria-busy={inFlight}
-          title={noSentences ? 'The saved article has no eligible sentences' : undefined}
+          title={
+            !jevAvailable ? 'No OpenRouter key configured' : noSentences ? 'The saved article has no eligible sentences' : undefined
+          }
         >
           {inFlight ? <span className="spinner" aria-hidden="true" /> : null}
           {generateLabel}
         </button>
       </div>
 
+      {!jevAvailable ? (
+        <p className="stub" role="note" data-testid="jev-no-key">
+          <span className="stub__label">No OpenRouter key configured</span> — add <code>BLOG0_OPENROUTER_API_KEY</code> to{' '}
+          <code>.env</code> to generate with Jev. You can still pick lines yourself from the article on the right.
+        </p>
+      ) : null}
       {latest && latest.status === 'succeeded' && !failure ? (
         <p className="tldrtab__meta mono">{generationMeta(latest, now, timeZone)}</p>
       ) : null}
@@ -330,7 +341,12 @@ export function TldrTab(props: TldrTabProps) {
             Jev couldn’t make a deck: {trimStop(failure?.message ?? latest?.errorMessage ?? 'unknown error')}.
           </p>
           <p>
-            <button type="button" className="admin-btn admin-btn--small" onClick={() => void generate()} disabled={inFlight || noSentences}>
+            <button
+              type="button"
+              className="admin-btn admin-btn--small"
+              onClick={() => void generate()}
+              disabled={inFlight || noSentences || !jevAvailable}
+            >
               Try again
             </button>{' '}
             <span className="admin-muted">or pick lines yourself from the article on the right.</span>

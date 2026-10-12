@@ -26,9 +26,25 @@ export function publicTldrUrl(slug: string): string {
 export interface SummaryHostProps {
   deck: PublicTldrDto;
   onClose: () => void;
+  /** The site record's wordmark for the deck's share text; omitted → read from the masthead. */
+  brand?: string;
 }
 
-export function SummaryHost({ deck, onClose }: SummaryHostProps) {
+const HOME_LABEL_SUFFIX = ' — home';
+
+/**
+ * The site wordmark as the server-rendered masthead carries it (`aria-label="<wordmark> — home"`
+ * on its home link, from the site record) — so a card's deck shares under the same brand as
+ * the article page without threading the site through every list. Null when absent.
+ */
+export function siteBrandFromDocument(doc: Pick<Document, 'querySelector'>): string | null {
+  const label = doc.querySelector('#blog0-root a.brandlink')?.getAttribute('aria-label') ?? '';
+  if (!label.endsWith(HOME_LABEL_SUFFIX)) return null;
+  const brand = label.slice(0, -HOME_LABEL_SUFFIX.length).trim();
+  return brand || null;
+}
+
+export function SummaryHost({ deck, onClose, brand }: SummaryHostProps) {
   const router = useRouter();
   const slides = useMemo(
     () => buildDeckSlides(deck.title, deck.dek, deck.slides.map((s) => s.text)),
@@ -36,6 +52,7 @@ export function SummaryHost({ deck, onClose }: SummaryHostProps) {
   );
   if (typeof document === 'undefined') return null;
   const host = document.getElementById('blog0-root') ?? document.body;
+  const siteBrand = brand || siteBrandFromDocument(document) || undefined;
 
   return createPortal(
     <TldrDeck
@@ -46,6 +63,7 @@ export function SummaryHost({ deck, onClose }: SummaryHostProps) {
       meta={deck.meta}
       disclosure={deck.disclosure}
       shareLink={deck.shareUrl}
+      brand={siteBrand}
       times={deck.times}
       onClose={onClose}
       onRead={() => {

@@ -2,7 +2,7 @@ import { inspect } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
-import { ConfigError, loadConfig, loadDatabaseUrl, Secret } from '@/server/config';
+import { ConfigError, loadConfig, loadDatabaseTarget, loadDatabaseUrl, Secret } from '@/server/config';
 
 const SESSION_SECRET = 'unit-test-session-secret-that-is-long-enough-1234';
 const API_KEY = 'unit-test-openrouter-key-not-real';
@@ -33,6 +33,9 @@ describe('loadConfig', () => {
     const config = loadConfig(env);
 
     expect(config.databaseUrl).toBe('postgres://sai@localhost:5432/blog0_dev');
+    expect(config.dbEngine).toBe('postgres');
+    expect(config.database).toEqual({ engine: 'postgres', url: 'postgres://sai@localhost:5432/blog0_dev' });
+    expect(config.sessionSecretSource).toBe('env');
     expect(config.port).toBe(3410);
     expect(config.publicBaseUrl).toBe('http://localhost:3410');
     expect(config.siteSlug).toBe('blog0');
@@ -48,16 +51,15 @@ describe('loadConfig', () => {
     expect(config.e2eBaseUrl).toBeNull();
   });
 
-  it('throws one error listing every missing required value and pointing at .env', () => {
-    const env = {};
+  it('throws one error listing every missing required value and pointing at .env (postgres engine)', () => {
+    const env = { BLOG0_DATABASE_URL: 'postgres://sai@localhost:5432/blog0_dev' };
 
     const run = () => loadConfig(env);
 
     expect(run).toThrow(ConfigError);
     expect(run).toThrow(/\.env/);
     const problems = problemsOf(env);
-    expect(problems).toHaveLength(3);
-    expect(problems.join('\n')).toMatch(/BLOG0_DATABASE_URL/);
+    expect(problems).toHaveLength(2);
     expect(problems.join('\n')).toMatch(/BLOG0_SESSION_SECRET/);
     expect(problems.join('\n')).toMatch(/BLOG0_OPENROUTER_API_KEY/);
   });
@@ -78,7 +80,7 @@ describe('loadConfig', () => {
 
     expect(problems).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/^BLOG0_DATABASE_URL must be a postgres/),
+        expect.stringMatching(/^BLOG0_DATABASE_URL must be postgres:\/\/ or pglite:\/\//),
         expect.stringMatching(/^BLOG0_PORT must be an integer/),
         expect.stringMatching(/^BLOG0_SESSION_SECRET must be at least 32/),
         expect.stringMatching(/^BLOG0_LOG_LEVEL must be one of/),
@@ -121,7 +123,7 @@ describe('loadConfig', () => {
     }
     expect(JSON.stringify(config)).toContain('[redacted]');
     expect(config.openrouterApiKey).toBeInstanceOf(Secret);
-    expect(config.openrouterApiKey.reveal()).toBe(API_KEY);
+    expect(config.openrouterApiKey?.reveal()).toBe(API_KEY);
   });
 
   it('rejects the .env.example placeholder secrets with a message pointing at .env, never echoing the value', () => {
@@ -160,7 +162,7 @@ describe('loadConfig', () => {
 
     const config = loadConfig(env);
 
-    expect(config.openrouterApiKey.reveal()).toBe('pending-placeholder');
+    expect(config.openrouterApiKey?.reveal()).toBe('pending-placeholder');
     expect(config.sessionSecret.reveal()).toBe('a-secret-that-merely-contains-replace-with-inside-it');
   });
 
@@ -171,6 +173,92 @@ describe('loadConfig', () => {
     expect(withAdmin.adminEmail).toBe('sai@smalltech.in');
     expect(withoutAdmin.adminEmail).toBeNull();
     expect(withoutAdmin.adminPassword).toBeNull();
+  });
+});
+
+describe('loadConfig — designer mode (pglite engine)', () => {
+  const GENERATED = 'generated-designer-secret-0123456789-abcdefghijklmnop';
+  const designerSessionSecret = () => GENERATED;
+
+  it('defaults an absent database URL to embedded PGlite at ./var/pglite and needs no secret or key', () => {
+    let calls = 0;
+    const config = loadConfig({}, { designerSessionSecret: () => (calls++, GENERATED) });
+
+    expect(config.dbEngine).toBe('pglite');
+    expect(config.database).toEqual({ engine: 'pglite', dir: './var/pglite' });
+    expect(config.databaseUrl).toBe('pglite://./var/pglite');
+    expect(config.databaseUrlDefaulted).toBe(true);
+    expect(config.sessionSecret.reveal()).toBe(GENERATED);
+    expect(config.sessionSecretSource).toBe('generated');
+    expect(calls).toBe(1);
+    expect(config.openrouterApiKey).toBeNull();
+  });
+
+  it('treats an empty BLOG0_DATABASE_URL like an absent one', () => {
+    const config = loadConfig({ BLOG0_DATABASE_URL: '   ' }, { designerSessionSecret });
+
+    expect(config.database).toEqual({ engine: 'pglite', dir: './var/pglite' });
+    expect(config.databaseUrlDefaulted).toBe(true);
+  });
+
+  it('accepts an explicit pglite://<dir> and keeps a real key and an env secret', () => {
+    let calls = 0;
+    const config = loadConfig(
+      { BLOG0_DATABASE_URL: 'pglite://./var/pglite-e2e', BLOG0_SESSION_SECRET: SESSION_SECRET, BLOG0_OPENROUTER_API_KEY: API_KEY },
+      { designerSessionSecret: () => (calls++, GENERATED) },
+    );
+
+    expect(config.database).toEqual({ engine: 'pglite', dir: './var/pglite-e2e' });
+    expect(config.databaseUrlDefaulted).toBe(false);
+    expect(config.sessionSecret.reveal()).toBe(SESSION_SECRET);
+    expect(config.sessionSecretSource).toBe('env');
+    expect(calls).toBe(0);
+    expect(config.openrouterApiKey?.reveal()).toBe(API_KEY);
+  });
+
+  it('turns a placeholder OpenRouter key into "not configured" instead of a boot error', () => {
+    for (const key of ['replace-with-your-openrouter-key', 'pending-placeholder', '  ']) {
+      const config = loadConfig({ BLOG0_DATABASE_URL: 'pglite://memory', BLOG0_OPENROUTER_API_KEY: key }, { designerSessionSecret });
+      expect(config.openrouterApiKey).toBeNull();
+    }
+  });
+
+  it('still validates a session secret that IS set (too short, placeholder)', () => {
+    const short = problemsOf({ BLOG0_DATABASE_URL: 'pglite://memory', BLOG0_SESSION_SECRET: 'short' });
+    const placeholder = problemsOf({ BLOG0_DATABASE_URL: 'pglite://memory', BLOG0_SESSION_SECRET: 'replace-with-output-of-openssl' });
+
+    expect(short).toEqual([expect.stringMatching(/^BLOG0_SESSION_SECRET must be at least 32/)]);
+    expect(placeholder).toEqual([expect.stringMatching(/^BLOG0_SESSION_SECRET still holds the \.env\.example placeholder/)]);
+  });
+
+  it('keeps both secrets required on postgres even though pglite relaxes them', () => {
+    const problems = problemsOf({ BLOG0_DATABASE_URL: 'postgres://sai@localhost:5432/blog0_dev', BLOG0_OPENROUTER_API_KEY: '' });
+
+    expect(problems).toEqual([
+      expect.stringMatching(/^BLOG0_SESSION_SECRET is required/),
+      expect.stringMatching(/^BLOG0_OPENROUTER_API_KEY is required/),
+    ]);
+  });
+
+  it('rejects an empty pglite:// directory and never echoes a postgres URL in the error', () => {
+    const empty = problemsOf({ ...baseEnv(), BLOG0_DATABASE_URL: 'pglite://' });
+    const bad = problemsOf({ ...baseEnv(), BLOG0_DATABASE_URL: 'postgres://user:hunter2-secret@localhost:5432/' });
+
+    expect(empty).toEqual([expect.stringMatching(/pglite:\/\/ \(e\.g\. pglite:\/\/\.\/var\/pglite\)/)]);
+    expect(bad).toEqual([expect.stringMatching(/^BLOG0_DATABASE_URL must be a postgres:\/\/ URL with a database name/)]);
+    expect(bad.join('\n')).not.toContain('hunter2');
+  });
+});
+
+describe('loadDatabaseTarget', () => {
+  it('parses the engine for db:* scripts and defaults to embedded PGlite', () => {
+    expect(loadDatabaseTarget({ BLOG0_DATABASE_URL: 'postgres://sai@localhost:5432/blog0_dev' })).toEqual({
+      engine: 'postgres',
+      url: 'postgres://sai@localhost:5432/blog0_dev',
+    });
+    expect(loadDatabaseTarget({ BLOG0_DATABASE_URL: 'pglite://./var/pglite' })).toEqual({ engine: 'pglite', dir: './var/pglite' });
+    expect(loadDatabaseTarget({})).toEqual({ engine: 'pglite', dir: './var/pglite' });
+    expect(() => loadDatabaseTarget({ BLOG0_DATABASE_URL: 'mysql://x/y' })).toThrow(ConfigError);
   });
 });
 

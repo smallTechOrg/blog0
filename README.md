@@ -1,16 +1,67 @@
 # blog0
 
 blog0 is smallTech's official blog on all things AI — an AI-native, multi-format publishing
-platform (public wordmark **log0**). Writers author Markdown; readers take each article in as
+platform (public wordmark **blog0**). Writers author Markdown; readers take each article in as
 **Read**, **TLDR** (a verbatim slide deck picked by Jev, the TLDR agent) or **Listen**.
 
 Specs live in [`spec/`](spec/) (start with [`spec/roadmap.md`](spec/roadmap.md)).
 
-Status: **Phase 1 — TLDR end-to-end.** An admin signs in at `/admin/login`, writes a Markdown
-article, generates a TLDR deck with Jev (one real OpenRouter call, only on an explicit click),
-edits it, and publishes; readers open the article in Read or TLDR mode at `/p/<slug>`. Listen,
-the newsletter, Featured/About editing and the other later-phase features show as clearly
-labelled "Coming in a later phase" stubs (see the roadmap).
+## Designer mode — run it with only Node + pnpm
+
+No Postgres, no Docker, no `.env`:
+
+```bash
+pnpm install && pnpm dev:design      # → http://localhost:3410
+```
+
+`pnpm dev:design` (`scripts/dev-design.mjs`) runs, in order:
+
+1. picks the embedded database **PGlite** (real Postgres 17 compiled to WASM) at `./var/pglite`
+   (a `postgres://` `BLOG0_DATABASE_URL` in `.env` is ignored here; `BLOG0_DATABASE_URL=pglite://<dir>`
+   in the shell chooses another directory);
+2. applies the same migrations as Postgres;
+3. seeds the site, the **designer admin** `designer@blog0.local` with a generated password —
+   printed **once** on the first run and kept in `var/designer-admin.txt` (mode 0600) — and the
+   5 design articles; then the TLDR decks (committed fixture when there is no OpenRouter key)
+   when the deck seeder (`pnpm seed:tldr`) is present in the checkout;
+4. closes PGlite and starts the hot-reload dev server (`scripts/serve.mjs dev`, Turbopack) on
+   `BLOG0_PORT` (default 3410).
+
+Verify (another terminal):
+
+```bash
+curl -fsS http://localhost:3410/api/health
+# {"ok":true,"data":{"status":"ok","db":"ok",…,"dbEngine":"pglite"}}
+```
+
+Then open <http://localhost:3410/> (home, archive, about, the 5 articles) and sign in at
+<http://localhost:3410/admin/login> with the printed credentials (`cat var/designer-admin.txt`).
+Edit any component under `src/` and the browser updates in place.
+
+- **Re-running is safe:** the second run prints `5 posts: 0 created` and no new password.
+- **Jev without a key:** the TLDR tab shows "No OpenRouter key configured" and **Generate** is
+  disabled (the API answers `503 LLM_NOT_CONFIGURED`). Add `BLOG0_OPENROUTER_API_KEY=<key>` to
+  `.env` and restart `pnpm dev:design` to use Jev for real.
+- **Session secret:** generated once into `var/pglite-session-secret` (mode 0600) unless
+  `BLOG0_SESSION_SECRET` is set.
+- **Blank a value from `.env` for one run:** set it empty in the shell, e.g.
+  `BLOG0_OPENROUTER_API_KEY= pnpm dev:design` (an empty value counts as absent; `.env` never
+  overrides a variable that is already set).
+- **Rotate the designer password:** `pnpm dev:design --reset-designer-password`.
+- **Start over:** stop the server, then `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret`.
+- **One process per data dir:** PGlite has no directory lock — never run `pnpm db:*` against
+  `pglite://./var/pglite` while the dev server is running.
+
+Designer mode is for local design work only: the integration/E2E gates and every deployment run on
+PostgreSQL. In designer mode a Generate holds the single PGlite connection for its whole
+transaction, so concurrent requests queue behind it (the double-click guard still refuses a second
+run via the `running` generation row).
+
+Status: **Phase 2 — reader site + designer mode** (in progress). An admin signs in at
+`/admin/login`, writes a Markdown article, generates a TLDR deck with Jev (one real OpenRouter
+call, only on an explicit click), edits it, and publishes; readers open the article in Read or
+TLDR mode at `/p/<slug>`. Listen and the other later-phase features show as clearly labelled
+"Coming in a later phase" stubs (see the roadmap).
 
 ## Prerequisites
 
@@ -140,7 +191,7 @@ Then open:
 
 | URL | What |
 |---|---|
-| <http://localhost:3410/> | public home (log0 wordmark, latest articles) |
+| <http://localhost:3410/> | public home (blog0 wordmark, featured + latest articles) |
 | <http://localhost:3410/admin/login> | sign in with the seeded admin |
 | <http://localhost:3410/admin> | the desk: article list, **New article**, editor with the TLDR panel |
 | `http://localhost:3410/p/<slug>` | a published article in Read mode |
@@ -150,8 +201,24 @@ Then open:
 The server logs one JSON line per API request (`"event":"api.request"`) to stdout, and also to
 `BLOG0_LOG_FILE` when set.
 
-`pnpm dev` (hot reload, same port) exists but is flaky on Next 16.4 — the phase gate and every
-handoff use `pnpm build && pnpm start`.
+### Development server (hot reload)
+
+```bash
+pnpm dev        # Next 16.4 + Turbopack on BLOG0_PORT (3410), same .env as pnpm start
+```
+
+Edit a component and the open page updates in place (Fast Refresh), no reload. Open it as
+`http://localhost:3410` — `127.0.0.1` and this machine's LAN addresses also work.
+
+*The Phase 1 "reload loop", fixed:* Next 16 refuses its HMR websocket (`/_next/hmr`) to any host
+other than `localhost` unless it is listed in `allowedDevOrigins`. Opening the dev server as
+`http://127.0.0.1:3410` or via the `Network:` address it prints made the socket fail
+(`⚠ Blocked cross-origin request to Next.js dev resource /_next/hmr from "127.0.0.1"` in the
+server log); the client then did a full page reload every ~40 s and edits never hot-updated.
+`next.config.ts` now allows the loopback addresses, the machine's own IPv4 addresses and the
+`BLOG0_PUBLIC_BASE_URL` host. If a page ever keeps reloading in a tight loop anyway (the browser
+console shows `HMR hash mismatch`), stop the server, `rm -rf .next/dev` (Turbopack's dev cache)
+and start it again. The phase gates still use `pnpm build && pnpm start`.
 
 ### Jev evaluation
 
@@ -199,12 +266,23 @@ E2E server logs go to `test-results/e2e-server.log`; the HTML report to `playwri
 
 | Command | Purpose |
 |---|---|
-| `pnpm db:create` | create `blog0_dev` + `blog0_test` if missing |
-| `pnpm db:migrate` | apply pending migrations to `BLOG0_DATABASE_URL` |
+| `pnpm db:create` | create `blog0_dev` + `blog0_test` if missing (on `pglite://<dir>`: create the directory) |
+| `pnpm db:migrate` | apply pending migrations to `BLOG0_DATABASE_URL` (postgres or pglite) |
 | `pnpm db:verify` | print applied/pending migrations; exit 1 if any are pending |
+| `pnpm dev:design [--reset-designer-password]` | designer mode: PGlite + migrate + seed + hot-reload dev server (see [Designer mode](#designer-mode--run-it-with-only-node--pnpm)) |
 | `pnpm db:generate --name <name>` | generate a new SQL migration from `src/server/db/schema.ts` into `src/server/db/migrations/` |
 | `pnpm db:seed [--reset-admin-password]` | upsert the site row and the first admin (`BLOG0_ADMIN_*`) |
 | `pnpm admin:create --email <address> --name "<Display Name>"` | add another admin to the site |
+
+Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g.:
+
+```bash
+BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
+# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 1 applied (latest 0000_init), 0 pending: OK
+```
+
+Run them only while no dev server has that directory open. `drizzle-kit` commands
+(`db:generate`) need no database; `drizzle-kit studio` works with Postgres only.
 
 ## Environment variables
 
@@ -213,14 +291,14 @@ refuses to start and lists every problem when a required value is missing or inv
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `BLOG0_DATABASE_URL` | yes | — | `postgres://sai@localhost:5432/blog0_dev` |
+| `BLOG0_DATABASE_URL` | no | `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (production engine; tests + deploy), or `pglite://<dir>` for the embedded engine; unset → embedded at `./var/pglite` with a boot notice |
 | `BLOG0_TEST_DATABASE_URL` | tests | — | `postgres://sai@localhost:5432/blog0_test`; must differ from the dev URL (tests refuse otherwise) |
 | `BLOG0_PORT` | no | `3410` | read by `scripts/serve.mjs` (after loading `.env`) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (login throttling keys on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored |
-| `BLOG0_SESSION_SECRET` | yes | — | ≥ 32 chars (`openssl rand -base64 48`) |
-| `BLOG0_OPENROUTER_API_KEY` | yes | — | validated at boot for presence (`replace-with-…` rejected); `pending-placeholder` boots but real-key tests report PENDING KEY; liveness by `pnpm check:openrouter` |
+| `BLOG0_SESSION_SECRET` | yes on postgres | pglite: generated | ≥ 32 chars (`openssl rand -base64 48`); on `pglite://` an absent value is generated once into `var/pglite-session-secret` (0600) |
+| `BLOG0_OPENROUTER_API_KEY` | yes on postgres | pglite: none | validated at boot for presence (`replace-with-…` rejected); `pending-placeholder` boots but real-key tests report PENDING KEY; liveness by `pnpm check:openrouter`. On `pglite://` absent/placeholder = Jev disabled (`LLM_NOT_CONFIGURED`) |
 | `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | |
 | `BLOG0_JEV_MODEL` | no | `google/gemini-2.5-flash` | see `spec/agent.md` §3 |
 | `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per model attempt |

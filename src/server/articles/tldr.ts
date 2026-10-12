@@ -2,7 +2,8 @@ import 'server-only';
 
 import { and, eq } from 'drizzle-orm';
 
-import type { DeckInvalidDetails, GenerationDto, TldrStateDto } from '@/lib/api/dto';
+import type { DeckInvalidDetails, GenerationDto } from '@/lib/api/dto';
+import type { TldrStateDto } from '@/lib/api/dto-phase2';
 
 import { getConfig } from '../config';
 import { getDb, type Tx } from '../db/client';
@@ -14,13 +15,13 @@ import { guardInput, jevInputFromRendered } from '../jev/build-input';
 import { JEV_PROMPT_VERSION } from '../jev/prompt';
 import { runJev } from '../jev/run';
 import type { JevErrorCode, JevResult } from '../jev/state';
-import { getLlmClient } from '../llm';
+import { getLlmClient, isLlmConfigured } from '../llm';
 import type { LlmClient } from '../llm/types';
 import { getCurrentSite } from '../site/current';
 import { findArticle, findFormatRow, latestGeneration, lockArticle, userNames } from './repo';
 import type { SaveDeckBody } from './schemas';
 import { notFound, type ActorContext } from './service';
-import { buildTldrState, renderRevision, requireCurrentRevision, toGenerationDto } from './views';
+import { buildTldrState as buildTldrStatePhase1, renderRevision, requireCurrentRevision, toGenerationDto } from './views';
 
 // TLDR orchestration (spec/architecture.md §3 "Generate", "Deck edit"): the generation row, the
 // Jev call and the draft deck. Jev only returns indices; every slide's text is taken from the
@@ -63,6 +64,16 @@ export function resetJevDepsForTests(): void {
 
 // ---------------------------------------------------------------------------------------------
 
+/** Whether Generate can run: false only in designer mode with no OpenRouter key (or a test LLM override). */
+function jevAvailable(): boolean {
+  return depsOverride?.llm !== undefined || isLlmConfigured();
+}
+
+/** The Phase 1 state plus `jevAvailable` (spec/api.md → TldrStateDto, Phase 2). */
+async function buildTldrState(siteId: string, row: Parameters<typeof buildTldrStatePhase1>[1]): Promise<TldrStateDto> {
+  return { ...(await buildTldrStatePhase1(siteId, row)), jevAvailable: jevAvailable() };
+}
+
 export async function getTldrState(siteId: string, id: string): Promise<TldrStateDto> {
   const row = await findArticle(siteId, id);
   if (!row) throw notFound(id);
@@ -82,6 +93,9 @@ export async function generateTldr(
   const db = getDb();
   const config = getConfig();
   const model = depsOverride?.model ?? config.jevModel;
+
+  // 0. Designer mode without a key: refuse before any row or call exists (LLM_NOT_CONFIGURED, 503).
+  const llm = depsOverride?.llm ?? getLlmClient();
 
   // 1. Revision must be current; guard the input BEFORE any row or call exists.
   const row = await findArticle(ctx.siteId, id);
@@ -143,7 +157,7 @@ export async function generateTldr(
   try {
     const site = await getCurrentSite();
     result = await runJev(input, {
-      llm: depsOverride?.llm ?? getLlmClient(),
+      llm,
       model,
       now: () => performance.now(),
       timeoutMs: config.jevTimeoutMs,

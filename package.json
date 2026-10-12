@@ -2,7 +2,7 @@
   "name": "blog0",
   "version": "0.1.0",
   "private": true,
-  "description": "blog0 — smallTech's AI-native, multi-format publishing platform (public wordmark log0)",
+  "description": "blog0 — smallTech's AI-native, multi-format publishing platform (public wordmark blog0)",
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": ">=22 <23"

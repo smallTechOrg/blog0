@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { GET } from '@/app/api/health/route';
 import type { Envelope } from '@/lib/api/envelope';
-import type { HealthDto } from '@/lib/api/dto';
+import type { HealthPhase2Dto as HealthDto } from '@/lib/api/dto-phase2';
 import { APP_VERSION, resetConfigForTests } from '@/server/config';
 import { resetDbForTests } from '@/server/db/client';
 
@@ -40,6 +40,9 @@ describe('GET /api/health', () => {
     expect(Number.isInteger(body.data.dbLatencyMs)).toBe(true);
     expect(body.data.dbLatencyMs).toBeGreaterThanOrEqual(0);
     expect(Number.isInteger(body.data.uptimeSec)).toBe(true);
+    // Phase 2: the engine is reported; the integration gate always runs on real Postgres
+    // (the PGlite engine is covered by tests/integration/designer-mode.test.ts).
+    expect(body.data.dbEngine).toBe('postgres');
   });
 
   it('emits exactly one api.request log line carrying the response request id', async () => {

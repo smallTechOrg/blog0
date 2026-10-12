@@ -6,10 +6,9 @@ import './lib/allow-server-only';
 
 import { loadEnvConfig } from '@next/env';
 import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/postgres-js';
 
-import { CONFIG_DEFAULTS, loadDatabaseUrl } from '../src/server/config';
-import { createSqlClient } from '../src/server/db/client';
+import { CONFIG_DEFAULTS, loadDatabaseTarget } from '../src/server/config';
+import { createDbHandle } from '../src/server/db/client';
 import * as schema from '../src/server/db/schema';
 import { maskEmail } from '../src/server/log';
 import { createAdmin, SeedError, validateNewAdmin } from '../src/server/seed/admin';
@@ -83,21 +82,21 @@ async function main(): Promise<void> {
   loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
   const args = parseArgs(process.argv.slice(2));
   if (!args.email || !args.name) throw new SeedError(USAGE);
-  const url = loadDatabaseUrl(process.env);
+  const target = loadDatabaseTarget(process.env);
   const slug = (process.env.BLOG0_SITE_SLUG ?? '').replace(/\s+#.*$/, '').trim() || CONFIG_DEFAULTS.siteSlug;
   // Validate email + name before prompting, then the password.
   validateNewAdmin({ email: args.email, displayName: args.name, password: 'x'.repeat(12) });
   const credentials = validateNewAdmin({ email: args.email, displayName: args.name, password: await readPassword() });
 
-  const sql = createSqlClient(url, { max: 1 });
+  const handle = await createDbHandle(target, { max: 1 });
   try {
-    const db = drizzle(sql, { schema });
+    const { db } = handle;
     const [site] = await db.select({ id: schema.site.id }).from(schema.site).where(eq(schema.site.slug, slug)).limit(1);
     if (!site) throw new SeedError(`Site '${slug}' not found — run: pnpm db:seed`);
     const created = await createAdmin(db, site.id, credentials);
     console.log(`admin ${maskEmail(created.email)} (${created.displayName}) created`);
   } finally {
-    await sql.end({ timeout: 5 });
+    await handle.close();
   }
 }
 

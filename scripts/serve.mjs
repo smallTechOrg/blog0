@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Loads .env via @next/env, then runs `next <dev|start> -p ${BLOG0_PORT || 3410}` and forwards signals.
-// Usage (from the repo root): pnpm dev | pnpm start
+// Usage (from the repo root): pnpm dev | pnpm start   (designer mode: pnpm dev:design, which ends here)
+// `pnpm dev` is the hot-reload server (Turbopack). Open it as http://localhost:<port>; 127.0.0.1 and
+// this machine's LAN addresses are allowed by next.config.ts `allowedDevOrigins` (without that, the
+// HMR socket was refused and the page fully reloaded every ~40 s — the Phase 1 "reload loop").
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import process from 'node:process';
@@ -20,6 +23,10 @@ const port = rawPort === '' ? '3410' : rawPort;
 if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
   console.error(`BLOG0_PORT must be an integer between 1 and 65535 (got "${rawPort}") — fix it in .env`);
   process.exit(2);
+}
+
+if ((process.env.BLOG0_DATABASE_URL ?? '').replace(/\s+#.*$/, '').trim() === '') {
+  console.log('BLOG0_DATABASE_URL not set — using embedded PGlite at ./var/pglite (run `pnpm dev:design` once to migrate + seed it).');
 }
 
 const require = createRequire(import.meta.url);

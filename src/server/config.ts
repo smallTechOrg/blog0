@@ -1,6 +1,9 @@
 import 'server-only';
 
 import packageJson from '../../package.json';
+import { DatabaseUrlError, DEFAULT_PGLITE_URL, parseDatabaseUrl, type DbEngine, type ParsedDatabaseUrl } from './db/url';
+import { ensureDesignerSessionSecret } from './designer/secret';
+import { openRouterKeyStatus } from './llm/key';
 
 // Typed, validated environment (spec/architecture.md §10). Documented 1:1 in .env.example.
 // `loadConfig(env)` is pure; `getConfig()` caches it. Never read config at module top level.
@@ -52,13 +55,22 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 export interface Config {
+  /** Raw BLOG0_DATABASE_URL, or `pglite://./var/pglite` when it is absent (designer mode). */
   databaseUrl: string;
+  /** The parsed target (spec/architecture.md §11.1). */
+  database: ParsedDatabaseUrl;
+  dbEngine: DbEngine;
+  /** True when BLOG0_DATABASE_URL was absent/empty and the embedded default is in use. */
+  databaseUrlDefaulted: boolean;
   testDatabaseUrl: string | null;
   port: number;
   publicBaseUrl: string;
   siteSlug: string;
   sessionSecret: Secret;
-  openrouterApiKey: Secret;
+  /** 'env' = BLOG0_SESSION_SECRET; 'generated' = designer mode's var/pglite-session-secret. */
+  sessionSecretSource: 'env' | 'generated';
+  /** null only on the pglite engine with no (or a placeholder) key — Jev then answers LLM_NOT_CONFIGURED. */
+  openrouterApiKey: Secret | null;
   openrouterBaseUrl: string;
   jevModel: string;
   jevTimeoutMs: number;
@@ -175,7 +187,20 @@ function int(
   return Number(value);
 }
 
-/** Validates the database URL alone (for db:* scripts, which must not need the OpenRouter key). */
+/**
+ * Validates one database URL variable alone (for db:* scripts, which must not need the OpenRouter
+ * key). Absent → the embedded PGlite default (designer mode). Throws ConfigError.
+ */
+export function loadDatabaseTarget(env: Env, name = 'BLOG0_DATABASE_URL'): ParsedDatabaseUrl {
+  try {
+    return parseDatabaseUrl(env[name], name);
+  } catch (error) {
+    if (error instanceof DatabaseUrlError) throw new ConfigError([error.message]);
+    throw error;
+  }
+}
+
+/** A variable that must be a server Postgres URL (BLOG0_TEST_DATABASE_URL, `db:create`). Throws ConfigError. */
 export function loadDatabaseUrl(env: Env, name = 'BLOG0_DATABASE_URL'): string {
   const value = plain(env, name);
   if (value === undefined) throw new ConfigError([`${name} is required (e.g. postgres://sai@localhost:5432/blog0_dev)`]);
@@ -183,16 +208,31 @@ export function loadDatabaseUrl(env: Env, name = 'BLOG0_DATABASE_URL'): string {
   return value;
 }
 
-/** Pure: env → Config, or throws one ConfigError listing every problem. */
-export function loadConfig(env: Env): Config {
+export interface LoadConfigOptions {
+  /**
+   * Supplies the session secret on the pglite engine when BLOG0_SESSION_SECRET is absent.
+   * Default: read/generate `var/pglite-session-secret` (mode 0600). Tests pass a stub.
+   */
+  designerSessionSecret?: () => string;
+}
+
+/**
+ * env → Config, or throws one ConfigError listing every problem. Pure except on the pglite engine
+ * with no BLOG0_SESSION_SECRET, where `options.designerSessionSecret` (default: the persisted
+ * designer secret file) supplies the secret.
+ */
+export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
   const problems: string[] = [];
 
-  const databaseUrl = plain(env, 'BLOG0_DATABASE_URL');
-  if (databaseUrl === undefined) {
-    problems.push('BLOG0_DATABASE_URL is required (e.g. postgres://sai@localhost:5432/blog0_dev)');
-  } else if (!isPostgresUrl(databaseUrl)) {
-    problems.push('BLOG0_DATABASE_URL must be a postgres:// URL with a database name');
+  const rawDatabaseUrl = plain(env, 'BLOG0_DATABASE_URL');
+  let database: ParsedDatabaseUrl | null = null;
+  try {
+    database = parseDatabaseUrl(rawDatabaseUrl, 'BLOG0_DATABASE_URL');
+  } catch (error) {
+    if (!(error instanceof DatabaseUrlError)) throw error;
+    problems.push(error.message);
   }
+  const isPglite = database?.engine === 'pglite';
 
   const testDatabaseUrl = plain(env, 'BLOG0_TEST_DATABASE_URL') ?? null;
   if (testDatabaseUrl !== null && !isPostgresUrl(testDatabaseUrl)) {
@@ -208,7 +248,14 @@ export function loadConfig(env: Env): Config {
   const siteSlug = plain(env, 'BLOG0_SITE_SLUG') ?? CONFIG_DEFAULTS.siteSlug;
   if (!SLUG_RE.test(siteSlug)) problems.push('BLOG0_SITE_SLUG must be lowercase words joined by hyphens');
 
-  const sessionSecret = secret(env, 'BLOG0_SESSION_SECRET');
+  // Designer mode (pglite) relaxes the two secrets (spec/architecture.md §11.1): an absent session
+  // secret is generated + persisted, an absent/placeholder OpenRouter key disables Jev only.
+  let sessionSecret = secret(env, 'BLOG0_SESSION_SECRET');
+  let sessionSecretSource: Config['sessionSecretSource'] = 'env';
+  if (sessionSecret === undefined && isPglite) {
+    sessionSecret = (options.designerSessionSecret ?? (() => ensureDesignerSessionSecret().secret))();
+    sessionSecretSource = 'generated';
+  }
   if (sessionSecret === undefined) {
     problems.push('BLOG0_SESSION_SECRET is required (generate one with: openssl rand -base64 48)');
   } else if (isPlaceholder(sessionSecret)) {
@@ -217,8 +264,10 @@ export function loadConfig(env: Env): Config {
     problems.push('BLOG0_SESSION_SECRET must be at least 32 characters (openssl rand -base64 48)');
   }
 
-  const openrouterApiKey = secret(env, 'BLOG0_OPENROUTER_API_KEY');
-  if (openrouterApiKey === undefined) {
+  let openrouterApiKey = secret(env, 'BLOG0_OPENROUTER_API_KEY');
+  if (isPglite && openRouterKeyStatus(openrouterApiKey) !== 'real') {
+    openrouterApiKey = undefined; // → null: Jev answers LLM_NOT_CONFIGURED, the TLDR tab shows the notice
+  } else if (openrouterApiKey === undefined) {
     problems.push('BLOG0_OPENROUTER_API_KEY is required (create one at https://openrouter.ai/keys)');
   } else if (isPlaceholder(openrouterApiKey)) {
     problems.push(placeholderProblem('BLOG0_OPENROUTER_API_KEY'));
@@ -269,14 +318,19 @@ export function loadConfig(env: Env): Config {
 
   if (problems.length > 0) throw new ConfigError(problems);
 
+  const target = database as ParsedDatabaseUrl;
   return {
-    databaseUrl: databaseUrl as string,
+    databaseUrl: rawDatabaseUrl ?? DEFAULT_PGLITE_URL,
+    database: target,
+    dbEngine: target.engine,
+    databaseUrlDefaulted: rawDatabaseUrl === undefined,
     testDatabaseUrl,
     port,
     publicBaseUrl: publicBaseUrl as string,
     siteSlug,
     sessionSecret: new Secret(sessionSecret as string),
-    openrouterApiKey: new Secret(openrouterApiKey as string),
+    sessionSecretSource,
+    openrouterApiKey: openrouterApiKey === undefined ? null : new Secret(openrouterApiKey),
     openrouterBaseUrl: openrouterBaseUrl as string,
     jevModel,
     jevTimeoutMs,

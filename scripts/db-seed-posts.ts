@@ -7,11 +7,9 @@ import './lib/allow-server-only';
 
 import { loadEnvConfig } from '@next/env';
 import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/postgres-js';
 
-import { CONFIG_DEFAULTS, loadDatabaseUrl } from '../src/server/config';
-import { createSqlClient, type Db } from '../src/server/db/client';
-import * as schema from '../src/server/db/schema';
+import { CONFIG_DEFAULTS, loadDatabaseTarget } from '../src/server/config';
+import { createDbHandle } from '../src/server/db/client';
 import { site } from '../src/server/db/schema';
 import { SEED_POSTS } from '../src/server/seed/posts';
 import { firstAdminId, SeedPostsError, seedPosts } from '../src/server/seed/seed-posts';
@@ -24,25 +22,16 @@ function siteSlugFromEnv(): string {
   return slug;
 }
 
-/**
- * Opens the database for this script. Postgres via postgres.js today; S2.8 replaces this body with
- * `createDbHandle(parseDatabaseUrl(url), { max: 1 })` (spec/architecture.md §11.2) so the same
- * script seeds PGlite in designer mode — everything below only uses the Drizzle `db`.
- */
-async function openDb(url: string): Promise<{ db: Db; close: () => Promise<void> }> {
-  const sql = createSqlClient(url, { max: 1 });
-  return { db: drizzle(sql, { schema }), close: () => sql.end({ timeout: 5 }) };
-}
-
 async function main(): Promise<void> {
   loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
   const unknown = process.argv.slice(2);
   if (unknown.length > 0) throw new SeedPostsError(`Unknown argument(s): ${unknown.join(' ')} (db:seed:posts takes none)`);
 
-  const url = loadDatabaseUrl(process.env);
+  const target = loadDatabaseTarget(process.env);
   const slug = siteSlugFromEnv();
 
-  const handle = await openDb(url);
+  // postgres:// or pglite://<dir> (spec/architecture.md §11.2) — everything below only uses the Drizzle `db`.
+  const handle = await createDbHandle(target, { max: 1 });
   try {
     const [siteRow] = await handle.db.select({ id: site.id }).from(site).where(eq(site.slug, slug)).limit(1);
     if (!siteRow) throw new SeedPostsError(`Site '${slug}' not found — run: pnpm db:seed`);
