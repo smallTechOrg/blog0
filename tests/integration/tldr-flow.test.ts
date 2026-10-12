@@ -258,7 +258,11 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     expect(view!.deck!.disclosure).toBe('Lines selected by Jev (AI) and the editors, verbatim from the article.');
 
     // Text change → stale, flagged slide, publish blocked, no new generation, live deck unchanged.
-    const target = sentences.get(edited[0].sid)!;
+    // Jev's picks vary run to run; a sentence whose source carries inline markup (bold, links)
+    // is not verbatim in the Markdown, so edit the first deck line that is.
+    const target = edited.map((s) => sentences.get(s.sid)!).find((s) => post.bodyMd.includes(s.text));
+    expect(target, 'no deck line occurs verbatim in the Markdown').toBeDefined();
+    if (!target) return;
     const changed = await save(created.id, { baseRevisionId: revisionId, bodyMd: editSentence(post.bodyMd, target.text) });
     const stale = await tldr(created.id);
     expect(stale.status).toBe('stale');
@@ -266,7 +270,8 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const blocked = await publish(created.id, changed.article.currentRevision.id);
     expect(blocked.status).toBe(422);
     expect((err(blocked.env).details as PublishBlockedDetails).reasons).toContainEqual(
-      expect.objectContaining({ code: 'TLDR_DECK_STALE', sids: [target.sid] }),
+      // sentence ids derive from paragraph text, so other deck lines in the same paragraph go stale too
+      expect.objectContaining({ code: 'TLDR_DECK_STALE', sids: expect.arrayContaining([target.sid]) }),
     );
     expect(await generationRows(created.id)).toBe(1);
     expect((await getPublishedArticle(published.slug))!.deck!.slides.map((s) => s.text)).toEqual(deckTexts);
