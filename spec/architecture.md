@@ -110,8 +110,9 @@ export interface ArticleViewModel {
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null;        // published deck only
   listen: ListenViewModel | null;    // Phase 3 (S3.5 takes over this file): published Listen only; null before Phase 3 / without one
-  // Phase 3: export interface ListenViewModel { audioUrl: string; mimeType: 'audio/mpeg' | 'audio/mp4'; durationMs: number;
-  //   marks: Array<{ pid: string; tMs: number }>; shareUrl: string }   // shareUrl absolute …/p/<slug>/listen
+  // Phase 3 (+ fix): export interface ListenViewModel { audioUrl: string; mimeType: 'audio/mpeg' | 'audio/mp4'; durationMs: number;
+  //   marks: Array<{ pid: string; tMs: number }>;   // resolveMarks over the PUBLISHED revision's paragraphs, per request (§9.4)
+  //   timing: 'synced' | 'estimated'; shareUrl: string }   // shareUrl absolute …/p/<slug>/listen
   correctionsHtml: string | null;    // Phase 4
   next: { slug: string; title: string } | null;
   articleUrl: string;                // absolute
@@ -182,7 +183,8 @@ sentences. Determinism relies on Node 22's bundled ICU — Node is pinned.
 
 **Fingerprints.** sha256 hex of: `body` = normalized title + dek + bodyMd; `paragraphs` =
 `pid + '\u0000' + text` joined by `\n`; `sentences` = `sid + '\u0000' + text` joined by `\n`. TLDR
-staleness compares the `sentences` fingerprint; Listen staleness compares `paragraphs`.
+staleness compares the `sentences` fingerprint; the Listen `text_changed` warning compares
+`paragraphs` (against the fingerprint recorded at upload).
 
 **Stats.** `words` = word count of all paragraph plain text; `readMinutes = max(1, ceil(words / 230))`.
 
@@ -197,7 +199,7 @@ Preview renders are not cached.
 ```ts
 export const FORMAT_KINDS = ['read', 'tldr', 'listen'] as const;
 export type FormatKind = (typeof FORMAT_KINDS)[number];
-export type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'needs_sync' | 'unavailable';
+export type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'text_changed' | 'unavailable';   // Phase 3 fix: needs_sync → removed, text_changed added
 export const FORMATS: Record<FormatKind, { label: string; icon: 'text' | 'bolt' | 'headphones'; availableFromPhase: number }> = {
   read: { label: 'Read', icon: 'text', availableFromPhase: 1 },
   tldr: { label: 'TLDR', icon: 'bolt', availableFromPhase: 1 },
@@ -223,15 +225,18 @@ Status rules: **read** → `ready` if the current revision body is non-empty els
 draft payload exists and its `sentences` fingerprint equals the current revision's; `stale` if it
 exists and differs; `failed` if no draft and the latest generation failed; else `missing`.
 **listen** (Phase 1 adapter returns `unavailable`; Phase 3, S3.3 takes over
-`src/server/formats/listen.ts`) — with `draft = readListenPayload(row?.draftPayload)`:
-`missing` if no draft; `needs_sync` if `draft.marks.length === 0`; `ready` if
-`draft.syncFingerprint === currentRevision.paragraphsFingerprint`; else `stale`. No
-`generating`/`failed` for Listen in Phase 3 (no background work). `isPublished` = article
-published and a published Listen payload exists; `hasUnpublishedChanges` = draft audio key or
-marks differ from the published copy. `validateForPublish` / `publish` follow
-`spec/capabilities/listen-sync.md` → Publishing (`LISTEN_STALE` with `missingPids`/`orphanPids`
-computed by `listenDiff(draft.marks, rendered.paragraphs)` in `src/server/listen/sync.ts`).
-Status is computed, never stored.
+`src/server/formats/listen.ts`; **revised by the Phase 3 fix**, F1) — with
+`draft = readListenPayload(row?.draftPayload)` and `baseline = draft.uploadFingerprint ??
+draft.syncFingerprint`: `missing` if no draft; `text_changed` if `baseline !== null &&
+baseline !== currentRevision.paragraphsFingerprint`; else `ready`. Stored marks never affect
+the status. No `generating`/`failed` for Listen (no background work until Phase 6).
+`isPublished` = article published and a published Listen payload exists;
+`hasUnpublishedChanges` = draft null vs published non-null (or vice versa), or the draft's
+`audio.key` or stored `marks` differ from the published copy. `validateForPublish` always
+returns `{ ok: true }` (Listen never blocks; the `LISTEN_STALE` code is deleted). `publish`
+copies the draft payload → `published_payload` (any status), `published_revision_id` = the
+revision being published, `published_fingerprint` = the baseline, `published_at = now`; no
+draft → `published_payload = null`. Status is computed, never stored.
 
 ## 6. Auth & security
 
@@ -397,38 +402,69 @@ Limits come from `getConfig()` at request time: `maxAudioMb`, `maxAudioMinutes`,
 `serverExternalPackages` entry — if Turbopack bundling breaks either, S3.2 takes over
 `next.config.ts` for the one-line addition and reports it.
 
-### 9.4 Listen marks helpers (`src/lib/listen/marks.ts`, pure, isomorphic; S3.3 owns, S3.4/S3.5 import)
+### 9.4 Listen helpers (pure, isomorphic)
+
+`src/lib/listen/marks.ts` (Phase 3; after the Phase 3 fix F2 owns it for dead-code removal only):
 
 ```ts
 export interface Mark { pid: string; tMs: number }
 export type MarkIssue = { code: 'UNKNOWN_PID' | 'MISSING_PID' | 'DUPLICATE_PID' | 'OUT_OF_ORDER' | 'NOT_INCREASING' | 'OUT_OF_RANGE'; pid?: string; index?: number };
 export function validateMarks(marks: readonly Mark[], paragraphPids: readonly string[], durationMs: number): { ok: true } | { ok: false; reasons: MarkIssue[] };
-export function activeMarkIndex(marks: readonly Mark[], tMs: number): number;          // -1 before the first mark; binary search
-export function nudgeMark(marks: readonly Mark[], index: number, deltaMs: 250 | -250, durationMs: number): Mark[] | null;  // null when refused
-export function listenDiff(marks: readonly Mark[], paragraphPids: readonly string[]): { missingPids: string[]; orphanPids: string[] };
+export function activeMarkIndex(marks: readonly Mark[], tMs: number): number;          // greatest index with tMs ≤ t (ties → the last); -1 before the first mark; binary search
 export function listenMinutes(durationMs: number): number;                              // max(1, round(durationMs / 60000)) — design audioMinutes
 export function fmtClock(ms: number): string;                                          // design fmtClock over seconds: "m:ss"
-export function fmtClockMs(ms: number): string;                                        // "m:ss.mmm" for the admin mark list
-export const NUDGE_MS = 250; export const TAP_DEBOUNCE_MS = 300; export const SEEK_STEP_S = 5; export const AUTOSCROLL_PAUSE_MS = 4000;
+export const SEEK_STEP_S = 5;
+// Removed by the Phase 3 fix (tap-along dead code): nudgeMark, listenDiff, fmtClockMs (if unused), NUDGE_MS, TAP_DEBOUNCE_MS, AUTOSCROLL_PAUSE_MS.
 ```
 
-`src/server/formats/payload.ts` (S3.3 takes over) adds `listenPayloadSchema` /
-`readListenPayload` (shape in `spec/data.md`) beside the TLDR schema.
+`src/lib/listen/estimate.ts` (Phase 3 fix, F1 — new; rules and edge cases in
+`spec/capabilities/listen-sync.md` → Business Rules):
+
+```ts
+import type { Mark } from './marks';
+export const ASSUMED_WPM = 150;                 // Assumed reading pace
+export const PARAGRAPH_PAUSE_MS = 600;          // Assumed pause between paragraphs
+export const PAUSE_WORDS = (PARAGRAPH_PAUSE_MS * ASSUMED_WPM) / 60_000;   // 1.5 word-equivalents
+export interface TimedParagraph { pid: string; words: number }
+export type ListenTiming = 'synced' | 'estimated';
+export function countWords(text: string): number;   // whitespace tokens containing ≥ 1 \p{L} or \p{N}
+export function estimateMarks(paragraphs: readonly TimedParagraph[], durationMs: number): Mark[];   // tMs_i = floor(D × C_i / W); [] when none / D ≤ 0
+export function resolveMarks(stored: readonly Mark[], paragraphs: readonly TimedParagraph[], durationMs: number): { marks: Mark[]; timing: ListenTiming };
+export function toTimedParagraphs(paragraphs: readonly { pid: string; text: string }[]): TimedParagraph[];   // pid + countWords(text)
+```
+
+Callers: `src/server/public/articles.ts` (reader view model + `PublicListenDto`, over the
+published revision's `rendered.paragraphs` from the render cache — no extra DB read beyond the
+already-loaded published revision) and `src/server/listen/sync.ts` (`ListenStateDto.timing`, over
+the current revision). Never called in the browser in v0.1 (the browser receives resolved marks),
+but kept isomorphic for Phase 6 review UI.
+
+`src/server/formats/payload.ts` (S3.3; F1 takes over in the fix) — `listenPayloadSchema` /
+`readListenPayload` (shape in `spec/data.md`) beside the TLDR schema; the fix adds
+`uploadFingerprint: z.string().nullable().optional().default(null)` so legacy payloads parse.
 
 ### 9.5 Listen service (`src/server/listen/*`)
 
 - `ingest.ts` (S3.2): `uploadAudio(articleId, file, userId, { limits?: { maxBytes: number; maxDurationMs: number } })`
   (the route passes `getConfig()` values; tests inject smaller ones) → probe → `put` → in one
   transaction: insert `media_asset(kind='audio', article_id)`, upsert the `listen` row's
-  `draft_payload = { audio, marks: [], syncFingerprint: null }`, `draft_fingerprint = null`,
-  `draft_revision_id = null`, `draft_updated_*`; then delete the previous draft asset (row +
-  file) unless its key equals the published payload's key. `removeAudio(articleId)` → draft
-  payload null (row kept) + the same conditional delete.
-- `sync.ts` (S3.3): `getListenState(articleId)` (renders the current revision through the cache,
-  builds `ListenStateDto`), `saveMarks(articleId, revisionId, marks, userId)` (CONFLICT check,
-  `LISTEN_NO_AUDIO`, `validateMarks` against the revision's paragraph pids and
-  `audio.durationMs`, writes `marks`, `syncFingerprint = revision.paragraphsFingerprint`,
-  `draft_fingerprint` mirror, `draft_revision_id`), `listenDiff` re-exported for the adapter.
+  `draft_payload = { audio, marks: [], syncFingerprint: null, uploadFingerprint:
+  currentRevision.paragraphsFingerprint }` (Phase 3 fix), `draft_fingerprint =
+  uploadFingerprint`, `draft_revision_id = currentRevision.id`, `draft_updated_*`; then delete the
+  previous draft asset (row + file) unless its key equals the published payload's key.
+  `removeAudio(articleId)` → draft payload null (row kept) + the same conditional delete.
+- `sync.ts` (S3.3; F1 takes over in the fix): `getListenState(articleId)` (renders the current
+  revision through the cache, builds `ListenStateDto` incl. `timing` via `resolveMarks(draft.marks,
+  toTimedParagraphs(rendered.paragraphs), audio.durationMs).timing`, `uploadFingerprint`,
+  `textChangedSinceUpload`, `published.sameAudioAsDraft`), `saveMarks(articleId, revisionId,
+  marks, userId)` — **aligner-facing** — (CONFLICT check, `LISTEN_NO_AUDIO`, `validateMarks`
+  against the revision's paragraph pids and `audio.durationMs`, writes `marks`, `syncFingerprint
+  = revision.paragraphsFingerprint`, `syncedAt/By`, `draft_revision_id`; leaves
+  `uploadFingerprint` and `draft_fingerprint` untouched). `listenDiff` is no longer used.
+- `src/server/public/articles.ts` (F1 takes over in the fix): the published Listen view model /
+  `PublicListenDto` set `marks`/`timing` from `resolveMarks(published.marks,
+  toTimedParagraphs(publishedRendered.paragraphs), published.audio.durationMs)`; a payload that
+  fails to parse → `listen: null` + `warn` log (unchanged).
 - `media/cleanup.ts` (S3.1): `deleteAssetIfUnreferenced(tx, assetId)` — the one place that
   checks every `article_format` draft/published payload of the site for the key before
   deleting row + file (file delete after commit; a failed file delete is logged at `warn`).
@@ -710,13 +746,14 @@ blog0/
 │   ├── components/
 │   │   ├── design/              # Icon, Typewriter, Wordmark, SplitHeadline, Dek, motion.ts
 │   │   ├── site/                # Masthead, Footer, NewsletterForm, AsciiHand, Boot, PrintIn, PostCard, home/, archive/, about/
-│   │   ├── reader/              # ArticleView, ModeBar, ModeCapsule, ReadHead, ArticleBody, ArticleFoot, TldrDeck, ShareLinkButton, ListenStub (deleted in P3) → ListenView, AudioPlayer (P3)
+│   │   ├── reader/              # ArticleView, ModeBar, ModeCapsule, ReadHead, ArticleBody, ArticleFoot, TldrDeck, ShareLinkButton, ListenStub (deleted in P3) → ListenView, AudioPlayer, listen-sync.ts (P3; follow logic revised in the P3 fix)
 │   │   ├── figures/             # FigSlide47, FigAB, registry.ts
-│   │   ├── admin/               # LoginForm, DeskHeader, ArticleTable, FormatChips, editor/* (P3: + ImageUploadButton, insert-image.ts), tldr/*, listen/* (P3: AudioUploader, SyncPanel, MarkList, useTapSync.ts, listen-api.ts)
+│   │   ├── admin/               # LoginForm, DeskHeader, ArticleTable, FormatChips, editor/* (P3: + ImageUploadButton, insert-image.ts), tldr/*, listen/* (P3 fix: AudioUploader, listen-api.ts — SyncPanel, MarkList, useTapSync.ts, save-sync.ts deleted)
 │   │   └── StubNotice.tsx
 │   ├── lib/                     # isomorphic, pure, no I/O
 │   │   ├── api/envelope.ts  api/dto.ts  api/dto-phase2.ts  api/dto-phase3.ts (P3, S3.3)
-│   │   ├── listen/marks.ts      # P3 (S3.3): validateMarks, activeMarkIndex, nudgeMark, listenDiff, listenMinutes, fmtClock (§9.4)
+│   │   ├── listen/marks.ts      # P3 (S3.3): validateMarks, activeMarkIndex, listenMinutes, fmtClock (§9.4)
+│   │   ├── listen/estimate.ts   # P3 fix (F1): countWords, estimateMarks, resolveMarks, toTimedParagraphs (§9.4)
 │   │   ├── content/types.ts
 │   │   ├── formats/registry.ts
 │   │   ├── deck/timing.ts       # tldrDwell, tldrType, tldrMinutes, slide words (ported verbatim)
@@ -907,7 +944,7 @@ the question for the user.
 16. **Theme persistence.** Design follows the OS each load and does not persist the toggle.
     v0.1 persists the reader's choice in `localStorage['blog0.theme']`; with no stored choice it
     follows the OS like the design. *Ask:* OK?
-17. **Admin UI has no design.** Desk, editor, TLDR panel, sign-in, later Listen sync/History/
+17. **Admin UI has no design.** Desk, editor, TLDR panel, sign-in, later Listen tab/History/
     Site/Team/AI usage are new screens built from the design's tokens and components
     (`.btn-outline`, `.tag`, `.modes`, `.modebar`, `.sechead`). *Ask:* review after Phase 1.
 18. **Draft badge semantics.** Design `draft: true` = published piece with a "Draft — in
@@ -955,11 +992,26 @@ the question for the user.
     writer content). *Ask:* OK, or should seeding take over the slug / pick a substitute?
 28. **Listen view shows the text (Phase 3).** The design's listen branch of `ArticlePage` shows
     only the tag, the title and a mock player ("nothing else on screen"); the card overlay does
-    the same. v0.1 (user requirement in `spec/roadmap.md` → Phase 3): the article's Listen view
-    places the real player beside the full article text with the current paragraph highlighted
-    and auto-scrolled (`spec/ui.md` §3 *Listen*); the **card overlay stays compact** (player
-    only) as designed. `AudioPanel` divergences: real `<audio>` instead of the 250 ms interval
-    mock; `.audio__note` reads "Read by <byline> · N min" instead of the placeholder sentence;
-    everything else (markup, classes, `▶`/`⏸`, range step 0.25, `fmtClock`) is kept. The
-    `/p/<slug>/listen` address and `history.replaceState` mirror the deck's. *Ask:* OK with text
-    beside the player on the article page, and player-only in the card overlay?
+    the same. v0.1 (user requirement in `spec/roadmap.md` → Phase 3, revised by the Phase 3
+    fix): the article's Listen view keeps the **player primary** and places the full article
+    text beside it; the text **auto-follows** the audio with a **soft** current-paragraph
+    highlight (subtler than the share highlight), pauses following on any manual scroll and
+    offers **Follow audio** to resume; clicking a paragraph seeks there (`spec/ui.md` §3
+    *Listen*). The **card overlay stays compact** (player only, no text) as designed.
+    `AudioPanel` divergences: real `<audio>` instead of the 250 ms interval mock; `.audio__note`
+    reads "Read by <byline> · N min" instead of the placeholder sentence; everything else
+    (markup, classes, `▶`/`⏸`, range step 0.25, `fmtClock`) is kept. The `/p/<slug>/listen`
+    address and `history.replaceState` mirror the deck's. *Ask:* OK with the following text
+    beside the player (soft highlight, Follow audio), and player-only in the card overlay?
+29. **Listen timing is estimated, not exact (Phase 3 fix; user decision 2026-10-13 to drop
+    tap-along, exact alignment deferred — no paid tokens).** The design implies a reading synced
+    to the text. v0.1: paragraph start times are **estimated** at read time — the recording's
+    duration distributed over the published paragraphs by word count plus a ~0.6 s pause weight
+    per paragraph (150 wpm assumed; `spec/capabilities/listen-sync.md`). Consequence: the soft
+    highlight can run ahead of or behind the voice (drift grows mid-article when the reader's
+    pace varies, e.g. long quotes or code read aloud differently); clicking a paragraph seeks to
+    its *estimated* start. Stored marks (Phase 6 local aligner; any legacy tap data) replace the
+    estimate automatically when they cover every paragraph. Readers see no "estimated" label.
+    Default = keep (estimated, unlabelled, soft highlight to make drift unobtrusive). *Ask:*
+    OK without an "approximate timing" note for readers, and are 150 wpm / 0.6 s the right
+    defaults for your readers (tunable constants)?

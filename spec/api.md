@@ -31,9 +31,9 @@ S4.1), and other slices of that phase code against the shapes written here.
 | SLUG_LOCKED | 409 | Slug change after first publish |
 | GENERATION_IN_PROGRESS | 409 | A Jev run for this article is already running |
 | NOT_DELETABLE | 409 | Delete of an article that was ever published |
-| PUBLISH_BLOCKED | 422 | Publish validation failed; `details: { reasons: Array<{ code, message, sids? }> }` (codes: `TITLE_REQUIRED`, `TOPIC_REQUIRED`, `BODY_REQUIRED`, `TLDR_DECK_STALE`, `LISTEN_STALE`) |
+| PUBLISH_BLOCKED | 422 | Publish validation failed; `details: { reasons: Array<{ code, message, sids? }> }` (codes: `TITLE_REQUIRED`, `TOPIC_REQUIRED`, `BODY_REQUIRED`, `TLDR_DECK_STALE`; `LISTEN_STALE` was removed by the Phase 3 fix — Listen never blocks publish) |
 | DECK_INVALID | 422 | Deck save: unknown/duplicate sid or count outside 1–12; `details.sids` |
-| MARKS_INVALID | 422 | Listen sync save (Phase 3): `details: { reasons: Array<{ code: 'UNKNOWN_PID' \| 'MISSING_PID' \| 'DUPLICATE_PID' \| 'OUT_OF_ORDER' \| 'NOT_INCREASING' \| 'OUT_OF_RANGE', pid?: string, index?: number }> }` |
+| MARKS_INVALID | 422 | Listen sync save (Phase 3; aligner-facing `PUT …/listen`): `details: { reasons: Array<{ code: 'UNKNOWN_PID' \| 'MISSING_PID' \| 'DUPLICATE_PID' \| 'OUT_OF_ORDER' \| 'NOT_INCREASING' \| 'OUT_OF_RANGE', pid?: string, index?: number }> }` |
 | LISTEN_NO_AUDIO | 409 | Listen sync save without an uploaded draft recording (Phase 3) |
 | AUDIO_TOO_LONG | 422 | Recording longer than `BLOG0_MAX_AUDIO_MINUTES` (Phase 3); message carries both values |
 | IMAGE_TOO_LARGE | 422 | Image wider or taller than 12 000 px (Phase 3) |
@@ -51,7 +51,8 @@ S4.1), and other slices of that phase code against the shapes written here.
 
 ```ts
 type FormatKind = 'read' | 'tldr' | 'listen';
-type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'needs_sync' | 'unavailable';
+type FormatStatus = 'missing' | 'generating' | 'failed' | 'ready' | 'stale' | 'text_changed' | 'unavailable';
+// Phase 3 fix: 'needs_sync' removed (unreachable — upload ⇒ ready); 'text_changed' added (Listen only, non-blocking warning)
 type ArticleStatus = 'draft' | 'submitted' | 'approved' | 'published';
 
 interface UserDto { id: string; email: string; displayName: string }
@@ -140,7 +141,10 @@ interface TldrStateDto {
 ## Phase 3 DTOs (`src/lib/api/dto-phase3.ts`, owned by S3.3)
 
 ```ts
-type ListenStatus = Extract<FormatStatus, 'missing' | 'needs_sync' | 'ready' | 'stale'>;
+// Phase 3 fix: missing = no draft audio; ready = audio uploaded and the paragraph text unchanged since;
+// text_changed = the current paragraphs fingerprint ≠ the draft's uploadFingerprint (warning only, never blocks).
+type ListenStatus = Extract<FormatStatus, 'missing' | 'ready' | 'text_changed'>;
+type ListenTiming = 'synced' | 'estimated';                               // resolveMarks (spec/capabilities/listen-sync.md)
 type AudioMime = 'audio/mpeg' | 'audio/mp4';
 type ImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
@@ -154,16 +158,18 @@ interface ListenAudioDto {
 interface ListenStateDto {
   status: ListenStatus;
   revisionId: string;                                                    // the current revision the paragraphs come from
-  paragraphs: ListenParagraphDto[];                                      // current revision, document order (all of them)
+  paragraphs: ListenParagraphDto[];                                      // current revision, document order (all of them) — for the aligner / PUT
   audio: ListenAudioDto | null;                                          // draft recording
-  marks: ListenMarkDto[];                                                // draft marks ([] until synced); may reference vanished pids (see orphanPids)
-  syncFingerprint: string | null; syncedAt: string | null; syncedBy: string | null;
-  missingPids: string[];                                                 // current paragraphs without a mark (document order)
-  orphanPids: string[];                                                  // marks whose paragraph is no longer in the text
-  published: { durationMs: number; markCount: number; publishedAt: string; matchesCurrentText: boolean } | null;
+  marks: ListenMarkDto[];                                                // STORED draft marks (aligner / legacy tap data; [] normally) — not what readers get
+  timing: ListenTiming | null;                                           // what readers would get over the CURRENT text (resolveMarks); null without audio
+  uploadFingerprint: string | null;                                      // paragraphs fingerprint at upload (legacy rows: syncFingerprint)
+  textChangedSinceUpload: boolean;                                       // === (status === 'text_changed')
+  syncFingerprint: string | null; syncedAt: string | null; syncedBy: string | null;   // set by PUT only
+  published: { durationMs: number; publishedAt: string; sameAudioAsDraft: boolean } | null;   // sameAudioAsDraft: published audio.key === draft audio.key
   limits: { maxAudioMb: number; maxAudioMinutes: number };
 }
-interface ListenSaveRequest { revisionId: string; marks: ListenMarkDto[] }
+// Phase 3 fix: missingPids / orphanPids and published.markCount / matchesCurrentText are removed.
+interface ListenSaveRequest { revisionId: string; marks: ListenMarkDto[] }   // aligner-facing (Phase 6) — no admin UI caller
 interface ListenResponse { listen: ListenStateDto }
 
 interface ImageUploadResponse {
@@ -175,15 +181,16 @@ interface ImageUploadResponse {
 interface PublicListenDto {
   slug: string; title: string; topic: string; dek: string; meta: string;  // meta = "<date> · <read> min read" as the deck's
   audio: { url: string; mimeType: AudioMime; durationMs: number };
-  marks: ListenMarkDto[];                                                // published marks over the published revision
+  marks: ListenMarkDto[];                                                // resolveMarks(published stored marks, published revision's paragraphs, durationMs) — computed per request, one per published paragraph
+  timing: ListenTiming;
   bylineName: string;
   times: { read: number; tldr: number | null; listen: number };
   shareUrl: string;                                                      // absolute …/p/<slug>/listen
 }
 ```
 
-`FormatChipDto` and `ArticleListItemDto` are unchanged: the `listen` chip's `status` stops being
-`unavailable` once the Phase 3 adapter lands (`spec/architecture.md` §5).
+`FormatChipDto` and `ArticleListItemDto` are unchanged in shape: the `listen` chip's `status` is
+`missing | ready | text_changed` from the Phase 3 fix (`spec/architecture.md` §5).
 
 ## Endpoints — Phase 3
 
@@ -194,18 +201,24 @@ applies the declared `Content-Length` pre-check). All other rules of the envelop
 | Method & path | Auth | Request | Response `data` / notes |
 |---|---|---|---|
 | POST `/api/admin/uploads/images` | admin | multipart: `file` (required), `alt` (string ≤ 200, default `''`), `caption?` (≤ 200), `articleId?` (uuid of an article in this site, else 404) | 201 `ImageUploadResponse`. Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA` (incl. SVG), `IMAGE_TOO_LARGE`, `VALIDATION_FAILED`. |
-| POST `/api/admin/articles/:id/audio` | admin | multipart: `file` (required) | 200 `ListenResponse` with `status 'needs_sync'`, `marks []`. Replaces the draft recording (old unpublished file + row deleted). Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA`, `AUDIO_TOO_LONG`. Exports `maxDuration = 120`. |
+| POST `/api/admin/articles/:id/audio` | admin | multipart: `file` (required) | 200 `ListenResponse` with `status 'ready'`, `marks []`, `timing 'estimated'` (stored marks are cleared on upload), `uploadFingerprint` = the current revision's paragraphs fingerprint. Replaces the draft recording (old unpublished file + row deleted). Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA`, `AUDIO_TOO_LONG`. Exports `maxDuration = 120`. |
 | DELETE `/api/admin/articles/:id/audio` | admin | — | 200 `ListenResponse` with `status 'missing'`, `audio null`, `marks []` (draft cleared; published Listen untouched; unpublished file + row deleted). Idempotent. |
 | GET `/api/admin/articles/:id/listen` | admin | — | `ListenStateDto` |
-| PUT `/api/admin/articles/:id/listen` | admin | `ListenSaveRequest` — `revisionId` must be current | 200 `ListenResponse` with `status 'ready'`. Errors: `CONFLICT`, `LISTEN_NO_AUDIO`, `MARKS_INVALID` (rules: `spec/capabilities/listen-sync.md`). Sets `syncFingerprint` = the revision's paragraphs fingerprint, `syncedAt`/`syncedBy`. |
+| PUT `/api/admin/articles/:id/listen` | admin | `ListenSaveRequest` — `revisionId` must be current | **Internal / aligner-facing** (Phase 6 writes aligned marks here; tests use it; no admin UI calls it). 200 `ListenResponse` (status computed as usual — a PUT never changes it). Errors: `CONFLICT`, `LISTEN_NO_AUDIO`, `MARKS_INVALID` (rules: `spec/capabilities/listen-sync.md`). Stores `marks`, sets `syncFingerprint` = the revision's paragraphs fingerprint, `syncedAt`/`syncedBy`, `draft_revision_id`; never touches `uploadFingerprint`. |
 | GET `/api/public/articles/:slug/listen` | none | — | `PublicListenDto` — only when the article is published **and** has a published Listen, else 404. `Cache-Control: public, max-age=60`. |
 | GET / HEAD `/media/[...key]` | none | `Range`, `If-None-Match`, `If-Range` optional | Not JSON. 200 full body / 206 one range (`Content-Range: bytes a-b/size`) / 304 (`If-None-Match` equal) / 416 (`Content-Range: bytes */size`, empty body). Always: `Content-Type` (stored mime), `Accept-Ranges: bytes`, `ETag: "<sha256>"`, `Last-Modified`, `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, `x-request-id`. Invalid key, unknown key, or file missing on disk → 404 `NOT_FOUND` as a JSON envelope. Methods other than GET/HEAD → 405. |
 
-`POST /api/admin/articles/:id/publish` (Phase 1) gains the Listen guard: `PUBLISH_BLOCKED` reason
-`LISTEN_STALE` with `{ code, message, missingPids, orphanPids }` (`spec/capabilities/listen-sync.md`
-→ Publishing). The reasons array type widens to `Array<{ code, message, sids?, missingPids?, orphanPids? }>`.
+`POST /api/admin/articles/:id/publish` (Phase 1): **Listen never blocks publishing** (Phase 3
+fix — the Phase 3 `LISTEN_STALE` reason and the `missingPids?`/`orphanPids?` fields are removed;
+the reasons array is back to `Array<{ code, message, sids? }>`). Publishing copies the Listen
+draft (any status) to the published copy, or clears the published copy when there is no draft
+(`spec/capabilities/listen-audio.md`).
 
-## Endpoints — Phase 4
+## Endpoints — Phase 4 (on hold)
+
+Phase 4 is on hold (user decision, 2026-10-13). The three `revisions` endpoints below belong to
+`revision-history`, which is **deferred** (not part of Phase 4 any more); they stay here as its
+contract.
 
 | Method & path | Auth | Request | Response |
 |---|---|---|---|

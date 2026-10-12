@@ -1,6 +1,9 @@
 # Capability: Revision history
 
-Phase 4. (Revisions are already recorded on every content save from Phase 1.)
+**Status: deferred** (user decision, 2026-10-13 — removed from Phase 4; not scheduled).
+Revisions are still recorded on every content save from Phase 1, so nothing is lost; this file
+is kept as the spec for when it is scheduled. Until then the editor History tab stays a
+labelled stub.
 
 ## What It Does
 Lets writers browse every saved version of an article, view it rendered, and restore it.

@@ -11,7 +11,8 @@ is consumed by readers in three formats through one mode capsule:
   rules, syntax-highlighted code, tables, images, footnotes/Notes, interactive figures).
 - **TLDR** — a full-viewport, auto-advancing slide deck of the article's most important lines,
   selected **verbatim** by **Jev** (the TLDR agent) and reviewed/edited by the writer.
-- **Listen** — a writer-uploaded, word-for-word reading with the text highlighted in sync.
+- **Listen** — a writer-uploaded, word-for-word reading with the text following along (paragraph
+  timing estimated from the recording's length and word counts; exact alignment is Phase 6).
 
 Formats are an extensible set (more later), each with its own lifecycle status. The engine is
 built tenant-ready (every record belongs to a site) so it can be open-sourced later; v0.1 runs a
@@ -25,7 +26,7 @@ The visual bar is the design reference in `spec/design/` (`design-app.js`, `desi
 
 | Persona | Count | Needs |
 |---|---|---|
-| Writer / admin (smallTech team) | a handful | Paste/edit Markdown with an immediate Read preview, get a TLDR deck with one click, hand-edit it, publish; later upload audio and sync it; see AI cost. |
+| Writer / admin (smallTech team) | a handful | Paste/edit Markdown with an immediate Read preview, get a TLDR deck with one click, hand-edit it, publish; later upload audio (no manual syncing); see AI cost. |
 | Reader (public) | open web | Fast server-rendered pages, three ways to take an article in, share a paragraph, good link previews. |
 
 Scale: fewer than 100 articles, a handful of writers. Cost sensitivity: high (AI only on an
@@ -84,6 +85,8 @@ rotator, sentence builder, in-deck poll).
 > **Assumed:** Hand-edited decks allow 1–12 lines and reordering (Jev itself picks 4–8 in document order).
 > **Assumed:** A published deck whose lines vanished from the text blocks publishing of new changes until fixed (the old deck keeps serving meanwhile); publishing without any deck is allowed.
 > **Assumed:** Admins are all equal (no roles); approve-your-own-article is allowed in v0.1.
+> **Decided (user, 2026-10-13, Phase 3 feedback):** manual tap-along sync is removed (too cumbersome); Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred.
+> **Assumed:** Listen estimate constants — 150 words/minute reading pace and a 0.6 s pause per paragraph (1.5 word-equivalents); the first paragraph starts at 0 (`spec/capabilities/listen-sync.md`).
 > **Assumed:** Phases 5–6 are planned at lower fidelity; their capability files are written spec-first at the start of each phase.
 > Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model slug (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and every design divergence (`spec/architecture.md` → `## Design divergences (ask user)`).
 
@@ -434,6 +437,8 @@ start the hot-reload dev server. Re-running is safe. Start over: `rm -rf var/pgl
 files live on local disk behind a storage interface and stream with HTTP range requests; the
 writer syncs audio by tapping along at each paragraph start; readers get a Listen view with
 player + text side by side, the current paragraph highlighted and auto-scrolled.
+**Superseded in part by the Phase 3 fix below** (no tap-along; estimated timing; Listen never
+blocks publish) — where the two disagree, the fix wins.
 
 Capabilities: `listen-audio`, `listen-sync`, `media-images`. Contracts every slice codes
 against without waiting: `spec/architecture.md` §9 (storage interface, `/media/` route, probe
@@ -471,6 +476,7 @@ the publish guard reason plumbing — S3.3 (server) + S3.4 (popover); `withApi` 
 **Gate (exact):**
 ```bash
 # cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running; real OpenRouter key)
+# HISTORICAL (Phase 3 as first built). The Listen lines below are superseded by the "Phase 3 fix" gate further down.
 pnpm install                              # picks up music-metadata + image-size from the orchestrator commit
 pnpm db:migrate && pnpm db:verify         # no new migration; prints "0 pending"
 pnpm typecheck && pnpm lint
@@ -502,47 +508,101 @@ throughout. Nothing re-syncs by itself. In the Write tab, click **Image** (or dr
 textarea), type alt text → `![alt](/media/…)` is inserted at the cursor and renders in the
 preview; an SVG is refused. Remaining labelled stub: the History tab.
 
+#### Phase 3 fix — estimated Listen timing, no tap-along (user feedback 2026-10-13; binding)
+
+**Why:** the user found manual tap-along sync too cumbersome; accurate alignment is deferred
+(no paid tokens; Phase 6 is the local path). **What changes** (contracts):
+`spec/capabilities/listen-sync.md` (estimator, `resolveMarks`, reader follow),
+`spec/capabilities/listen-audio.md` (upload ⇒ `ready`, `text_changed` warning, publish never
+blocked), `spec/architecture.md` §5 / §9.4 / §9.5 / divergences 28–29, `spec/api.md` → Phase 3
+DTOs, `spec/data.md` → `ListenPayload`, `spec/ui.md` §3 *Listen*, §4 *Listen tab*, §5. No
+migration, no new dependency, no new script.
+
+Supersedes from Phase 3: the tap-along UI (Start syncing, tap button, undo/redo/nudge, mark
+list, Save sync), `needs_sync`, Listen `stale`, `LISTEN_STALE` and **Go to Listen**, the 4 s
+auto-scroll pause. Kept: upload/stream/player, `PUT …/listen` + marks storage (now
+aligner-facing), the card overlay, capsule minutes, images.
+
+Two code slices, **disjoint files**, started together. They share contracts that change
+types on both sides (`FormatStatus`, `ListenStateDto`, `marks.ts` exports), so **neither passes
+`pnpm typecheck` alone**: each runs only its own focused tests while building, and the fix gate
+below runs once after both land (merge F1 first, then F2).
+
+| Slice | Owns | Depends on |
+|---|---|---|
+| **F1 Backend + lib** | `src/lib/listen/estimate.ts` (new), `src/lib/formats/registry.ts` (takes over: `FormatStatus` drops `needs_sync`, adds `text_changed`), `src/components/admin/labels.ts` (takes over: `FORMAT_STATUS_LABEL` — `text_changed: 'text changed'`, no `needs_sync`), `src/lib/api/dto-phase3.ts` (ListenStatus, ListenTiming, ListenStateDto, PublicListenDto), `src/lib/api/dto.ts` (`PublishBlockedReasonCode` drops `LISTEN_STALE`; reason drops `missingPids?`/`orphanPids?`), `src/lib/view-models.ts` (`ListenViewModel.timing`), `src/server/formats/listen.ts` (status, never-blocking `validateForPublish`, publish copies any draft), `src/server/formats/payload.ts` (`uploadFingerprint`), `src/server/formats/index.ts` (drop `LISTEN_STALE` re-export), `src/server/listen/ingest.ts` (uploadFingerprint, `draft_fingerprint`, `draft_revision_id`), `src/server/listen/sync.ts` (state DTO, aligner-facing `saveMarks` leaves the baseline alone), `src/server/articles/service.ts` (publish reasons: drop the Listen detail plumbing), `src/server/public/articles.ts` (resolved marks + timing in the view model and `PublicListenDto`), `src/app/api/admin/articles/[id]/audio/route.ts` + `src/app/api/admin/articles/[id]/listen/route.ts` + `src/app/api/public/articles/[slug]/listen/route.ts` (doc comments / DTO only), tests: `tests/unit/listen/estimate.test.ts` (new), `tests/unit/formats/listen-status.test.ts`, `tests/integration/listen-sync.test.ts`, `tests/integration/audio-ingest.test.ts`, `tests/integration/public-listen.test.ts`, `tests/integration/public-queries.test.ts` + `tests/integration/public-api.test.ts` (listen cases) | Phase 3 (landed) |
+| **F2 Frontend** | `src/components/admin/editor/ListenTab.tsx` (rewrite: upload/replace/remove + preview player + timing note + text-changed warning; `statusHelp`/`LISTEN_STATUS_LABEL` for the 3 statuses), `src/components/admin/listen/**` — **delete** `useTapSync.ts`, `SyncPanel.tsx`, `MarkList.tsx`, `save-sync.ts` (move `mediaKeyOf` only if still needed; `publishedDiffers` is replaced by `published.sameAudioAsDraft`), trim `listen-api.ts` (drop `saveListen`, `getPublishedAudioKey`), `AudioUploader.tsx` (disabled while the editor is dirty; no replace confirm); `src/components/admin/editor/ArticleEditor.tsx` (drop the unsaved-marks guard + Listen tab props it needed), `src/components/admin/editor/PublishBar.tsx` (drop `LISTEN_STALE` / **Go to Listen**), `src/components/admin/editor/HistoryTab.tsx` (stub copy "…arrives in a later version."), `src/lib/listen/marks.ts` (dead-code removal per §9.4 — no behaviour change), `src/components/reader/listen-sync.ts` (follow state machine: `following`, manual-scroll → off, `followAudio()` → on + immediate scroll, paragraph click → on), `src/components/reader/ListenView.tsx` (Follow audio button, focus handoff), `src/components/reader/AudioPlayer.tsx` (only if the follow logic needs a hook, e.g. focusing the play button), `src/styles/additions.css` (soft `.para.is-live` tokens, `.listenview__follow`), `src/styles/admin.css` (`text_changed` chips, removals per `spec/ui.md` §5), tests: **delete** `tests/unit/admin/tap-sync.test.ts` and `tests/unit/admin/listen-save-sync.test.ts`; update `tests/unit/admin/components.test.tsx` (Listen tab statuses, no Go to Listen), `tests/unit/listen/marks.test.ts` (drop removed helpers), `tests/unit/reader/listen-view.test.ts` (follow pause/resume), `tests/e2e/phase3-listen.spec.ts` (walk without tap-along), `tests/e2e/designer-mode.spec.ts` (`status 'ready'` after upload) | Codes against this spec's F1 contracts; its gate runs after F1 lands |
+
+Ownership notes: `src/components/admin/FormatChips.tsx` needs no change (labels come from
+`labels.ts`, F1); `ListenOverlay.tsx`, `SummaryHost.tsx`, `ModeCapsule.tsx`, `PostCard.tsx` and
+`src/server/public/home.ts` are untouched (minutes and overlay unchanged).
+
+**Fix gate (exact, after F1 + F2 land):**
+```bash
+# cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running)
+pnpm db:migrate && pnpm db:verify         # no new migration; "0 pending"
+pnpm typecheck && pnpm lint
+pnpm test:unit                            # incl. listen/estimate (edge cases: [], 1 paragraph → 0, zero-word, D ≤ 0 / NaN, very short audio non-decreasing, exact [0,3333,3768], seeded random strictly increasing), resolveMarks precedence, formats/listen-status (missing/ready/text_changed, legacy baseline), reader/listen-view (follow pause on wheel/touch/keys, Follow audio resumes + scrolls once, click seeks + resumes)
+pnpm test:integration                     # audio-ingest: upload ⇒ status 'ready' + uploadFingerprint; listen-sync: paragraph edit ⇒ 'text_changed', publish 200 (never PUBLISH_BLOCKED for Listen), heading edit stays ready, PUT validation unchanged and never changes status; public-listen/public-queries/public-api: marks === estimateMarks(published paragraphs, durationMs) by value, re-estimated after a text edit + publish, stored covering marks served as 'synced'
+pnpm build && pnpm test:e2e               # phase3-listen: upload sample.mp3 → chip "ready", no tap controls; publish (no block); Listen view highlight follows currentTime on estimated marks; wheel scroll pauses follow + shows Follow audio; seek while paused does not scroll; Follow audio resumes and scrolls; paragraph click seeks; card overlay player-only; /media/<key> 206
+! grep -rnE "needs_sync|LISTEN_STALE|useTapSync|SyncPanel|MarkList|tapbtn|marklist|nudgeMark|listenDiff" src tests   # no tap-along leftovers (non-zero exit = leftovers found)
+# Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
+```
+
+**How the user tests it:** in the editor's **Listen** tab upload an mp3/m4a → the chip reads
+**Ready** at once (no syncing step; the tab shows the preview player and the note that readers
+get estimated timing). **Publish**. On the article choose **Listen**: press play — the text
+beside the player scrolls along and the current paragraph has a soft highlight; scroll the text
+yourself → following stops and **Follow audio** appears; click it → the text jumps back to the
+current paragraph and follows again; click any paragraph → the audio jumps to it. Back in the
+editor, change one paragraph's wording and save → the Listen chip shows **text changed** and
+the tab warns "The recording may no longer match the text"; **Publish changes** still works (no
+block) and the live Listen follows the new text. Remaining labelled stub: the History tab
+(revision history deferred).
+
 ---
 
-### Phase 4 — Editorial standards
+### Phase 4 — Editorial standards — **ON HOLD**
 
-**Goal:** international editorial practice: revision history (view any version, restore), public
-"Published <date> · Updated <date>" and an optional dated corrections note, stale detection +
-explicit **Regenerate** / **Re-sync** offers across all derived formats (published content keeps
-serving), editor sign-off states (Submit for review / Approve — self-publish still allowed), AI
-cost dashboard (per generation and site-wide month-to-date), and a small Team page (add admin,
-change own password).
+> **On hold (user decision, 2026-10-13).** Do not start Phase 4 until the user re-opens it. When
+> it resumes, it is planned as below **without revision history**, which the user removed from
+> Phase 4 — `spec/capabilities/revision-history.md` is **deferred** (not scheduled; revisions keep
+> being recorded on every save, and the History tab stays a labelled stub). Listen has no
+> Re-sync offer any more (Phase 3 fix: timing is estimated at read time and never goes stale).
 
-Capabilities: `revision-history`, `publication-record`, `format-lifecycle`, `ai-cost-ledger`
-(team accounts are part of `admin-auth`).
+**Goal (when resumed):** international editorial practice: public "Published <date> · Updated
+<date>" and an optional dated corrections note, stale detection + an explicit **Regenerate**
+offer for the TLDR deck (published content keeps serving), editor sign-off states (Submit for
+review / Approve — self-publish still allowed), AI cost dashboard (per generation and site-wide
+month-to-date), and a small Team page (add admin, change own password).
+
+Capabilities: `publication-record`, `format-lifecycle`, `ai-cost-ledger` (team accounts are part
+of `admin-auth`). Deferred out of this phase: `revision-history`.
 
 | Wave | Slice | Owns | Depends on |
 |---|---|---|---|
-| A | **S4.1 Revision history** | `src/server/articles/revisions.ts`, `src/app/api/admin/articles/[id]/revisions/**`, `src/components/admin/editor/HistoryTab.tsx` (takes over), `src/components/admin/history/**`, `tests/integration/revisions.test.ts` | Phase 3 |
 | A | **S4.2 Publication record + sign-off** | `src/server/articles/workflow.ts`, `src/app/api/admin/articles/[id]/{submit,approve,corrections}/route.ts`, `src/components/admin/editor/PublishBar.tsx` (takes over), `src/components/reader/ReadHead.tsx` + `ArticleFoot.tsx` (take over: dates, corrections), `src/server/public/articles.ts` (takes over: updatedAt/corrections), `tests/integration/workflow.test.ts` | Phase 3 |
 | A | **S4.3 Format lifecycle** | `src/server/formats/status.ts`, `src/components/admin/FormatChips.tsx` (takes over), `src/components/admin/editor/StaleBanner.tsx`, `src/components/admin/editor/TldrTab.tsx` (takes over: regenerate offer), `tests/integration/format-lifecycle.test.ts` | Phase 3 |
 | A | **S4.4 AI cost ledger** | `src/server/ai-usage/**`, `src/app/api/admin/ai-usage/route.ts`, `src/app/admin/(authed)/ai-usage/page.tsx`, `src/components/admin/ai-usage/**`, `src/components/admin/DeskHeader.tsx` (takes over: month-to-date total), `tests/integration/ai-usage.test.ts` | Phase 3 |
 | A | **S4.5 Team accounts** | `src/app/admin/(authed)/team/page.tsx`, `src/components/admin/team/**`, `src/app/api/admin/users/**`, `src/app/api/auth/password/route.ts`, `tests/integration/team.test.ts` | Phase 3 |
-| B | **S4.6 Editorial E2E** | `tests/e2e/phase4-editorial.spec.ts` | S4.1–S4.5 |
+| B | **S4.6 Editorial E2E** | `tests/e2e/phase4-editorial.spec.ts` | S4.2–S4.5 |
 
 **Gate (exact):**
 ```bash
 # cwd: /Users/sai/Workspace/Code/blog0
 pnpm db:migrate && pnpm db:verify
 pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration
-pnpm build && pnpm test:e2e              # phase4: edit → stale chips → Regenerate (real call) → publish → "Updated" shows; restore rev 1; corrections note visible; cost page totals equal sum of generation rows
+pnpm build && pnpm test:e2e              # phase4: edit → stale chips → Regenerate (real call) → publish → "Updated" shows; corrections note visible; cost page totals equal sum of generation rows
 # Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
 ```
 
-**How the user tests it:** edit a published article and save twice → **History** lists every
-version with author/time; open one (rendered) and **Restore** → a new revision with the old
-content. Change a deck line → TLDR chip **stale**, banner offers **Regenerate** (nothing happens
+**How the user tests it (when resumed):** change a deck line → TLDR chip **stale**, banner offers **Regenerate** (nothing happens
 until clicked); the live page still serves the published deck. **Publish changes** → article
 foot/header shows "Published 8 Sep 2026 · Updated 12 Oct 2026". Add a corrections note → it
 appears dated at the article foot. **Submit for review** / **Approve** chips show on the dashboard.
 **AI usage** page lists each generation (model, prompt version, tokens, $, who, when) and the
 month-to-date total also shown on the dashboard header. **Team** → add a second admin; sign in
-as them; their saves show their name in History.
+as them; their saves show their name on the desk ("Updated … by <name>").
 
 ---
 
@@ -581,16 +641,23 @@ pnpm tsx scripts/backup.ts --out var/backups && pnpm tsx scripts/restore.ts --in
 ### Phase 6 — Automatic alignment (local faster-whisper)
 
 **Goal:** on an explicit **Auto-sync** click, a local faster-whisper worker (free; no paid STT)
-transcribes the uploaded reading with word timestamps and aligns it to the article's sentences,
-upgrading Listen from paragraph-level tap sync to sentence-level highlight; the writer reviews and
-can fall back to taps. Capabilities: `alignment-worker`, `alignment-jobs`,
+transcribes the uploaded reading with word timestamps and aligns it to the article's paragraphs
+and sentences — **the path to exact timings** (the Phase 3 fix ships estimated timing only).
+The aligner writes paragraph marks through the existing aligner-facing sync storage (`PUT
+/api/admin/articles/:id/listen` → `ListenPayload.marks`; sentence marks as an optional
+`sentenceMarks` beside them), so `resolveMarks` serves them as `synced` with no reader change,
+then upgrades the highlight to sentence level; the writer reviews. Stored marks are
+all-or-nothing (`resolveMarks` uses them only when they cover every paragraph; PUT requires a
+complete set), so an aligner run that misses paragraphs must fill the gaps (e.g. interpolate
+between aligned neighbours) before saving, or leave the estimate in place — decided in Phase 6's
+capability spec. Capabilities: `alignment-worker`, `alignment-jobs`,
 `sentence-level-listen`. Introduces a second toolchain (Python 3.12 via `uv`) in `workers/align/`;
 capability files and toolchain rules are written at the start of this phase.
 
 Slices (planned): S6.1 `workers/align/` (uv project, faster-whisper `small.en`, CLI that reads a
 job and writes word timings); S6.2 `align_job` table (migration owned here) + job runner +
 `POST /api/admin/articles/:id/listen/auto-sync`; S6.3 sequence alignment of transcript words to
-`Sentence[]` (`src/server/listen/align.ts`) + review UI; S6.4 reader sentence-level highlight;
+`Paragraph[]` / `Sentence[]` (`src/server/listen/align.ts`, writing through `saveMarks`) + review UI; S6.4 reader sentence-level highlight;
 S6.5 E2E with the committed audio fixture.
 
 **Gate (exact):** `uv --directory workers/align run pytest -q && pnpm test:integration && pnpm build && pnpm test:e2e`.

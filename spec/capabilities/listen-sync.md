@@ -1,101 +1,108 @@
-# Capability: Listen — tap-along paragraph sync + reader highlight
+# Capability: Listen — paragraph timing (estimated by default) + reader follow
 
-Phase 3 (paragraph level). Phase 6 upgrades to automatic sentence-level alignment on top of the
-same payload. Audio upload/streaming: `listen-audio`. Screens: `spec/ui.md` §4 *Listen tab* and
-§3 *Listen*. Status rules: `spec/architecture.md` §5. Pure helpers shared by server, admin and
-reader: `src/lib/listen/marks.ts` (`spec/architecture.md` §9.4).
+Phase 3 (paragraph level), **revised by the Phase 3 fix** (user decision, 2026-10-13): the manual
+tap-along sync is removed — it was too cumbersome — and timing is **estimated** from the
+recording's length and each paragraph's word count. Exact timing is deferred to the Phase 6
+local aligner (no paid speech-to-text), which writes marks into the sync storage kept here.
+Audio upload/streaming: `listen-audio`. Screens: `spec/ui.md` §3 *Listen* and §4 *Listen tab*.
+Status rules: `spec/architecture.md` §5. Pure helpers: `src/lib/listen/estimate.ts` and
+`src/lib/listen/marks.ts` (`spec/architecture.md` §9.4).
 
 ## What It Does
-Lets the writer sync the reading to the text by tapping (Space or a big button) at the start of
-each paragraph while the audio plays, then lets readers see the current paragraph highlighted and
-auto-scrolled as the audio plays, with seeking and paragraph clicks keeping text and audio
-together.
+Gives every published recording paragraph timings without any writer effort — estimated at read
+time from the published text and the recording's duration, or taken from stored marks when they
+cover the text — and lets readers follow along: the text scrolls with the audio and softly
+highlights the current paragraph, pauses following when the reader scrolls, and resumes on
+**Follow audio**; clicking a paragraph seeks there.
 
 ## Inputs
 | Input | Type | Source | Required |
 |---|---|---|---|
-| Taps | one timestamp (`tMs`, integer ms of `audio.currentTime`) per paragraph, in document order | writer: Space key or the big **Tap** button during playback | yes |
-| Nudges | ±250 ms on one mark | writer | no |
-| Redo from a paragraph | choose paragraph k: discard marks k…end, seek, re-tap | writer | no |
-| Save sync | `PUT …/listen { revisionId, marks }` | writer | yes |
-| Playback position | `audio.currentTime`, `seeked` | reader's player | yes |
-| Paragraph click | click on a `.para` in the Listen view | reader | no |
+| Published paragraphs | `RenderedArticle.paragraphs` of the **published** revision (pid + plain text) | database (render cache) | yes |
+| Recording duration | `audio.durationMs` of the published Listen payload | database | yes |
+| Stored marks | `marks: [{ pid, tMs }]` in the Listen payload — written only by `PUT …/listen` (Phase 6 aligner; legacy Phase 3 tap data) | database | no |
+| Playback position | `audio.currentTime`, `timeupdate`, `seeked` | reader's player | yes |
+| Manual scroll | `wheel`, `touchmove`, scroll keys | reader | no |
+| **Follow audio** click | button | reader | no |
+| Paragraph click | click / Enter / Space on a `.para[data-pid]` in the Listen view | reader | no |
 
 ## Outputs
 | Output | Type | Destination |
 |---|---|---|
-| Marks | `marks: [{ pid, tMs }]` for every paragraph of the revision + `syncFingerprint` | Listen draft → published on publish |
-| Status | `missing` / `needs_sync` / `ready` / `stale` | desk chip, editor tab chip, Listen tab header |
-| Stale report | `missingPids` (paragraphs without a mark) and `orphanPids` (marks whose paragraph is gone) | Listen tab |
-| Reader highlight | the current paragraph carries `.para.is-live` and is scrolled to centre | reader Listen view |
-| Publish guard | `PUBLISH_BLOCKED` reason `LISTEN_STALE` | editor publish popover |
+| Resolved marks | `{ marks: [{ pid, tMs }], timing: 'synced' \| 'estimated' }` over the published paragraphs | `ArticleViewModel.listen`, `PublicListenDto` |
+| Reader highlight | the current paragraph carries `.para.is-live` (soft — subtler than the share highlight) | reader Listen view |
+| Auto-follow | the live paragraph is scrolled to centre while following; a **Follow audio** button while paused | reader Listen view |
+| Stored marks (aligner-facing) | `marks` + `syncFingerprint` + `syncedAt/By` in the Listen draft | database (via `PUT …/listen`) |
 
 ## External Calls
 | System | Operation | On Failure |
 |---|---|---|
-| Database | read current revision paragraphs + draft; write marks | inline error in the Listen tab; the marks stay in the page so **Save sync** can be retried |
+| Database | read the published payload + revision (reader); write marks (`PUT …/listen`, aligner only) | reader: the Listen view degrades to the player with no highlight (logged at `warn`); PUT: standard error envelope |
 
 ## Business Rules
-- **Paragraph list** = the current revision's `RenderedArticle.paragraphs` in document order
-  (every `p`, `li`, `quote` paragraph that has a `pid`; headings, code blocks, tables, figures and
-  footnotes are not paragraphs and are never marked). The list comes from the server
-  (`ListenStateDto.paragraphs`), never from the editor textarea.
-- **Sync walks the list in order.** Start syncing plays the recording from 0 with paragraph 1 as
-  "next"; each tap stamps the next paragraph with the player's current time and advances; the
-  last tap pauses the audio and enables **Save sync**. Taps less than 300 ms apart are ignored.
-  **Undo** (Backspace) removes the last mark and seeks to 1 s before it. **Restart** clears all
-  marks (confirm) and plays from 0. **Redo from here** on paragraph k discards marks k…end,
-  seeks to the mark of paragraph k−1 (or 0), plays, and sets k as next.
-- A mark must be an integer `tMs ≥ 0`; the set must contain **exactly one mark per current
-  paragraph, in document order, strictly increasing, every `tMs < durationMs`**; the first mark
-  may be > 0 (an intro). Violations → 422 `MARKS_INVALID` with every reason listed.
-- **Nudge** moves one mark by ±250 ms; a nudge that would break strict ordering or the duration
-  bound is refused (button disabled at the bound). Nudges and marks are unsaved until **Save
-  sync**; leaving the tab/page with unsaved marks asks for confirmation.
-- Syncing requires the editor's text to be saved (sync runs against the saved revision): with
-  unsaved text changes the panel disables Start syncing with "Save your text changes first —
-  sync works against the saved article."
-- If the recording ends before every paragraph is marked, syncing stops with "The recording
-  ended before paragraph N — redo from an earlier paragraph, or upload a longer recording."
-- **Stale.** `syncFingerprint` is the revision's paragraphs fingerprint at save time. Any later
-  save whose paragraph set changes (one paragraph's text edited, a paragraph added, removed or
-  reordered — paragraph ids are content-derived, so this is exactly "the pid list changed")
-  makes the draft **stale**. Marks for paragraphs that still exist are kept; `missingPids` lists
-  the new/edited ones; `orphanPids` lists marks whose paragraph vanished (dropped on the next
-  save). Heading-only, code-only or table-only edits do not change the paragraph set and leave
-  Listen `ready`. Nothing is ever re-synced or regenerated automatically.
-- **Re-sync vs re-record.** The Listen tab's stale banner says the text changed since the sync,
-  lists the affected paragraphs, offers **Redo from here** at the first missing paragraph (keeps
-  the recording), and warns that if the *words* changed the recording no longer matches and a
-  new reading must be uploaded (which clears all marks).
-- **Publishing** a revision whose paragraph set differs from the draft's `syncFingerprint`
-  (status `stale`) is blocked with reason `LISTEN_STALE` (`details.missingPids`,
-  `details.orphanPids`). Publishing with audio but no marks (`needs_sync`) is allowed when the
-  published Listen (if any) still matches the revision being published — Listen is then simply
-  not updated (no published Listen → not offered); when the published Listen no longer matches
-  the text and the draft cannot replace it, publishing is blocked with `LISTEN_STALE`
-  ("the live reading no longer matches the text — sync the recording or remove the audio").
-  Publishing with no Listen draft at all clears the published Listen. The previously published
-  Listen keeps serving throughout.
-- **Reader highlight.** The live paragraph is the one with the greatest `tMs ≤ currentTimeMs`;
-  before the first mark nothing is live. The highlight updates on `timeupdate` and immediately
-  on `seeked`; it is applied to the paragraph element with that `data-pid` as class `is-live`
-  (one at a time). When the live paragraph changes, it is scrolled to the centre of the scroll
-  container (`behavior: 'smooth'`, or `'auto'` under reduced motion) unless the reader scrolled
-  manually (wheel, touch, scroll keys) in the last 4 s. Clicking a paragraph seeks to its mark
-  without changing the play state; keyboard Space toggles play, ←/→ seek ±5 s (ignored when the
-  focus is in a form control).
-- Readers get the **published** marks over the **published** revision only (both copied on
-  publish, fingerprints equal by the guard), so a later edit never desynchronises the live page.
-- Phase 6's sentence-level alignment adds finer marks on the same payload without changing this
-  contract; Phase 3 never attempts alignment.
+- **Eligible paragraphs** = exactly the paragraphs the reader renders with a pid: the revision's
+  `RenderedArticle.paragraphs` in document order (every `p`, `li`, `quote` paragraph with
+  non-empty plain text; headings, code, tables, figures, image-only paragraphs and footnotes
+  have no pid and are never timed). The list always comes from the server's render of the
+  relevant revision, never from the editor textarea.
+- **Words** of a paragraph (`countWords`) = the number of whitespace-separated tokens of its
+  plain text that contain at least one letter or digit (`/[\p{L}\p{N}]/u`). A paragraph of only
+  punctuation/symbols (e.g. `* * *`, `—`) has 0 words.
+- **Estimate** (`estimateMarks(paragraphs: {pid, words}[], durationMs) → {pid, tMs}[]`, pure):
+  - `D = floor(durationMs)`; if `D ≤ 0`, `durationMs` is not finite, or there are no paragraphs →
+    `[]` (no highlight).
+  - Each paragraph's weight `w_i = max(0, words_i) + PAUSE_WORDS` (non-finite `words` count as
+    0). The pause is a trailing gap after each paragraph (including the last — tail silence).
+  - `PAUSE_WORDS = PARAGRAPH_PAUSE_MS × ASSUMED_WPM / 60 000 = 600 × 150 / 60 000 = 1.5`.
+    > **Assumed:** a ~0.6 s pause between paragraphs at an assumed 150 words/minute reading
+    > pace (1.5 word-equivalents). Both are named constants; tuning them changes no contract.
+  - `tMs_i = floor(D × C_i / W)` with `C_i = w_0 + … + w_{i−1}` and `W = Σ w`. So `tMs_0 = 0`; the output has
+    one mark per input paragraph, in input order, integer, **non-decreasing**, every
+    `tMs < D`. **One paragraph → `[{ pid, tMs: 0 }]`.** A **zero-word paragraph** gets only the
+    pause weight (a short slot, never zero width). **Very short audio** (`D` smaller than the
+    paragraph count can resolve) may give equal times; the live paragraph is then the last of
+    the tied ones (`activeMarkIndex` returns the greatest index with `tMs ≤ t`), so earlier tied
+    paragraphs are simply never highlighted — no error.
+    > **Assumed:** the first paragraph starts at 0 (no lead-in weight for a read-aloud title/dek).
+- **Computed at read time, never stored.** The reader's marks are resolved on every request from
+  the **currently published** revision's paragraphs + the published recording's duration, so a
+  text edit can never make the live timing "stale" — the next publish simply re-estimates.
+- **Stored marks take precedence only when they cover the text** (`resolveMarks(stored,
+  paragraphs, durationMs)`): keep the stored marks whose pid is an eligible paragraph, in
+  document order; use them (`timing: 'synced'`) **iff** every eligible pid has exactly one such
+  mark and the kept set passes `validateMarks(kept, pids, durationMs)` (strictly increasing,
+  integer, `< durationMs`). Otherwise — no stored marks, any pid uncovered, or invalid — use
+  `estimateMarks` (`timing: 'estimated'`). Stored marks for vanished paragraphs are ignored, never
+  an error.
+- **Sync storage stays, aligner-facing.** `PUT /api/admin/articles/:id/listen` keeps its
+  contract (`spec/api.md` → Phase 3) for the Phase 6 aligner and tests: exactly one mark per
+  current paragraph, in document order, strictly increasing integers `< durationMs`, else 422
+  `MARKS_INVALID` with every reason. No admin UI calls it in v0.1. Uploading a new recording
+  clears stored marks (they belong to the old recording).
+- **Reader highlight.** The live paragraph is the one with the greatest `tMs ≤ currentTimeMs`
+  (with estimated marks, paragraph 1 is live from 0, also while paused at 0). It updates on
+  `timeupdate` and immediately on `seeked`; one `.para.is-live` at a time.
+- **Auto-follow.** Following is **on** whenever the Listen view opens. While following, each
+  change of the live paragraph scrolls it to the centre of the viewport (`behavior: 'smooth'`,
+  `'auto'` under reduced motion). A **manual scroll** — `wheel`, `touchmove`, or a scroll key
+  (PageUp, PageDown, Home, End, ↑, ↓; ignored when the focus is in a form control) — turns
+  following **off** (programmatic scrolls never count) and shows **Follow audio**. Following
+  stays off (the highlight keeps moving) until the reader clicks **Follow audio** — which turns
+  it on and **immediately** scrolls the current live paragraph to centre — or clicks a
+  paragraph. Scrollbar drags are not detected. > **Assumed:** acceptable; wheel/touch/keys cover
+  normal reading.
+- **Paragraph click** (not on `a`/`button`/figure) or Enter/Space on a focused paragraph →
+  `audio.currentTime = tMs / 1000` (play state unchanged) and following turns on. Keyboard on
+  the window (ignored in form controls): Space play/pause, ←/→ ±5 s.
+- The **card overlay** stays player-only: no text, no highlight, no follow.
+- Phase 6's aligner writes paragraph marks (and later sentence marks) through the same storage;
+  once they cover the text, `resolveMarks` serves them as `synced` with no reader change.
 
 ## Success Criteria
-- [ ] Unit (`tests/unit/listen/marks.test.ts`): `validateMarks(marks, paragraphs, durationMs)` returns `ok` for a complete increasing set and lists, with codes, each of: unknown pid (`UNKNOWN_PID`), missing paragraph (`MISSING_PID`), duplicate pid (`DUPLICATE_PID`), out of order vs document order (`OUT_OF_ORDER`), equal or decreasing times (`NOT_INCREASING`), `tMs ≥ durationMs` or negative or non-integer (`OUT_OF_RANGE`); `activeMarkIndex(marks, tMs)` returns −1 before the first mark, k when `marks[k].tMs ≤ tMs < marks[k+1].tMs`, and the last index at/after the last mark; `nudgeMark(marks, k, ±250)` refuses when ordering or the duration bound would break; `fmtClock(61_000)` is `1:01`; `listenMinutes(durationMs)` matches the design's `audioMinutes` for 0, 29 999, 30 000, 150 000, 1 799 999 ms.
-- [ ] Integration (`tests/integration/listen-sync.test.ts`): `GET …/listen` for an article with uploaded audio lists exactly the current revision's paragraphs in order with their `pid` and plain text and `status 'needs_sync'`, `missingPids` = all pids; `PUT` with a complete increasing set → 200, `status 'ready'`, `syncFingerprint` = the revision's paragraphs fingerprint, the desk chip for `listen` reads `ready`; a second `GET` returns the same marks.
-- [ ] `PUT` with a non-increasing pair → 422 `MARKS_INVALID` with a `NOT_INCREASING` reason naming the index; with an unknown pid → `UNKNOWN_PID`; with one paragraph omitted → `MISSING_PID`; with `tMs === durationMs` → `OUT_OF_RANGE`; with a stale `revisionId` → 409 `CONFLICT`; with no audio uploaded → 409 `LISTEN_NO_AUDIO`; none of these change the stored draft.
-- [ ] Editing one paragraph's text and saving → `status 'stale'`, `missingPids` = exactly the new pid, `orphanPids` = exactly the old pid, every other mark unchanged; publish → 422 `PUBLISH_BLOCKED` with reason `LISTEN_STALE` carrying those arrays; the public article still serves the previously published marks and audio key; editing only a heading → `status` stays `ready`.
-- [ ] After a stale draft is re-synced with a complete set → `ready`; publish → 200; the public article's `listen.marks` equal the new set and its `listen.audioUrl` the current key.
-- [ ] Publish with audio uploaded but never synced on a never-published Listen → 200 with `times.listen === null` publicly; the same after a published Listen exists and the text did not change → 200 and the public Listen is unchanged; the same after the text changed → `PUBLISH_BLOCKED` `LISTEN_STALE`.
-- [ ] E2E (Chromium, `tests/e2e/phase3-listen.spec.ts`): in the Listen tab, upload `sample.mp3`, press **Start syncing**, press Space once per paragraph at ≥ 400 ms intervals → the mark list shows one `m:ss.mmm` time per paragraph, strictly increasing; **Save sync** → tab chip `ready`; publish → the public Listen view: setting `audio.currentTime` to `(marks[k].tMs + 50) / 1000` for k = 0, 2, last makes paragraph k the only `.para.is-live` and places its bounding box inside the viewport; clicking paragraph 1 sets `audio.currentTime` to within 0.05 s of `marks[1].tMs / 1000`.
+- [ ] Unit (`tests/unit/listen/estimate.test.ts`): `countWords('Hello, world — 42 times.')` is 4 and `countWords('* * *')` is 0; `estimateMarks([], 10_000)` is `[]`; `estimateMarks([{pid:'a',words:12}], 10_000)` is `[{pid:'a',tMs:0}]`; `estimateMarks([{a,10},{b,0},{c,20}], 10_000)` is exactly `[0, 3333, 3768]` (weights 11.5, 1.5, 21.5); for durations 0, −5, `NaN`, `Infinity` → `[]`; for 50 paragraphs and `durationMs = 20` every `tMs` is an integer in `[0, 20)`, the sequence is non-decreasing and has length 50; for 1–200 seeded-random paragraphs of 0–300 words with `durationMs = round(W × 400)` (150 wpm) the marks are strictly increasing, `tMs_0 = 0` and the last `tMs < durationMs`. (Computation order is `floor(D × C_i / W)` — multiply first — so the expected values are exact.)
+- [ ] Unit: `resolveMarks` returns the stored marks with `timing 'synced'` when they cover every pid (extra marks for unknown pids dropped); returns `estimateMarks(...)` with `timing 'estimated'` when one pid is uncovered, when stored is `[]`, and when the covering set is not strictly increasing; `activeMarkIndex([{tMs:0},{tMs:5},{tMs:5}], 5)` is 2.
+- [ ] Integration (`tests/integration/public-listen.test.ts`): publish an article whose Listen has no stored marks → `GET /api/public/articles/:slug/listen` returns `timing 'estimated'` and `marks` equal to `estimateMarks(published paragraphs with countWords, durationMs)` — the computed values, not just the length; edit and publish one paragraph's text → the public marks list the **new** pid and contain no old pid, no publish block; after `PUT …/listen` with a complete valid set and a publish → `timing 'synced'` and `marks` equal to the PUT set; after a further text edit + publish that drops one marked paragraph and adds one → `timing 'estimated'`.
+- [ ] Integration (`tests/integration/listen-sync.test.ts`): `PUT` keeps its validation contract — a non-increasing pair → 422 `MARKS_INVALID` with `NOT_INCREASING`; unknown pid → `UNKNOWN_PID`; one paragraph omitted → `MISSING_PID`; `tMs === durationMs` → `OUT_OF_RANGE`; stale `revisionId` → 409 `CONFLICT`; no audio → 409 `LISTEN_NO_AUDIO`; none change the stored draft; a valid PUT returns 200 and does **not** change `status` or `uploadFingerprint`.
+- [ ] Unit (`tests/unit/reader/listen-view.test.ts`, fake `<audio>`, fake scroll target): the live pid follows `timeupdate`/`seeked`; while following each change requests a scroll; after a `wheel` (or `touchmove`, or PageDown) no further change requests a scroll and the follow button is shown; **Follow audio** hides it and requests exactly one scroll to the current live pid at once; a paragraph click seeks to its `tMs` and turns following back on; a programmatic scroll never turns following off.
+- [ ] E2E (Chromium, `tests/e2e/phase3-listen.spec.ts`): upload `sample.mp3` → the tab chip reads `ready` with no tap controls on the page; publish (no block) → the public Listen view: with the view model's marks, setting `audio.currentTime` to `(marks[k].tMs + 50) / 1000` for k = 0, 2, last makes paragraph k the only `.para.is-live` and its box intersects the viewport; a `mouse.wheel` scroll of 1 200 px makes **Follow audio** visible and a further seek to the last paragraph leaves the scroll position unchanged (±2 px); clicking **Follow audio** hides it and brings the live paragraph's box into the viewport within 2 s; clicking paragraph 1 sets `audio.currentTime` within 0.05 s of `marks[1].tMs / 1000`.
 - [ ] The reader E2E creates zero `ai_generation` rows (Listen never calls the LLM).

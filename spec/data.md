@@ -119,7 +119,7 @@ text validated against `src/lib/formats/registry.ts` (extensible without migrati
 | kind | text not null | `tldr`, `listen` (Read is implied by the revision; no row needed) |
 | draft_payload | jsonb null | writer's working copy |
 | draft_revision_id | uuid null fk → article_revision | revision the draft was built against |
-| draft_fingerprint | text null | sentences fp (tldr) at draft time / paragraphs fp (listen) at **sync** time — for listen it mirrors `draft_payload.syncFingerprint` (null while unsynced) so the generic chip query reads one column |
+| draft_fingerprint | text null | sentences fp (tldr) at draft time / for listen (Phase 3 fix) the **baseline** paragraphs fp = `draft_payload.uploadFingerprint ?? draft_payload.syncFingerprint` (null for legacy rows that had neither) so the generic chip query reads one column; `PUT …/listen` never changes it |
 | draft_updated_by | uuid null fk → app_user | |
 | draft_updated_at | timestamptz null | |
 | published_payload | jsonb null | what readers get |
@@ -147,18 +147,25 @@ interface ListenPayload {
     bytes: number;
     durationMs: number;              // integer, from the probe
   };
-  marks: Array<{ pid: string; tMs: number }>;   // [] until synced; else exactly one per paragraph of the synced revision,
-                                                // document order, tMs integer ≥ 0, strictly increasing, < audio.durationMs
-  syncFingerprint: string | null;  // paragraphs fingerprint of the revision the marks were recorded against; null while marks = []
+  marks: Array<{ pid: string; tMs: number }>;   // STORED marks — written only by PUT …/listen (Phase 6 aligner; legacy Phase 3 taps);
+                                                // [] normally (cleared on every upload); when set: exactly one per paragraph of the
+                                                // revision they were saved against, document order, integer ≥ 0, strictly increasing, < audio.durationMs
+  syncFingerprint: string | null;  // paragraphs fingerprint of the revision the stored marks were saved against; null while marks = []
+  uploadFingerprint: string | null; // Phase 3 fix: paragraphs fingerprint of the current revision at upload time — the text the
+                                    // recording is assumed to read; drives the `text_changed` warning. zod: optional, default null
+                                    // (legacy rows read as null → baseline falls back to syncFingerprint)
 }
 ```
 
 A `listen` row exists from the first upload. `draft_payload` null (after Remove audio) = no draft.
-`draft_revision_id` = the revision at sync time (null while unsynced). `published_payload` has the
-same shape and is only ever a copy of a `ready` draft (marks non-empty, `syncFingerprint` ==
-the published revision's paragraphs fingerprint), so readers never see a partial sync.
-`published_fingerprint` mirrors `published_payload.syncFingerprint`. Phase 6 adds optional
-`sentenceMarks` beside `marks` without a migration.
+`draft_revision_id` = the revision of the last upload or PUT. Reader marks are **never stored**:
+they are resolved per request from the published payload's stored `marks`, the published
+revision's paragraphs and `audio.durationMs` (`resolveMarks` — `spec/capabilities/listen-sync.md`),
+so the payload needs no change when the text changes. `published_payload` has the same shape and
+is a copy of the draft at publish time (any status). `published_fingerprint` mirrors the
+published payload's baseline (`uploadFingerprint ?? syncFingerprint`). Phase 6 writes aligned
+paragraph marks into `marks` via the existing PUT and may add optional `sentenceMarks` beside
+them without a migration. No migration in the Phase 3 fix (jsonb payload; zod default).
 
 ### ai_generation
 The AI cost ledger and audit trail (one row per explicit Generate click that reaches the model
@@ -242,8 +249,8 @@ Self-publish from any status is allowed in v0.1. Unpublish → `draft` (publishe
 republish is one click; readers get 404 while not `published`). Delete is allowed only while
 `first_published_at` is null (cascade removes revisions, formats, generations).
 
-**Revision:** created on save when title/dek/body changed; immutable; restore (Phase 4) creates a
-new revision copying an old one.
+**Revision:** created on save when title/dek/body changed; immutable; restore (revision history —
+deferred) would create a new revision copying an old one.
 
 **Format (computed status, never stored)** — rules in `spec/architecture.md` §5:
 - read: `missing` → `ready`.
@@ -251,13 +258,14 @@ new revision copying an old one.
   revision's sentences fingerprint differs from the draft's; `stale` → `ready` after Regenerate
   or a deck save against the current revision. Publishing copies draft → published; the published
   deck is served until the next publish.
-- listen (Phase 3): `missing` (no draft audio) → `needs_sync` (audio uploaded, `marks = []`) →
-  `ready` (marks saved; `syncFingerprint` == current revision's paragraphs fingerprint) →
-  `stale` (paragraph set changed after the sync) → `ready` after re-sync (PUT with a complete
-  set) — or back to `needs_sync` when a new recording is uploaded (marks cleared), or `missing`
-  after Remove audio. Publishing copies a `ready` draft → published; a `needs_sync` draft leaves
-  the published copy untouched; no draft clears it; a `stale` draft blocks publish
-  (`LISTEN_STALE`). Never automatic.
+- listen (Phase 3, revised by the Phase 3 fix): `missing` (no draft audio) → `ready` on upload
+  (`uploadFingerprint` = current paragraphs fingerprint) ⇄ `text_changed` while the current
+  revision's paragraphs fingerprint ≠ the baseline (`uploadFingerprint ?? syncFingerprint`; a null
+  baseline is always `ready`) — back to `ready` when the text is reverted or a new recording is
+  uploaded; → `missing` after Remove audio. `text_changed` is a warning only. A PUT of stored
+  marks never changes the status. Publishing copies the draft (any status) → published; no draft
+  clears the published copy. Listen never blocks publish. `needs_sync` and Listen `stale` no
+  longer exist.
 
 **ai_generation:** `running` → `succeeded` | `failed`; a `running` row older than 3 minutes is
 reported as abandoned/failed and no longer blocks a new Generate.

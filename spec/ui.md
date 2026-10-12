@@ -58,7 +58,7 @@ only those in `spec/architecture.md` → `## Design divergences (ask user)`. Qua
 | `ShareLinkButton` | `components/reader/ShareLinkButton.tsx` | 1 (copy) / 2 (opens the full `ShareMenu`, div. 3) | |
 | `ArticlePage` (modebar strip, readhead, readbody, capsule, artfoot) | `components/reader/ArticleView.tsx`, `ModeBar.tsx`, `ModeCapsule.tsx`, `ReadHead.tsx`, `ArticleFoot.tsx` | 1 | modes read/tldr/listen |
 | `AudioPanel` | `components/reader/ListenStub.tsx` (1–2) → `components/reader/AudioPlayer.tsx` (3) | 1 / 3 | same `.audio` markup bound to a real `<audio>`; `fmtClock` ported to `lib/listen/marks.ts`; divergence 28 |
-| `ArticlePage` listen branch (`section.listenview`) | `components/reader/ListenView.tsx` | 3 | player + synced text (divergence 28) |
+| `ArticlePage` listen branch (`section.listenview`) | `components/reader/ListenView.tsx` (+ pure `listen-sync.ts`) | 3 (+ fix) | player + text that follows the audio with a soft highlight, **Follow audio** (divergences 28, 29) |
 | `SummaryOverlay` (`.sheetfull`, listen mode) | `components/site/SummaryHost.tsx` + `components/site/ListenOverlay.tsx` | 2 (TLDR deck) / 3 (Listen) | compact: tag, title, player, capsule — no text (as the design) |
 | `audioMinutes` | `lib/listen/marks.ts` `listenMinutes(durationMs)` | 3 | `max(1, round(ms / 60000))` |
 | `parseHash`, `App` hash routing | Next routes + `components/site/LegacyHashRedirect.tsx` | 1 / 2 | div. 1 |
@@ -149,8 +149,9 @@ Tab cycles the options; Enter/Space on a `.para` opens it (design behaviour).
 
 ### Listen (Phase 3) — `/p/<slug>/listen`, capsule **Listen**, deck **Listen**
 
-Port of the design's listen branch of `ArticlePage` (design-app.js 3158–3164) plus the synced
-text (divergence 28). Data: `ArticleViewModel.listen` (published only). Entry points: capsule
+Port of the design's listen branch of `ArticlePage` (design-app.js 3158–3164) plus the text
+following the audio (divergence 28) on **estimated** paragraph timing (divergence 29; rules in
+`spec/capabilities/listen-sync.md`). The player is the primary control; the text is secondary. Data: `ArticleViewModel.listen` (published only). Entry points: capsule
 Listen (enabled only when `times.listen != null`; otherwise `disabled` with
 `title="No recording yet"` and `aria-label="Listen — no recording yet"`, mirroring TLDR),
 the deck end slide's Listen (already wired via `onListen`), and loading `/p/<slug>/listen`
@@ -162,19 +163,30 @@ directly (`initialMode: 'listen'`; without a published Listen the page renders R
 
 - Left column `.listenview__lead` (sticky under the modebar at ≥ 960 px: `top: calc(var(--booth)
   + var(--headh) + 56px)`): `.tag` topic, `h1` title (plain, no `SplitHeadline` — the design's
-  listen branch uses a plain `h1`), then **`AudioPlayer`**.
+  listen branch uses a plain `h1`), then **`AudioPlayer`**, then the **Follow audio** button
+  `button.btn-outline.listenview__follow` (text label "Follow audio", no icon,
+  `aria-controls` = the text column's id) — rendered with the `hidden` attribute while
+  following, visible while following is paused. Being in the sticky lead it is always on screen.
 - Right column `.listenview__text`: the same `ArticleBody blocks` inside `.readbody` as Read (so
   figures, code and tables render identically); no `ParagraphShare` in this mode — clicks seek.
 - < 960 px: one column; `.listenview__lead` is sticky at the top (`top: calc(var(--booth) +
   var(--headh) + 56px)`, `--surface` background, bottom hairline) with the `h1` capped at 2 lines
   (`-webkit-line-clamp: 2`), text below.
-- Highlight: the live paragraph gets `.para.is-live` (fill `--accent-soft`, left rule
-  `--accent`, same shape as `.para.is-hl`); one at a time; computed with `activeMarkIndex` on
-  `timeupdate` and `seeked`; scrolled to centre on change unless the reader scrolled manually in
-  the last 4 s (`wheel`, `touchmove`, `keydown` PageUp/Down/Home/End/↑/↓ on the window).
-  Programmatic scrolls never count as manual.
+- Highlight: the live paragraph gets `.para.is-live` — a **soft** highlight, deliberately
+  subtler than the share highlight `.para.is-hl` (CSS tokens `--listen-live-bg` /
+  `--listen-live-rule`, §5); one at a time; computed with `activeMarkIndex` over
+  `ArticleViewModel.listen.marks` (already resolved server-side: estimated or stored) on
+  `timeupdate` and `seeked`.
+- **Auto-follow** (state `following`, `true` each time the view opens): while following, a
+  change of live paragraph scrolls it to the viewport centre (`scrollIntoView({ block:
+  'center', behavior: 'smooth' })`, `'auto'` under reduced motion). A manual scroll — `wheel`,
+  `touchmove`, or `keydown` PageUp/PageDown/Home/End/↑/↓ on the window outside form controls —
+  sets `following = false` and reveals **Follow audio**; programmatic scrolls never count.
+  Clicking **Follow audio** sets `following = true`, hides the button, immediately scrolls the
+  current live paragraph to centre, and moves focus to `button.audio__play` (so focus is not
+  lost on the hidden button). The highlight keeps moving while following is paused.
 - Paragraph click (not on `a`/`button`/figure) → `audio.currentTime = tMs / 1000` (play state
-  unchanged); Enter/Space on a focused paragraph does the same.
+  unchanged) and `following = true`; Enter/Space on a focused paragraph does the same.
 - Keyboard (window, ignored when the focus is in a form control): Space play/pause, ← / →
   ±5 s. Reduced motion: no smooth scroll, no transition on the highlight.
 - Foot: the Read view's `.artfoot` is not shown in Listen (design: "nothing else on screen"); the
@@ -197,7 +209,7 @@ from `.sitehead`), `.sheetfull__scrim`, `.sheetfull__panel` with a `.modebar` (*
 `router.push('/p/<slug>')`, TLDR → switches the host to the deck (same post), Listen `is-on`.
 Data from `GET /api/public/articles/:slug/listen` (loading: the card button shows `…`; error:
 "Couldn't load" for 2 s, like TLDR). Esc / X close; body scroll locked while open. No text
-column here (compact, as the design). The `PostCard` Listen button appears only when
+column, no highlight, no follow here (compact, as the design). The `PostCard` Listen button appears only when
 `times.listen != null` and opens this overlay instead of navigating.
 
 ## 4. Admin screens
@@ -216,8 +228,9 @@ primary button **Sign in** (disabled + "Signing in…" while pending). Errors in
 Title "Desk", primary **New article**. Table (`ArticleTable`): Title (link to editor) · Topic ·
 Status pill (Draft / Submitted / Approved / Published, plus "· unpublished changes") · Format
 chips (`FormatChips`: Read ✓, TLDR `missing|generating|ready|stale|failed`, Listen
-`later phase` greyed in Phases 1–2; from Phase 3 `missing|needs sync|ready|stale` with the
-same live dot when published — no component change, the adapter stops returning `unavailable`)
+`later phase` greyed in Phases 1–2; from Phase 3 (fix) `missing|ready|text changed` with the
+same live dot when published — `text changed` uses the warning chip style `.fchip--text_changed`,
+never a blocking look; no component change beyond the label map)
 · Updated (relative time, by name). Empty: "No articles yet.
 Paste your Markdown and see it exactly as readers will." + **New article**. Load error: inline
 message + **Retry**.
@@ -236,8 +249,8 @@ to the editor.
 - **Tabs**: Write · TLDR · Listen · History. Phases 1–2: Listen = `StubNotice` "Upload a
   word-for-word reading and tap along to sync — Phase 3"; Phase 3: the Listen tab below, with a
   `tabchip` showing the Listen status next to the tab label exactly like TLDR's. History =
-  `StubNotice` "Every save is already kept (N revisions). Browsing and restoring arrives in
-  Phase 4."
+  `StubNotice` "Every save is already kept (N revisions). Browsing and restoring arrives in a
+  later version." (Phase 3 fix: revision history is deferred, no phase number.)
 - **Write tab**: fields Title, Dek, Topic; **Settings** disclosure: Slug (locked note after
   publish), Byline, Featured (toggle + rank), "Show ‘Draft — in progress’ badge". Split view ≥
   1100 px: `MarkdownEditor` (monospace textarea, Tab inserts 2 spaces, word count) left; **Live
@@ -290,79 +303,60 @@ to the editor.
 
 ### Listen tab (Phase 3, `components/admin/editor/ListenTab.tsx` + `components/admin/listen/*`)
 
-No design exists (divergence 17); built from the tokens and the design's `.audio` player. Loads
-`GET /api/admin/articles/:id/listen` when first shown (states: "Loading the recording…", inline
-error + **Retry**, then the panel). Layout: a header row, then two columns at ≥ 1100 px
-(**Recording** left, 360 px; **Paragraphs** right) or stacked below.
+**Revised by the Phase 3 fix: no tap-along.** The tab is upload / replace / remove + a preview
+player + an estimated-timing note. No design exists (divergence 17); built from the tokens and
+the design's `.audio` player. Loads `GET /api/admin/articles/:id/listen` when first shown
+(states: "Loading the recording…", inline error + **Retry**, then the panel). Layout: one
+column, max-width 720 px.
 
-- **Header**: status chip (`missing` "No recording", `needs_sync` "Needs sync", `ready`
-  "Synced", `stale` "Text changed — re-sync") + one line of help per status: missing → "Upload
-  a word-for-word reading (mp3 or m4a, up to 50 MB / 30 min), then tap along to sync it."
-  (limits from `limits`); needs_sync → "Recording uploaded. Press Start syncing and tap at the
-  start of each paragraph."; ready → "Synced N paragraphs · <relative time> by <name>"; stale →
-  the stale banner below. When `published` exists: "Live: <N> min recording, published <date>"
-  plus "· differs from the draft" when `matchesCurrentText` is false or the draft audio differs.
-- **Stale banner** (`.admin-alert.is-warn`, status `stale`): "The text changed since this
-  recording was synced. <k> paragraph(s) are new or edited and have no mark; <m> mark(s) belong
-  to paragraphs that were removed." Buttons: **Re-sync from the first change** (= Redo from
-  here on the first `missingPids` entry) and **Upload a new recording** (focuses the uploader).
-  Second line in `--accent-ink`: "If the words changed, the recording no longer matches — upload
-  a new reading. Publishing is blocked until Listen is synced or the audio is removed."
+- **Header**: status chip (`missing` "No recording", `ready` "Ready", `text_changed` "Text
+  changed" — warning style, `.tabchip--text_changed`) + one help line per status: missing →
+  "Upload a word-for-word reading (mp3 or m4a, up to 50 MB / 30 min). Readers get it on the
+  next publish." (limits from `limits`); ready → "Recording ready · uploaded <relative time> by
+  <name>. Readers get it on the next publish."; text_changed → the warning below. When
+  `published` exists: "Live: <N> min recording, published <date>" plus "· differs from the
+  draft" when `published.sameAudioAsDraft` is false.
+- **Text-changed warning** (`.admin-alert.is-warn`, status `text_changed`, **non-blocking**):
+  "The recording may no longer match the text — paragraphs changed after it was uploaded. If
+  the wording changed, upload a new reading. Publishing is not blocked." with one button
+  **Upload a new recording** (focuses the uploader).
 - **Recording** (`AudioUploader.tsx`): dropzone `.dropzone` (dashed `--border-strong`, "Drop an
   mp3 or m4a here, or **choose a file**", hidden `<input type=file accept="audio/mpeg,audio/mp4,.mp3,.m4a">`),
-  limits line. While uploading: progress bar (`<progress>` + "Uploading… 37% · 12 MB of 31 MB"),
-  **Cancel** (aborts the XHR). Errors inline (`.admin-error`): the server message (415/413/422
-  texts) + **Try again**. With audio: the design `.audio` player (`AudioPlayer`, draft `url`),
-  the file line "`<originalFilename>` · <bytes as MB> · <fmtClock> · uploaded <relative time> by
-  <name>", buttons **Replace…** (confirm "Replace the recording? Your N marks will be cleared."
-  when marks exist) and **Remove audio** (confirm "Remove the recording and its marks? The
+  limits line. Disabled while the editor has unsaved text, with "Save your text changes first —
+  the recording is matched against the saved article." While uploading: progress bar
+  (`<progress>` + "Uploading… 37% · 12 MB of 31 MB"), **Cancel** (aborts the XHR). Errors
+  inline (`.admin-error`): the server message (415/413/422 texts) + **Try again**. With audio:
+  the design `.audio` player (`AudioPlayer`, draft `url`) as the preview, the file line
+  "`<originalFilename>` · <bytes as MB> · <fmtClock> · uploaded <relative time> by <name>",
+  buttons **Replace…** (no confirm) and **Remove audio** (confirm "Remove the recording? The
   published Listen keeps serving until you publish again.").
-- **Sync controls** (`SyncPanel.tsx`, above the paragraph list): primary **Start syncing**
-  (disabled with reason when: no audio; editor has unsaved text — "Save your text changes first
-  — sync works against the saved article."; `syncing` already). While `syncing`: the row shows
-  the player, the live clock `m:ss.mmm`, "Next: paragraph <k> of <n>", the **big tap button**
-  `.tapbtn` (full column width at < 1100 px, 96 px tall, `--accent` fill, label "Tap — paragraph
-  k starts now", `aria-keyshortcuts="Space"`), **Undo last tap** (Backspace), **Restart**
-  (confirm), **Stop** (pauses; marks so far are kept). Space anywhere on the page records a tap
-  while `syncing` (ignored when the focus is in an input/textarea/select; `preventDefault` so the
-  page never scrolls). After the last paragraph: audio pauses, state `complete`, notice "All n
-  paragraphs marked — check a few, nudge if needed, then Save sync." If the audio `ended` first:
-  "The recording ended before paragraph k — redo from an earlier paragraph, or upload a longer
-  recording."
-- **Paragraphs** (`MarkList.tsx`, `ol.marklist`): one row per `paragraphs[]` in order: ordinal,
-  the paragraph's first ~90 chars (ellipsis) with its `headingPath` as a faint eyebrow when it
-  changes, the mark time `m:ss.mmm` (or "—"), and controls: **−250 ms** / **+250 ms** (disabled
-  at the bounds; `aria-label="Nudge earlier/later"`), **Redo from here** (`syncing` from this
-  paragraph), and the row's **▶** (seek the player to this mark and play; only when marked).
-  Row states: `.is-next` (accent-soft fill, the paragraph about to be tapped), `.is-marked`,
-  `.is-missing` (stale: no mark, accent left rule, badge "no mark"), `.is-live` during preview
-  playback (follows the player like the reader view). The list auto-scrolls to `.is-next` while
-  syncing.
-- **Footer**: **Save sync** (primary; enabled only when every paragraph has a mark and the set
-  validates client-side with `validateMarks`; label "Saving…" while pending; dirty dot when
-  unsaved marks exist), **Discard changes** (reverts to the server marks), and the validation
-  summary when disabled ("3 paragraphs still need a mark"). Save errors inline with **Retry**;
-  `MARKS_INVALID` reasons are listed per paragraph. Switching tabs or leaving with unsaved marks
-  → `confirm`, and the `beforeunload` guard is on.
-- Publishing from the `PublishBar` with a stale Listen shows the `LISTEN_STALE` reason in the
-  blocked popover with a **Go to Listen** link that selects this tab.
-- Keyboard: every control is a `<button>`; Space/Backspace shortcuts are announced in the
-  controls row ("Space = tap · Backspace = undo"); the live clock and "Next: paragraph k" are in
-  an `aria-live="polite"` region, throttled to once per tap.
+- **Timing note** (`p.listentab__timing`, muted, under the player; only with audio):
+  `timing 'estimated'` → "Readers see the text follow along with estimated timing — from the
+  recording's length and each paragraph's word count. Exact timing comes with automatic
+  alignment later."; `timing 'synced'` → "Readers see the text follow along with the paragraph
+  timings saved for this recording."
+- No paragraph list, no mark controls, no Save sync, no unsaved-marks guard. The `PublishBar`
+  has no Listen reason and no **Go to Listen** link (Listen never blocks publishing).
+- Keyboard: every control is a `<button>`; no page-level shortcuts in this tab.
 
 ### Later admin screens
 Site settings (P2: form for tagline, contact email, About strap/stand/body, social URLs with live
-preview of the About block), Subscribers (P2: count, table, **Export CSV**), History tab (P4:
-list, view rendered, **Restore**), Stale banner for TLDR (P4; the Listen stale banner ships in
-P3 above), AI usage (P4: month picker, total, table), Team (P4).
+preview of the About block), Subscribers (P2: count, table, **Export CSV**), History tab
+(**deferred** — stays the labelled stub; `spec/capabilities/revision-history.md`), Stale banner
+for TLDR (P4, on hold), AI usage (P4, on hold: month picker, total, table), Team (P4, on hold).
 
 ## 5. CSS additions (`src/styles/additions.css`) — only new rules, tokens only
 
 - Font variable wiring (porting rule 5).
 - `:root { --booth: 28px }` (boot strip on, div. 6); `.hlmenu` inside `.tdeck` gets `z-index: 47`.
-- `.para` hover gutter rule; `.para.is-hl` (same as `.sent.is-hl`); `.para.is-live` (Listen:
-  `--accent-soft` fill, 2 px `--accent` left rule, `transition: background .18s` — none under
-  reduced motion).
+- `.para` hover gutter rule; `.para.is-hl` (same as `.sent.is-hl`: `--accent-soft` fill — the
+  share highlight); `.para.is-live` (Listen, **soft**, Phase 3 fix): tokens scoped to the Listen
+  view so they resolve per theme — `.listenview { --listen-live-bg: var(--accent-softer);
+  --listen-live-rule: var(--accent-soft); }` — and `.para.is-live { background:
+  var(--listen-live-bg); box-shadow: -2px 0 0 0 var(--listen-live-rule); border-radius: 2px;
+  transition: background .3s ease, box-shadow .3s ease }` (half the share fill's alpha and a
+  faint rule instead of the solid `--accent` one; no transition under reduced motion).
+  `.listenview__follow { margin-top: 12px }` (`.btn-outline` look; `[hidden]` hides it).
 - Phase 3 (S3.5 takes over this file): `.listenview--synced` two-column grid at ≥ 960 px
   (`grid-template-columns: minmax(280px, 360px) minmax(0, 700px); gap: 40px; max-width: 1140px;
   align-items: start; justify-content: center; min-height: auto; display: grid`), `.listenview__lead`
@@ -373,11 +367,14 @@ P3 above), AI usage (P4: month picker, total, table), Team (P4).
   -webkit-box-orient: vertical; overflow: hidden }`. `.para[data-pid]` in `.listenview--synced`
   gets `cursor: pointer`. `.audio__play:disabled { opacity: .45; cursor: not-allowed }`.
   Everything else of the player/overlay comes from `design.css` unchanged.
-- Phase 3 admin (`admin.css`, S3.4 takes over): `.tabchip--needs_sync`, `.tabchip--stale`,
-  `.fchip--needs_sync` (same amber as `stale` but dashed border), `.dropzone` (+ `.is-dropping`),
-  `.tapbtn`, `.marklist` rows (`.is-next`, `.is-marked`, `.is-missing`, `.is-live`),
-  `.admin-alert.is-warn`, `.admin-dialog` (image prompt), `.mdedit__tools`, `.mdedit__area.is-dropping`
-  — tokens only.
+- Phase 3 admin (`admin.css`; Phase 3 fix F2 takes over): `.tabchip--text_changed` and
+  `.fchip--text_changed` (warning: transparent fill, **dashed** `--accent` border, `--accent-ink`
+  text — visibly a caution, not the solid failed/stale look), `.dropzone` (+ `.is-dropping`,
+  `[aria-disabled=true]` dimmed), `.listentab__timing` (muted 13.5 px head font),
+  `.admin-alert.is-warn`, `.admin-dialog` (image prompt), `.mdedit__tools`,
+  `.mdedit__area.is-dropping` — tokens only. Removed with the tap-along: `.tapbtn`, `.marklist*`,
+  `.tabchip--needs_sync`, `.fchip--needs_sync` (dropped from their shared selectors; `.tabchip--stale`
+  / `.fchip--stale` stay for TLDR), `.listentab__stalewarn`.
 - `.prose table` (wrap in `.tablewrap`-like overflow container via `.prose .table-scroll`;
   cells styled like `table.data`), `.prose code` inline (mono 0.9em, `--surface-2` bg, 2 px
   radius), `.prose pre.shiki` (mono 14.5px, 16 px padding, `--border` 1 px, 4 px radius, overflow

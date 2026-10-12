@@ -1,6 +1,7 @@
 # Capability: Listen — audio upload, storage, streaming, player
 
-Phase 3. Tap-along sync and the reader highlight are `listen-sync`; inline images share the
+Phase 3 (revised by the Phase 3 fix: upload ⇒ `ready`; no tap-along). Paragraph timing (estimated
+by default) and the reader highlight/follow are `listen-sync`; inline images share the
 storage and the `/media/` route (`media-images`). HOW (storage interface, `/media/[...key]`
 route, probe libraries, limits): `spec/architecture.md` §9. Screens: `spec/ui.md` §3 *Listen*
 and §4 *Listen tab*. Data: `spec/data.md` → `article_format` (`listen` payload) and
@@ -25,8 +26,8 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
 |---|---|---|
 | Stored audio | file under `BLOG0_STORAGE_DIR` at key `<siteSlug>/audio/<yyyy>/<mm>/<uuid>.<mp3\|m4a>` | storage |
 | Media record | `media_asset` row: kind `audio`, mime, bytes, sha256, `duration_ms`, original filename, uploader | database |
-| Listen draft | `article_format(kind='listen').draft_payload` = `{ audio, marks: [], syncFingerprint: null }` | database |
-| Listen status | `needs_sync` right after upload (`spec/architecture.md` §5) | desk chip, editor tab chip |
+| Listen draft | `article_format(kind='listen').draft_payload` = `{ audio, marks: [], syncFingerprint: null, uploadFingerprint: <current revision's paragraphs fingerprint> }` | database |
+| Listen status | `ready` right after upload; later `text_changed` (non-blocking warning) if the paragraph text changes (`spec/architecture.md` §5) | desk chip, editor tab chip |
 | Stream | 200 / 206 / 304 / 416 responses with `Content-Type`, `Accept-Ranges`, `Content-Range`, `ETag`, `Cache-Control` | every player |
 | Durations | `times.listen = max(1, round(durationMs / 60000))` (design `audioMinutes`) | capsule, cards, deck capsule, OG-free |
 | Log lines | `media.upload`, `media.request` | structured log |
@@ -47,10 +48,23 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
   on the declared `Content-Length` before reading and again while reading (so a lying client
   cannot exceed it). Duration over `BLOG0_MAX_AUDIO_MINUTES` → 422 `AUDIO_TOO_LONG` with both
   values in the message. Limits are read from config at request time (tests lower them via env).
-- Uploading a new file **replaces the draft audio and clears its marks** (status → `needs_sync`),
-  after a confirm when marks exist. The previously **published** Listen (its own audio key and
-  marks) keeps serving until the next successful publish. The storage key is unique per upload
+- **Upload ⇒ `ready` immediately.** The upload records `uploadFingerprint` = the saved current
+  revision's paragraphs fingerprint (the text the recording is assumed to read). There is no sync
+  step; timing is estimated at read time (`listen-sync`).
+- **Text-changed warning (never blocking).** When the current revision's paragraphs fingerprint
+  differs from the draft's `uploadFingerprint` (any paragraph's text edited, added, removed or
+  reordered after the upload), the Listen status is `text_changed`: the chips show a warning and
+  the Listen tab says "The recording may no longer match the text". Publishing is **never**
+  blocked by Listen. Heading-, code- or table-only edits don't change the paragraph fingerprint
+  and leave `ready`; reverting the text clears the warning; uploading a new recording re-baselines
+  it. > **Assumed:** there is no "keep this recording anyway" dismiss in v0.1 — the warning
+  persists until re-upload or revert (it never blocks anything).
+- Uploading a new file **replaces the draft audio and clears its stored marks** (no confirm —
+  there is no writer-made sync to lose). The previously **published** Listen (its own audio key)
+  keeps serving until the next successful publish. The storage key is unique per upload
   (uuid), so caches never see a changed body under the same URL.
+- **Publishing** copies the Listen draft (whatever its status) to the published copy; with no
+  draft (after **Remove audio**) publishing clears the published Listen.
 - **Remove audio** clears the Listen draft (status → `missing`); the published Listen keeps
   serving until the next publish, at which point Listen is no longer offered.
 - An audio file is deleted from storage only when neither the draft nor the published payload of
@@ -66,8 +80,8 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
   Keys that fail validation (`spec/architecture.md` §9: traversal, absolute, bad charset,
   unknown extension) → 404 `NOT_FOUND`, never a filesystem lookup. Keys not in `media_asset` for
   the current site → 404.
-- Draft audio is playable in the editor through the same route (the editor's player and the
-  tap-sync use `audio.url` from `ListenStateDto`).
+- Draft audio is playable in the editor through the same route (the Listen tab's preview player
+  uses `audio.url` from `ListenStateDto`).
 - The reader's player is the design `AudioPanel` markup bound to a real `<audio
   preload="metadata">` (`spec/ui.md` §3 *Listen*): play/pause, seek range, `m:ss` clocks via
   the design's `fmtClock`, keyboard Space (play/pause) and ←/→ (±5 s). The times line
@@ -82,10 +96,11 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
   write; uploads and streaming work on PGlite exactly as on Postgres.
 
 ## Success Criteria
-- [ ] Integration (`tests/integration/audio-ingest.test.ts`): uploading `tests/fixtures/audio/sample.m4a` as admin returns 200 with `listen.status === 'needs_sync'`, `listen.audio.mimeType === 'audio/mp4'`, `listen.audio.durationMs` within ±500 ms of `sample.json`'s recorded value, `listen.audio.bytes` equal to the file size; a file exists at `BLOG0_STORAGE_DIR/<audio.key>` with the same sha256 as the fixture; one `media_asset` row exists with `kind='audio'` and `duration_ms` equal to the DTO; uploading `sample.mp3` yields `mimeType 'audio/mpeg'` and a key ending `.mp3`.
+- [ ] Integration (`tests/integration/audio-ingest.test.ts`): uploading `tests/fixtures/audio/sample.m4a` as admin returns 200 with `listen.status === 'ready'`, `listen.uploadFingerprint` equal to the current revision's `paragraphs_fingerprint`, `listen.timing === 'estimated'`, `listen.audio.mimeType === 'audio/mp4'`, `listen.audio.durationMs` within ±500 ms of `sample.json`'s recorded value, `listen.audio.bytes` equal to the file size; a file exists at `BLOG0_STORAGE_DIR/<audio.key>` with the same sha256 as the fixture; one `media_asset` row exists with `kind='audio'` and `duration_ms` equal to the DTO; uploading `sample.mp3` yields `mimeType 'audio/mpeg'` and a key ending `.mp3`.
 - [ ] A 1-byte text file named `song.mp3` with `Content-Type: audio/mpeg` → 415 `UNSUPPORTED_MEDIA`; `not-audio.wav` → 415; with the size limit set to 1 MB (`BLOG0_MAX_AUDIO_MB=1` through the config reset helper) a 1.1 MB random buffer → 413 `PAYLOAD_TOO_LARGE` with no `media_asset` row and no file under the storage dir; with the duration limit injected as 10 000 ms (`uploadAudio(…, { limits: { maxBytes, maxDurationMs: 10_000 } })` — the route passes the config values, the test passes its own) `sample.m4a` (~20 s) → 422 `AUDIO_TOO_LONG`, no row, no file.
 - [ ] Uploading a second file for the same article replaces `audio.assetId`, clears `marks` (`[]`), and the first file is deleted from disk (it was unpublished); the first `media_asset` row is deleted. `DELETE …/audio` → `status 'missing'`, `audio: null`, file deleted, row deleted.
-- [ ] After publishing a synced Listen, uploading a new file keeps the published payload (`published.durationMs` unchanged) and the published file on disk; the public article still streams the old key; after `DELETE …/audio` + publish, `/p/<slug>` has `times.listen === null` and the old file is deleted.
+- [ ] Text-changed warning (`tests/integration/listen-sync.test.ts`): after upload, editing one paragraph's text and saving → `status 'text_changed'`, `textChangedSinceUpload true`, the desk `listen` chip status `text_changed`; publish → **200** (no `PUBLISH_BLOCKED`, no Listen reason) and the public Listen serves the new audio with estimated marks over the new text; editing only a heading → `status` stays `ready`; reverting the paragraph → `ready`; uploading again after the edit → `ready` with the new `uploadFingerprint`.
+- [ ] After publishing a Listen, uploading a new file keeps the published payload (`published.durationMs` unchanged) and the published file on disk; the public article still streams the old key; after `DELETE …/audio` + publish, `/p/<slug>` has `times.listen === null` and the old file is deleted.
 - [ ] Integration (`tests/integration/media.test.ts`), against real stored files: `GET /media/<key>` → 200, `Content-Length` = size, `Accept-Ranges: bytes`, `ETag: "<sha256>"`, `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, correct `Content-Type`; `Range: bytes=0-1023` → 206, `Content-Range: bytes 0-1023/<size>`, body exactly the first 1024 bytes of the file; `Range: bytes=-100` → 206 with the last 100 bytes; `Range: bytes=<size>-` and `bytes=999999999-` → 416 with `Content-Range: bytes */<size>`; `If-None-Match: "<sha256>"` → 304 empty body; `HEAD` → 200 with the same headers and no body.
 - [ ] `/media/..%2F..%2Fetc%2Fpasswd`, `/media/%2Fetc/passwd`, `/media/blog0/audio/2026/10/x.exe`, and a well-formed key with no `media_asset` row → 404 `NOT_FOUND` (JSON envelope) and no `error` log line.
 - [ ] Public queries: a published article with a published Listen has `times.listen === max(1, round(durationMs/60000))` on the article page, in `PostCardViewModel`, in `GET /api/public/articles/:slug/tldr` and in `GET /api/public/articles/:slug/listen`; a published article with only a draft Listen has `times.listen === null` everywhere.
