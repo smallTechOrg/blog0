@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# secrets — .env.example is committed, every real value lives in .env
+.env
+.env.*.local
+.env.local
+
+# runtime data (storage, backups)
+var/
+
+# test output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# OS
+.DS_Store
