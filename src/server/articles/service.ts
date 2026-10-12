@@ -19,6 +19,7 @@ import { article, articleRevision, type ArticleRow, type RevisionRow } from '../
 import { formatAdapters } from '../formats';
 import { ApiError } from '../http/api';
 import { log } from '../log';
+import { audioRefOf, deleteAssetIfUnreferenced, deleteStoredFiles } from '../media/cleanup';
 import {
   findArticle,
   findRevision,
@@ -300,8 +301,14 @@ async function publishReasons(
   return reasons;
 }
 
-export async function publishArticle(ctx: ActorContext, id: string, revisionId: string, now: Date = new Date()): Promise<ArticleDetailDto> {
-  await getDb().transaction(async (tx) => {
+export async function publishArticle(
+  ctx: ActorContext,
+  id: string,
+  revisionId: string,
+  now: Date = new Date(),
+  options: { requestId?: string } = {},
+): Promise<ArticleDetailDto> {
+  const staleKey = await getDb().transaction(async (tx) => {
     const row = await lockArticle(tx, ctx.siteId, id);
     if (!row) throw notFound(id);
     const revision = await assertCurrentRevision(tx, ctx.siteId, row, revisionId);
@@ -335,8 +342,27 @@ export async function publishArticle(ctx: ActorContext, id: string, revisionId: 
       .where(and(eq(article.id, row.id), eq(article.siteId, ctx.siteId)));
 
     const rows = await formatRows(ctx.siteId, [row.id], tx);
+    // The recording the live Listen served before this publish (spec/capabilities/listen-audio.md
+    // file lifecycle): once the publish replaces or clears it, its row goes in this transaction and
+    // its file after commit — unless some payload still references the key.
+    const previousPublished = audioRefOf(rows.find((r) => r.kind === 'listen')?.publishedPayload);
     for (const adapter of formatAdapters()) {
       await adapter.publish(tx, { row: rows.find((r) => r.kind === adapter.kind) ?? null, revision, userId: ctx.user.id, now });
+    }
+    let removedKey: string | null = null;
+    if (previousPublished) {
+      const cleanup = await deleteAssetIfUnreferenced(ctx.siteId, previousPublished.assetId, { db: tx });
+      removedKey = cleanup.key;
+      if (cleanup.outcome === 'deleted') {
+        log.info('media.remove', {
+          msg: 'superseded published recording deleted on publish',
+          request_id: options.requestId,
+          article_id: row.id,
+          asset_id: previousPublished.assetId,
+          key: cleanup.key,
+          user_id: ctx.user.id,
+        });
+      }
     }
     log.info('article.publish', {
       article_id: row.id,
@@ -345,7 +371,9 @@ export async function publishArticle(ctx: ActorContext, id: string, revisionId: 
       user_id: ctx.user.id,
       first_publish: row.firstPublishedAt === null,
     });
+    return removedKey;
   });
+  await deleteStoredFiles([staleKey], { requestId: options.requestId });
   return getArticleDetail(ctx.siteId, id);
 }
 

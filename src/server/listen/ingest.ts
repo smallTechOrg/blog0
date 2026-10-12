@@ -12,7 +12,7 @@ import { getDb, type Tx } from '../db/client';
 import { articleFormat } from '../db/schema';
 import { ApiError } from '../http/api';
 import { log } from '../log';
-import { deleteAssetIfUnreferenced } from '../media/cleanup';
+import { audioRefOf, deleteAssetIfUnreferenced, deleteStoredFiles } from '../media/cleanup';
 import { insertMediaAsset } from '../media/repo';
 import { getCurrentSite } from '../site/current';
 import { getStorage, makeStorageKey, StorageError } from '../storage';
@@ -22,7 +22,8 @@ import { getListenState } from './sync';
 // Audio ingest (spec/architecture.md §9.3, §9.5; spec/capabilities/listen-audio.md): size check →
 // probe (type + duration from the bytes, never the name) → storage put → one transaction
 // (media_asset row + the listen draft payload) → the replaced draft asset is deleted when no
-// payload references it anymore. A DB failure after the put deletes the file again.
+// payload references it anymore (row in the transaction, file after commit). A DB failure after
+// the put deletes the new file again.
 
 const LISTEN = 'listen';
 const MIB = 1024 * 1024;
@@ -74,12 +75,10 @@ function tooLarge(maxBytes: number): ApiError {
   return new ApiError('PAYLOAD_TOO_LARGE', 413, `The file is larger than the ${mbOf(maxBytes)} MB limit for recordings.`);
 }
 
-/** Reads `{ assetId, key }` out of a stored listen payload without depending on the full schema. */
-export function audioRefOf(payload: unknown): { assetId: string; key: string } | null {
-  const audio = (payload as { audio?: { assetId?: unknown; key?: unknown } } | null)?.audio;
-  if (!audio || typeof audio.assetId !== 'string' || typeof audio.key !== 'string') return null;
-  return { assetId: audio.assetId, key: audio.key };
-}
+export { audioRefOf };
+
+/** Status codes that count as a rejected upload in the `media.upload` log (spec/architecture.md §7). */
+const REJECTED_STATUSES = new Set([413, 415, 422]);
 
 /** Basename only, control characters stripped, ≤ 255 chars (spec/data.md → media_asset). */
 export function cleanFilename(name: string, fallback: string): string {
@@ -97,8 +96,9 @@ async function readUpload(file: File, maxBytes: number): Promise<Buffer> {
   return buf;
 }
 
-async function probeOrThrow(buf: Buffer, limits: AudioLimits) {
+async function probeOrThrow(buf: Buffer, limits: AudioLimits, seen: { mime: AudioMime | null }) {
   const result = await probeAudio(buf);
+  if (result.ok) seen.mime = result.probe.mimeType;
   if (!result.ok) {
     if (result.reason === 'no_duration') {
       throw new ApiError('UNSUPPORTED_MEDIA', 415, "Couldn't read the recording's length — re-export the file and try again.");
@@ -120,6 +120,34 @@ async function probeOrThrow(buf: Buffer, limits: AudioLimits) {
  * marks cleared). The previous draft asset is deleted unless a payload still references its key.
  */
 export async function uploadAudio(articleId: string, file: File, actor: ActorContext, options: UploadAudioOptions = {}): Promise<ListenStateDto> {
+  const seen: { mime: AudioMime | null } = { mime: null };
+  try {
+    return await storeAudio(articleId, file, actor, options, seen);
+  } catch (error) {
+    if (error instanceof ApiError && REJECTED_STATUSES.has(error.status)) {
+      log.info('media.upload', {
+        msg: `media.upload audio rejected ${error.code}`,
+        request_id: options.requestId,
+        kind: 'audio',
+        mime: seen.mime ?? undefined,
+        bytes: file.size,
+        article_id: articleId,
+        outcome: 'rejected',
+        err_code: error.code,
+        user_id: actor.user.id,
+      });
+    }
+    throw error;
+  }
+}
+
+async function storeAudio(
+  articleId: string,
+  file: File,
+  actor: ActorContext,
+  options: UploadAudioOptions,
+  seen: { mime: AudioMime | null },
+): Promise<ListenStateDto> {
   const limits = options.limits ?? configuredAudioLimits();
   const now = options.now ?? new Date();
   const db = getDb();
@@ -129,7 +157,7 @@ export async function uploadAudio(articleId: string, file: File, actor: ActorCon
 
   // 2. Size → probe → put (nothing touches the DB yet).
   const buf = await readUpload(file, limits.maxBytes);
-  const probe = await probeOrThrow(buf, limits);
+  const probe = await probeOrThrow(buf, limits, seen);
   const site = await getCurrentSite();
   const key = makeStorageKey(site.slug, 'audio', probe.mimeType, now);
   const storage = getStorage();
@@ -150,6 +178,7 @@ export async function uploadAudio(articleId: string, file: File, actor: ActorCon
 
   // 3. One transaction: media_asset row + listen draft (+ cleanup of the replaced draft asset).
   let replacedAssetId: string | null = null;
+  let staleKey: string | null = null;
   let assetId: string;
   try {
     assetId = await db.transaction(async (tx) => {
@@ -182,7 +211,7 @@ export async function uploadAudio(articleId: string, file: File, actor: ActorCon
       // other payload of the site) still references it — the cleanup helper does that check.
       if (previous && previous.assetId !== asset.id) {
         replacedAssetId = previous.assetId;
-        await deleteAssetIfUnreferenced(actor.siteId, previous.assetId, { requestId: options.requestId, db: tx });
+        staleKey = (await deleteAssetIfUnreferenced(actor.siteId, previous.assetId, { db: tx })).key;
       }
       return asset.id;
     });
@@ -190,16 +219,20 @@ export async function uploadAudio(articleId: string, file: File, actor: ActorCon
     await storage.delete(stored.key).catch(() => {});
     throw error;
   }
+  // Committed: only now may the replaced recording's file go (spec/architecture.md §9.5).
+  await deleteStoredFiles([staleKey], { requestId: options.requestId });
 
   log.info('media.upload', {
-    msg: `audio upload ${probe.mimeType} ${stored.size} B ${probe.durationMs} ms`,
+    msg: `media.upload audio ok ${probe.mimeType} ${stored.size} B ${probe.durationMs} ms`,
     request_id: options.requestId,
-    article_id: articleId,
-    asset_id: assetId,
-    key: stored.key,
-    mime_type: probe.mimeType,
+    kind: 'audio',
+    mime: probe.mimeType,
     bytes: stored.size,
     duration_ms: probe.durationMs,
+    article_id: articleId,
+    outcome: 'ok',
+    asset_id: assetId,
+    key: stored.key,
     replaced_asset_id: replacedAssetId,
     user_id: actor.user.id,
   });
@@ -222,10 +255,11 @@ export async function removeAudio(articleId: string, actor: ActorContext, option
       .update(articleFormat)
       .set({ draftPayload: null, draftFingerprint: null, draftRevisionId: null, draftUpdatedBy: actor.user.id, draftUpdatedAt: now, updatedAt: now })
       .where(and(eq(articleFormat.id, format.id), eq(articleFormat.siteId, actor.siteId)));
-    await deleteAssetIfUnreferenced(actor.siteId, draft.assetId, { requestId: options.requestId, db: tx });
-    return draft;
+    const cleanup = await deleteAssetIfUnreferenced(actor.siteId, draft.assetId, { db: tx });
+    return { ...draft, staleKey: cleanup.key };
   });
   if (removed) {
+    await deleteStoredFiles([removed.staleKey], { requestId: options.requestId });
     log.info('media.remove', { msg: 'audio draft removed', request_id: options.requestId, article_id: articleId, asset_id: removed.assetId, user_id: actor.user.id });
   }
   return getListenState(actor.siteId, articleId);

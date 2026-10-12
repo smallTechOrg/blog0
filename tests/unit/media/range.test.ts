@@ -20,6 +20,16 @@ describe('parseRange — satisfiable forms', () => {
     expect(parseRange('bytes=0-999999999999', SIZE)).toEqual({ start: 0, end: 999 });
   });
 
+  it('bytes=a-b with b beyond 2^53 still clamps to size-1 (206), not ignored', () => {
+    expect(parseRange('bytes=0-99999999999999999999', SIZE)).toEqual({ start: 0, end: 999 });
+    expect(parseRange('bytes=0-9007199254740993', SIZE)).toEqual({ start: 0, end: 999 });
+    expect(parseRange('bytes=10-99999999999999999999999999999999', SIZE)).toEqual({ start: 10, end: 999 });
+  });
+
+  it('bytes=-n with n beyond 2^53 covers the whole object', () => {
+    expect(parseRange('bytes=-99999999999999999999', SIZE)).toEqual({ start: 0, end: 999 });
+  });
+
   it('bytes=a- runs to the end', () => {
     expect(parseRange('bytes=0-', SIZE)).toEqual({ start: 0, end: 999 });
     expect(parseRange('bytes=990-', SIZE)).toEqual({ start: 990, end: 999 });
@@ -77,7 +87,8 @@ describe('parseRange — ignored (null → 200 full)', () => {
     ['float', 'bytes=1.5-2'],
     ['hex', 'bytes=0x1-2'],
     ['plus sign', 'bytes=+1-2'],
-    ['unsafe integer', 'bytes=99999999999999999999-'],
+    ['unsafe integer start', 'bytes=99999999999999999999-'],
+    ['unsafe integer start with end', 'bytes=99999999999999999999-99999999999999999999'],
     ['trailing garbage', 'bytes=0-1x'],
   ])('%s', (_label, header) => {
     expect(parseRange(header, SIZE)).toBeNull();

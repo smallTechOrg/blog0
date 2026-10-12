@@ -27,6 +27,9 @@ function devOrigins(): string[] {
 }
 
 const nextConfig: NextConfig = {
+  // BLOG0_DIST_DIR: a separate build directory (e.g. `.next-gate`) so a gate/CI `pnpm build` never
+  // overwrites the `.next` a running `pnpm start` is serving. `pnpm start` must use the same value.
+  distDir: (process.env.BLOG0_DIST_DIR ?? '').trim() || '.next',
   // Loaded from node_modules at runtime, never bundled: native binaries (argon2), large grammars
   // (shiki), the postgres driver, and PGlite (a WASM binary + data files read from its package dir).
   serverExternalPackages: ['@node-rs/argon2', 'shiki', 'postgres', '@electric-sql/pglite'],

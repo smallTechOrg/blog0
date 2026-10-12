@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export const POST = withApi(
   { auth: 'admin', body: revisionBody, summarizeInput: (b) => ({ revisionId: b.revisionId }), summarizeOutput: summarizeArticle },
-  async ({ auth, params, body }): Promise<PublishResponse> => ({
-    article: await publishArticle(actorOf(auth), idParam(params), body.revisionId),
+  async ({ auth, params, body, requestId }): Promise<PublishResponse> => ({
+    article: await publishArticle(actorOf(auth), idParam(params), body.revisionId, new Date(), { requestId }),
   }),
 );

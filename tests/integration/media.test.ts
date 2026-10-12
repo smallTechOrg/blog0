@@ -12,12 +12,13 @@ import { POST as uploadImageRoute } from '@/app/api/admin/uploads/images/route';
 import { DELETE as mediaDelete, GET as mediaGet, HEAD as mediaHead, POST as mediaPost } from '@/app/media/[...key]/route';
 import type { Envelope, Err } from '@/lib/api/envelope';
 import { createArticle, type ActorContext } from '@/server/articles/service';
+import { renderArticle } from '@/server/content';
 import { resetConfigForTests } from '@/server/config';
 import { closeDb, getDb, initDb, resetDbForTests } from '@/server/db/client';
 import { runMigrations } from '@/server/db/migrate';
 import { articleFormat, mediaAsset } from '@/server/db/schema';
 import { ApiError, MULTIPART_OVERHEAD_BYTES, precheckContentLength } from '@/server/http/api';
-import { deleteAssetIfUnreferenced, isStorageKeyReferenced } from '@/server/media/cleanup';
+import { deleteAssetIfUnreferenced, deleteStoredFiles, isStorageKeyReferenced } from '@/server/media/cleanup';
 import { cleanOriginalFilename } from '@/server/media/ingest';
 import { probeImage } from '@/server/media/image-probe';
 import { resetLlmClientForTests } from '@/server/llm';
@@ -250,6 +251,26 @@ describe('POST /api/admin/uploads/images', () => {
     expect(withCaption.markdown).toBe(`![](/media/${withCaption.asset.key} "A \\"quoted\\" caption")`);
     const blankCaption = await uploadPng({ alt: 'a', caption: '   ' });
     expect(blankCaption.markdown).toBe(`![a](/media/${blankCaption.asset.key})`);
+  });
+
+  it('markdown snippet: newlines collapse to spaces; \\ [ ] escaped in alt, \\ " escaped in caption; it renders back to the typed text', async () => {
+    const alt = 'Line one\nline two [see] C:\\dir';
+    const caption = 'A "q"\r\nnext C:\\path';
+    const { markdown, asset } = await uploadPng({ alt, caption });
+    const url = `/media/${asset.key}`;
+    expect(markdown).toBe(`![Line one line two \\[see\\] C:\\\\dir](${url} "A \\"q\\" next C:\\\\path")`);
+    expect(markdown).not.toMatch(/[\r\n]/);
+
+    // Round trip through the article renderer: one figure, alt + caption exactly as typed (one line).
+    const rendered = await renderArticle({ title: 'T', dek: '', bodyMd: `Before.\n\n${markdown}\n\nAfter.` });
+    const out = rendered.blocks.map((b) => (b.kind === 'html' ? b.html : '')).join('\n');
+    expect(out).toContain(`src="${url}"`);
+    expect(out).toContain('alt="Line one line two [see] C:\\dir"');
+    expect(out).toContain('<figcaption>A "q" next C:\\path</figcaption>');
+
+    // Alt only, with a trailing backslash that would otherwise escape the closing bracket.
+    const { markdown: altOnly, asset: a2 } = await uploadPng({ alt: 'ends with \\' });
+    expect(altOnly).toBe(`![ends with \\\\](/media/${a2.key})`);
   });
 
   it('sample.svg → 415 UNSUPPORTED_MEDIA naming SVG; no row, no file', async () => {
@@ -551,15 +572,34 @@ describe('GET / HEAD /media/[...key]', () => {
 
 // ---------------------------------------------------------------------------------------------
 
-describe('deleteAssetIfUnreferenced', () => {
-  it('deletes the row and the file when no article_format payload references the key; idempotent', async () => {
+describe('deleteAssetIfUnreferenced + deleteStoredFiles', () => {
+  it('deletes the row (returning the key) when no payload references it; the file goes only via deleteStoredFiles; idempotent', async () => {
     const { asset } = await uploadPng();
     expect(await isStorageKeyReferenced(writer.user.siteId, asset.key)).toBe(false);
-    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toBe('deleted');
+    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toEqual({ outcome: 'deleted', key: asset.key });
     expect(await getDb().select().from(mediaAsset)).toEqual([]);
+    expect(existsSync(diskPath(asset.key))).toBe(true); // row gone, file still there until the caller deletes it
+    await deleteStoredFiles([asset.key, null]);
     expect(existsSync(diskPath(asset.key))).toBe(false);
-    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toBe('missing');
-    expect(await deleteAssetIfUnreferenced(writer.user.siteId, 'not-a-uuid')).toBe('missing');
+    await deleteStoredFiles([asset.key]); // a missing file resolves
+    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toEqual({ outcome: 'missing', key: null });
+    expect(await deleteAssetIfUnreferenced(writer.user.siteId, 'not-a-uuid')).toEqual({ outcome: 'missing', key: null });
+  });
+
+  it('a rolled-back transaction keeps both the row and the file', async () => {
+    const { asset } = await uploadPng();
+    let staleKey: string | null = null;
+    await expect(
+      getDb().transaction(async (tx) => {
+        const cleanup = await deleteAssetIfUnreferenced(writer.user.siteId, asset.id, { db: tx });
+        expect(cleanup.outcome).toBe('deleted');
+        staleKey = cleanup.key;
+        throw new Error('boom after cleanup');
+      }),
+    ).rejects.toThrow('boom after cleanup');
+    expect(staleKey).toBe(asset.key);
+    expect((await getDb().select().from(mediaAsset)).map((r) => r.id)).toEqual([asset.id]);
+    expect(existsSync(diskPath(asset.key))).toBe(true);
   });
 
   it('keeps the row and the file while a draft or published payload still references the key', async () => {
@@ -571,20 +611,19 @@ describe('deleteAssetIfUnreferenced', () => {
       .returning();
 
     expect(await isStorageKeyReferenced(writer.user.siteId, asset.key)).toBe(true);
-    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toBe('referenced');
+    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toEqual({ outcome: 'referenced', key: null });
     expect(existsSync(diskPath(asset.key))).toBe(true);
 
     await getDb().update(articleFormat).set({ draftPayload: null, publishedPayload: { audio: { key: asset.key } } }).where(eq(articleFormat.id, fmt.id));
-    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toBe('referenced');
+    expect((await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).outcome).toBe('referenced');
 
     await getDb().update(articleFormat).set({ publishedPayload: { audio: { key: 'blog0/audio/2026/10/00000000-0000-4000-8000-000000000000.mp3' } } }).where(eq(articleFormat.id, fmt.id));
-    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toBe('deleted');
-    expect(existsSync(diskPath(asset.key))).toBe(false);
+    expect(await deleteAssetIfUnreferenced(writer.user.siteId, asset.id)).toEqual({ outcome: 'deleted', key: asset.key });
   });
 
   it('never deletes across sites', async () => {
     const { asset } = await uploadPng();
-    expect(await deleteAssetIfUnreferenced(UUID, asset.id)).toBe('missing');
+    expect((await deleteAssetIfUnreferenced(UUID, asset.id)).outcome).toBe('missing');
     expect(existsSync(diskPath(asset.key))).toBe(true);
   });
 });

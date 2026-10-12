@@ -2,6 +2,8 @@
 // Loads .env via @next/env, then runs `next <dev|start> -p ${BLOG0_PORT || 3410}` and forwards signals.
 // Usage (from the repo root): pnpm dev | pnpm start   (designer mode: pnpm dev:design, which ends here)
 // `start` refuses an absent/empty BLOG0_DATABASE_URL (no silent PGlite in production).
+// BLOG0_DIST_DIR (shell or .env) reaches next.config.ts `distDir` through the inherited env, so
+// `BLOG0_DIST_DIR=.next-gate pnpm start` serves the build made by `BLOG0_DIST_DIR=.next-gate pnpm build`.
 // `pnpm dev` is the hot-reload server (Turbopack). Open it as http://localhost:<port>; 127.0.0.1 and
 // this machine's LAN addresses are allowed by next.config.ts `allowedDevOrigins` (without that, the
 // HMR socket was refused and the page fully reloaded every ~40 s — the Phase 1 "reload loop").

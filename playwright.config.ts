@@ -32,6 +32,8 @@ export default defineConfig({
   webServer: externalBaseUrl
     ? undefined
     : {
+        // Inherits process.env (Playwright merges `env` over it), so BLOG0_DIST_DIR=.next-gate
+        // pnpm test:e2e serves the matching gate build instead of `.next`.
         command: 'pnpm start',
         port: Number(E2E_PORT),
         env: {

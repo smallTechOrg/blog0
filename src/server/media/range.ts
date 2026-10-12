@@ -15,12 +15,21 @@ function toInt(digits: string): number | null {
   return Number.isSafeInteger(n) ? n : NaN;
 }
 
+/** A last-byte-pos beyond 2^53 is still a valid (huge) number: it clamps to size−1 like any other. */
+function toEnd(digits: string): number | null {
+  if (digits === '') return null;
+  const n = Number(digits);
+  return Number.isSafeInteger(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
 export function parseRange(header: string | null | undefined, size: number): RangeResult {
   if (!header) return null;
   const m = RANGE_RE.exec(header.trim());
   if (!m) return null;
   const a = toInt(m[1]);
-  const b = toInt(m[2]);
+  // With a first-byte-pos the end only clamps; a suffix length (bytes=-n) beyond 2^53 also covers
+  // the whole object, so it saturates the same way.
+  const b = toEnd(m[2]);
   if (Number.isNaN(a) || Number.isNaN(b)) return null;
   if (a === null && b === null) return null;
 

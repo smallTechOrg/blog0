@@ -294,6 +294,7 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_DATABASE_URL` | no | `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (production engine; tests + deploy), or `pglite://<dir>` for the embedded engine; unset → embedded at `./var/pglite` with a boot notice (dev only: `pnpm start` refuses to boot without it — set `postgres://…`, or `pglite://<dir>` to opt in explicitly) |
 | `BLOG0_TEST_DATABASE_URL` | tests | — | `postgres://sai@localhost:5432/blog0_test`; must differ from the dev URL (tests refuse otherwise) |
 | `BLOG0_PORT` | no | `3410` | read by `scripts/serve.mjs` (after loading `.env`) |
+| `BLOG0_DIST_DIR` | no | `.next` | Next.js build dir (`next.config.ts` `distDir`): a separate build dir so gate builds don't overwrite a running server's build — e.g. `BLOG0_DIST_DIR=.next-gate pnpm build` then `BLOG0_DIST_DIR=.next-gate BLOG0_PORT=3447 pnpm start` (build and start with the same value; `.next-*/` is gitignored) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (login throttling keys on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored |

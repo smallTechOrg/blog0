@@ -35,10 +35,20 @@ function textField(form: FormData, name: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-/** `![alt](/media/<key>)` or `![alt](/media/<key> "caption")` — `"` in the caption escaped as `\"`. */
+/** Line breaks (and other control characters) would end the snippet early: collapse them to one space. */
+function oneLine(text: string): string {
+  return text.replace(/[\r\n\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').replace(/ {2,}/g, ' ').trim();
+}
+
+/**
+ * `![alt](/media/<key>)` or `![alt](/media/<key> "caption")`. Alt and caption are single-line;
+ * `\`, `[` and `]` in the alt and `\` and `"` in the caption are backslash-escaped so the snippet
+ * parses back to exactly the text the writer typed.
+ */
 export function imageMarkdown(alt: string, url: string, caption?: string): string {
-  const safeAlt = alt.replace(/[[\]]/g, '\\$&');
-  if (caption && caption.trim() !== '') return `![${safeAlt}](${url} "${caption.replace(/"/g, '\\"')}")`;
+  const safeAlt = oneLine(alt).replace(/[\\[\]]/g, '\\$&');
+  const title = caption === undefined ? '' : oneLine(caption);
+  if (title !== '') return `![${safeAlt}](${url} "${title.replace(/[\\"]/g, '\\$&')}")`;
   return `![${safeAlt}](${url})`;
 }
 

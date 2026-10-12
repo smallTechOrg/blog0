@@ -3,6 +3,8 @@ node_modules/
 
 # Next.js build output
 .next/
+# alternate build dirs (BLOG0_DIST_DIR, e.g. .next-gate)
+.next-*/
 out/
 next-env.d.ts
 *.tsbuildinfo
