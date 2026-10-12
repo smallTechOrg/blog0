@@ -27,10 +27,11 @@ export function formatAdapters(): FormatAdapter[] {
 export type { FormatAdapter, PublishCheck, StatusContext, ChipContext } from './types';
 export { GENERATION_STALE_MS, isGenerationActive } from './types';
 export { missingSlides } from './tldr';
-export { LISTEN_STALE, listenAdapter } from './listen';
+export { listenAdapter } from './listen';
 export {
   AUDIO_MIMES,
   listenAudioSchema,
+  listenBaseline,
   listenMarkSchema,
   listenPayloadSchema,
   readListenPayload,

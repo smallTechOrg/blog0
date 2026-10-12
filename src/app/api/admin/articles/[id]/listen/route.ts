@@ -3,8 +3,11 @@ import { actorOf, idParam } from '@/server/articles/http';
 import { withApi } from '@/server/http/api';
 import { getListenState, listenSaveBody, saveMarks } from '@/server/listen/sync';
 
-// GET /api/admin/articles/:id/listen — ListenStateDto (status, paragraphs, draft audio + marks, stale report, published summary).
-// PUT /api/admin/articles/:id/listen — save the tap-along sync (CONFLICT, LISTEN_NO_AUDIO, MARKS_INVALID).
+// GET /api/admin/articles/:id/listen — ListenStateDto (status missing|ready|text_changed, paragraphs,
+//     draft audio + stored marks, timing, upload baseline, published summary).
+// PUT /api/admin/articles/:id/listen — INTERNAL / aligner-facing (Phase 6 writes aligned marks here;
+//     no admin UI calls it): stores a complete mark set (CONFLICT, LISTEN_NO_AUDIO, MARKS_INVALID);
+//     never changes the status or the upload fingerprint.
 // Upload / remove the recording: …/audio (S3.2). Never calls the AI.
 
 export const dynamic = 'force-dynamic';
@@ -13,13 +16,14 @@ export const dynamic = 'force-dynamic';
 function summarizeListen(data: unknown): Record<string, unknown> {
   const d = data as { listen?: ListenLike } & ListenLike;
   const l: ListenLike = d?.listen ?? d;
-  return { listen_status: l?.status, paragraphs: l?.paragraphs?.length, marks: l?.marks?.length, has_audio: !!l?.audio };
+  return { listen_status: l?.status, paragraphs: l?.paragraphs?.length, marks: l?.marks?.length, timing: l?.timing, has_audio: !!l?.audio };
 }
 
 interface ListenLike {
   status?: string;
   paragraphs?: unknown[];
   marks?: unknown[];
+  timing?: string | null;
   audio?: unknown;
 }
 

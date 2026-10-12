@@ -1,9 +1,12 @@
 // Public (reader) queries — S1.7. Real blog0_test Postgres; articles are inserted directly with
 // the schema (the articles service is a separate slice) and rendered with the real pipeline.
+import { randomUUID } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
+import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { DECK_DISCLOSURE } from '@/lib/view-models';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
@@ -49,6 +52,8 @@ interface SeedArticle {
   laterEdit?: { title: string; bodyMd: string };
   /** When false the article never had a published revision. */
   withPublishedRevision?: boolean;
+  /** Listen payloads (raw jsonb): published and/or draft; omitted → no listen row. */
+  listen?: { published?: unknown; draft?: unknown };
 }
 
 let siteRow: SiteRow;
@@ -110,9 +115,11 @@ async function seedArticle(a: SeedArticle) {
   const dek = a.dek ?? 'A short standfirst.';
   const first = await insertRevision({ siteId, articleId: row.id, number: 1, title: a.title, dek, bodyMd: a.bodyMd, by });
   let currentId = first.rev.id;
+  let laterRendered: Awaited<ReturnType<typeof renderArticle>> | null = null;
   if (a.laterEdit) {
     const later = await insertRevision({ siteId, articleId: row.id, number: 2, title: a.laterEdit.title, dek, bodyMd: a.laterEdit.bodyMd, by });
     currentId = later.rev.id;
+    laterRendered = later.rendered;
   }
   const publishedRevisionId = a.withPublishedRevision === false ? null : first.rev.id;
   await getDb().update(article).set({ currentRevisionId: currentId, publishedRevisionId }).where(eq(article.id, row.id));
@@ -129,7 +136,30 @@ async function seedArticle(a: SeedArticle) {
         publishedAt: a.deck ? new Date() : null,
       });
   }
-  return { id: row.id, rendered: first.rendered };
+  if (a.listen) {
+    await getDb()
+      .insert(articleFormat)
+      .values({
+        siteId,
+        articleId: row.id,
+        kind: 'listen',
+        draftPayload: a.listen.draft ?? null,
+        publishedPayload: a.listen.published ?? null,
+        publishedRevisionId: a.listen.published ? first.rev.id : null,
+        publishedAt: a.listen.published ? new Date() : null,
+      });
+  }
+  return { id: row.id, rendered: first.rendered, laterRendered };
+}
+
+/** A Listen payload (spec/data.md) with no stored marks — what an upload + publish stores. */
+function listenPayload(durationMs: number, opts: { fp?: string; marks?: Array<{ pid: string; tMs: number }> } = {}) {
+  return {
+    audio: { assetId: randomUUID(), key: `blog0/audio/2026/10/${randomUUID()}.mp3`, mimeType: 'audio/mpeg', bytes: 1234, durationMs },
+    marks: opts.marks ?? [],
+    syncFingerprint: null,
+    uploadFingerprint: opts.fp ?? 'fp-upload',
+  };
 }
 
 /** A deck payload built from the rendered article's own sentences. */
@@ -439,5 +469,46 @@ describe('metadata', () => {
     const fallback = articleMetadata(noDeck, { wordmark: 'blog0', mode: 'tldr', publishedAt: day(9) });
     expect((fallback.openGraph as Record<string, unknown>).url).toBe('http://localhost:3410/p/og-no-deck');
     expect(pageTitle('Archive', 'blog0')).toBe('Archive — blog0');
+  });
+});
+
+describe('published Listen (Phase 3 fix: marks resolved per request)', () => {
+  it('estimates marks over the PUBLISHED revision paragraphs (never a later unpublished edit) with the published duration', async () => {
+    const published = listenPayload(185_000);
+    const { rendered, laterRendered } = await seedArticle({
+      slug: 'listen-est',
+      title: 'Listen est',
+      bodyMd: BODY_A,
+      laterEdit: { title: 'Listen est', bodyMd: BODY_A + '\n\nA brand new paragraph in the unpublished edit adds more words.' },
+      listen: { published, draft: listenPayload(60_000) },
+    });
+    const vm = await getPublishedArticle('listen-est');
+    expect(vm?.listen).not.toBeNull();
+    expect(vm!.listen!.timing).toBe('estimated');
+    expect(vm!.listen!.durationMs).toBe(185_000);
+    expect(vm!.listen!.audioUrl).toBe(`/media/${published.audio.key}`);
+    expect(vm!.listen!.marks).toEqual(estimateMarks(toTimedParagraphs(rendered.paragraphs), 185_000));
+    expect(vm!.listen!.marks.map((m) => m.pid)).toEqual(rendered.paragraphs.map((p) => p.pid));
+    expect(laterRendered!.paragraphs.length).toBeGreaterThan(rendered.paragraphs.length);
+    expect(vm!.listen!.marks).toHaveLength(rendered.paragraphs.length);
+    expect(vm!.times.listen).toBe(3); // round(185 000 / 60 000)
+
+    const card = (await listPublishedPostCards()).find((c) => c.slug === 'listen-est');
+    expect(card?.times.listen).toBe(3);
+  });
+
+  it('serves covering stored marks as synced; a draft-only Listen is invisible', async () => {
+    const pre = await renderArticle({ title: 'Synced one', dek: 'A short standfirst.', bodyMd: BODY_A });
+    const stored = pre.paragraphs.map((p, i) => ({ pid: p.pid, tMs: 1_000 + i * 20_000 }));
+    await seedArticle({ slug: 'listen-synced', title: 'Synced one', bodyMd: BODY_A, listen: { published: listenPayload(90_000, { marks: stored }) } });
+    await seedArticle({ slug: 'listen-draft-only', title: 'Draft only', bodyMd: BODY_B, listen: { draft: listenPayload(90_000) } });
+
+    const synced = await getPublishedArticle('listen-synced');
+    expect(synced?.listen).toMatchObject({ timing: 'synced', marks: stored });
+
+    const draftOnly = await getPublishedArticle('listen-draft-only');
+    expect(draftOnly?.listen).toBeNull();
+    expect(draftOnly?.times.listen).toBeNull();
+    expect((await listPublishedPostCards()).find((c) => c.slug === 'listen-draft-only')?.times.listen).toBeNull();
   });
 });

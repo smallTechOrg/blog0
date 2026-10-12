@@ -1,11 +1,13 @@
-// Listen sync API (S3.3) against real blog0_test: GET state, PUT marks (every MARKS_INVALID
-// reason, CONFLICT, LISTEN_NO_AUDIO), stale detection on paragraph edits, the LISTEN_STALE
-// publish guard with missingPids/orphanPids, re-sync, and the publish matrix (ready copies,
-// needs_sync leaves the published copy, no draft clears it). Listen never calls the LLM.
+// Listen state + aligner-facing sync API against real blog0_test (Phase 3 fix): upload ⇒ ready,
+// a paragraph text edit ⇒ text_changed (warning only — publish is NEVER blocked by Listen),
+// heading-only edits and reverts stay/return ready, re-upload re-baselines; PUT …/listen keeps its
+// validation contract (every MARKS_INVALID reason, CONFLICT, LISTEN_NO_AUDIO) and never changes the
+// status or uploadFingerprint; publish copies the draft whatever its status, or clears the
+// published copy with no draft. Listen never calls the LLM.
 //
-// The draft recording is seeded exactly as S3.2's ingest writes it (media_asset row + the
-// listen row's draft_payload); sync never touches storage, so no file is needed here. S3.6's
-// E2E covers the real upload → sync → publish journey through the audio route.
+// The draft recording is seeded exactly as the ingest writes it (media_asset row + the listen
+// row's draft_payload with uploadFingerprint = the current paragraphs fingerprint); sync never
+// touches storage, so no file is needed except in the real-route cases at the end.
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -18,11 +20,12 @@ import { PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
 import { POST as uploadRoute } from '@/app/api/admin/articles/[id]/audio/route';
 import { GET as listenGetRoute, PUT as listenPutRoute } from '@/app/api/admin/articles/[id]/listen/route';
 import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
-import type { ArticleDetailDto, ArticleListResponse, ArticleResponse, PublishBlockedDetails, UpdateArticleResponse } from '@/lib/api/dto';
+import type { ArticleDetailDto, ArticleListResponse, ArticleResponse, UpdateArticleResponse } from '@/lib/api/dto';
 import type { ListenMarkDto, ListenResponse, ListenStateDto, MarksInvalidDetails } from '@/lib/api/dto-phase3';
 import type { Envelope, Err } from '@/lib/api/envelope';
 import { getDb } from '@/server/db/client';
-import { aiGeneration, articleFormat, articleRevision, mediaAsset } from '@/server/db/schema';
+import { aiGeneration, article, articleFormat, articleRevision, mediaAsset } from '@/server/db/schema';
+import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { readListenPayload, type ListenPayload } from '@/server/formats/payload';
 import { getPublishedArticle } from '@/server/public/articles';
 import { getCurrentSite } from '@/server/site/current';
@@ -124,8 +127,24 @@ async function generationRows(articleId: string): Promise<number> {
   return Number(row.n);
 }
 
-/** Seeds a draft recording the way S3.2's ingest does (media_asset + listen draft, marks cleared). */
-async function seedAudio(articleId: string, opts: { durationMs?: number; ext?: 'mp3' | 'm4a'; who?: TestLogin } = {}) {
+async function currentParagraphsFingerprint(articleId: string): Promise<string> {
+  const [row] = await getDb()
+    .select({ fp: articleRevision.paragraphsFingerprint })
+    .from(article)
+    .innerJoin(articleRevision, eq(articleRevision.id, article.currentRevisionId))
+    .where(eq(article.id, articleId));
+  return row.fp;
+}
+
+/**
+ * Seeds a draft recording the way the ingest does (media_asset + listen draft, marks cleared,
+ * uploadFingerprint = the current paragraphs fingerprint). `legacy` writes a Phase 3 payload with
+ * no uploadFingerprint key (optionally with a syncFingerprint) to exercise the fallback.
+ */
+async function seedAudio(
+  articleId: string,
+  opts: { durationMs?: number; ext?: 'mp3' | 'm4a'; who?: TestLogin; legacy?: { syncFingerprint: string | null; marks?: ListenMarkDto[] } } = {},
+) {
   const site = await getCurrentSite();
   const durationMs = opts.durationMs ?? DURATION_MS;
   const ext = opts.ext ?? 'mp3';
@@ -146,15 +165,15 @@ async function seedAudio(articleId: string, opts: { durationMs?: number; ext?: '
       createdBy: (opts.who ?? writer).user.id,
     })
     .returning();
-  const payload: ListenPayload = {
-    audio: { assetId: asset.id, key, mimeType, bytes: asset.byteSize, durationMs },
-    marks: [],
-    syncFingerprint: null,
-  };
+  const audio = { assetId: asset.id, key, mimeType, bytes: asset.byteSize, durationMs } as ListenPayload['audio'];
+  const fp = await currentParagraphsFingerprint(articleId);
+  const payload: Record<string, unknown> = opts.legacy
+    ? { audio, marks: opts.legacy.marks ?? [], syncFingerprint: opts.legacy.syncFingerprint }
+    : { audio, marks: [], syncFingerprint: null, uploadFingerprint: fp };
   const values = {
     draftPayload: payload,
     draftRevisionId: null,
-    draftFingerprint: null,
+    draftFingerprint: opts.legacy ? opts.legacy.syncFingerprint : fp,
     draftUpdatedBy: (opts.who ?? writer).user.id,
     draftUpdatedAt: new Date(),
   };
@@ -162,7 +181,7 @@ async function seedAudio(articleId: string, opts: { durationMs?: number; ext?: '
     .insert(articleFormat)
     .values({ siteId: site.id, articleId, kind: 'listen', ...values })
     .onConflictDoUpdate({ target: [articleFormat.articleId, articleFormat.kind], set: values });
-  return payload.audio;
+  return audio;
 }
 
 /** Remove audio the way S3.2 does: draft payload cleared, row kept. */
@@ -175,6 +194,22 @@ async function clearDraft(articleId: string) {
 
 function marksFor(state: ListenStateDto, startMs = 800, stepMs = 2_500): ListenMarkDto[] {
   return state.paragraphs.map((p, i) => ({ pid: p.pid, tMs: startMs + i * stepMs }));
+}
+
+/** What readers get for these paragraphs when no stored marks cover them. */
+function expectedEstimate(paragraphs: ReadonlyArray<{ pid: string; text: string }>, durationMs: number) {
+  return estimateMarks(toTimedParagraphs(paragraphs), durationMs);
+}
+
+async function uploadFile(id: string, file: 'sample.mp3' | 'sample.m4a') {
+  const bytes = readFileSync(path.join(FIXTURES, file));
+  const form = new FormData();
+  form.set('file', new File([new Uint8Array(bytes)], file, { type: file.endsWith('mp3') ? 'audio/mpeg' : 'audio/mp4' }));
+  const res = await uploadRoute(
+    new Request(`${ORIGIN}/api/admin/articles/${id}/audio`, { method: 'POST', headers: { host: 'localhost:3410', origin: ORIGIN, cookie: writer.cookie }, body: form }),
+    { params: Promise.resolve({ id }) },
+  );
+  return { status: res.status, env: (await res.json()) as Envelope<ListenResponse> };
 }
 
 function editParagraph(bodyMd: string, text: string): string {
@@ -195,6 +230,9 @@ describe('GET /api/admin/articles/:id/listen', () => {
     expect(state.status).toBe('missing');
     expect(state.audio).toBeNull();
     expect(state.marks).toEqual([]);
+    expect(state.timing).toBeNull();
+    expect(state.uploadFingerprint).toBeNull();
+    expect(state.textChangedSinceUpload).toBe(false);
     expect(state.revisionId).toBe(a.currentRevision.id);
     expect(state.syncFingerprint).toBeNull();
     expect(state.published).toBeNull();
@@ -209,16 +247,19 @@ describe('GET /api/admin/articles/:id/listen', () => {
     expect(state.paragraphs[5].text).toBe('A quoted paragraph that is also read aloud.');
     expect(state.paragraphs[6].headingPath).toEqual(['How it works']);
     expect(state.paragraphs.every((p) => /^p-[0-9a-f]{8}(-\d+)?$/.test(p.pid))).toBe(true);
-    expect(state.missingPids).toEqual(state.paragraphs.map((p) => p.pid));
-    expect(state.orphanPids).toEqual([]);
+    expect(state).not.toHaveProperty('missingPids');
+    expect(state).not.toHaveProperty('orphanPids');
   });
 
-  it('is needs_sync with the draft recording and every paragraph missing after an upload', async () => {
+  it('is ready (estimated timing, upload baseline) with the draft recording right after an upload', async () => {
     const a = await createArticle();
     const audio = await seedAudio(a.id);
     const state = await listen(a.id);
 
-    expect(state.status).toBe('needs_sync');
+    expect(state.status).toBe('ready');
+    expect(state.timing).toBe('estimated');
+    expect(state.uploadFingerprint).toBe(await paragraphsFingerprint(a.currentRevision.id));
+    expect(state.textChangedSinceUpload).toBe(false);
     expect(state.audio).toMatchObject({
       assetId: audio.assetId,
       key: audio.key,
@@ -231,9 +272,9 @@ describe('GET /api/admin/articles/:id/listen', () => {
     });
     expect(new Date(state.audio!.uploadedAt).getTime()).toBeGreaterThan(0);
     expect(state.marks).toEqual([]);
-    expect(state.missingPids).toEqual(state.paragraphs.map((p) => p.pid));
-    expect(state.orphanPids).toEqual([]);
-    expect((await deskChip(a.id, 'listen')).status).toBe('needs_sync');
+    expect(state.syncedAt).toBeNull();
+    expect(state.syncedBy).toBeNull();
+    expect((await deskChip(a.id, 'listen')).status).toBe('ready');
   });
 
   it('404s for an unknown article', async () => {
@@ -243,23 +284,25 @@ describe('GET /api/admin/articles/:id/listen', () => {
   });
 });
 
-describe('PUT /api/admin/articles/:id/listen — save sync', () => {
-  it('saves a complete increasing set → ready with the revision paragraphs fingerprint; a second GET returns the same marks', async () => {
+describe('PUT /api/admin/articles/:id/listen — aligner-facing marks storage', () => {
+  it('stores a complete increasing set → 200; status and uploadFingerprint unchanged; timing becomes synced; a second GET returns the same marks', async () => {
     const a = await createArticle();
     await seedAudio(a.id);
     const before = await listen(a.id);
+    const fp = await paragraphsFingerprint(a.currentRevision.id);
     const marks = marksFor(before);
 
     const res = await putMarks(a.id, { revisionId: a.currentRevision.id, marks });
     expect(res.status).toBe(200);
     const saved = data(res.env).listen;
+    expect(saved.status).toBe(before.status);
     expect(saved.status).toBe('ready');
+    expect(saved.uploadFingerprint).toBe(before.uploadFingerprint);
+    expect(saved.timing).toBe('synced');
     expect(saved.marks).toEqual(marks);
-    expect(saved.syncFingerprint).toBe(await paragraphsFingerprint(a.currentRevision.id));
+    expect(saved.syncFingerprint).toBe(fp);
     expect(saved.syncedBy).toBe('Asha Writer');
     expect(saved.syncedAt).not.toBeNull();
-    expect(saved.missingPids).toEqual([]);
-    expect(saved.orphanPids).toEqual([]);
     expect(saved.published).toBeNull();
 
     const again = await listen(a.id);
@@ -267,12 +310,32 @@ describe('PUT /api/admin/articles/:id/listen — save sync', () => {
     expect(again.status).toBe('ready');
 
     const row = (await listenRow(a.id))!;
-    expect(row.draftFingerprint).toBe(saved.syncFingerprint);
+    expect(row.draftFingerprint).toBe(fp); // the upload baseline, untouched by the PUT
     expect(row.draftRevisionId).toBe(a.currentRevision.id);
-    expect(readListenPayload(row.draftPayload)?.marks).toEqual(marks);
+    const payload = readListenPayload(row.draftPayload)!;
+    expect(payload.marks).toEqual(marks);
+    expect(payload.uploadFingerprint).toBe(fp);
 
     expect(await deskChip(a.id, 'listen')).toEqual({ kind: 'listen', status: 'ready', published: false, hasUnpublishedChanges: false });
     expect(await generationRows(a.id)).toBe(0);
+  });
+
+  it('a PUT while text_changed stores the marks but keeps status text_changed and the upload baseline', async () => {
+    const a = await createArticle();
+    await seedAudio(a.id);
+    const uploaded = await listen(a.id);
+    const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: editParagraph(BODY, uploaded.paragraphs[1].text) });
+    const changed = await listen(a.id);
+    expect(changed.status).toBe('text_changed');
+
+    const res = await putMarks(a.id, { revisionId: saved.article.currentRevision.id, marks: marksFor(changed) });
+    expect(res.status).toBe(200);
+    const after = data(res.env).listen;
+    expect(after.status).toBe('text_changed');
+    expect(after.textChangedSinceUpload).toBe(true);
+    expect(after.uploadFingerprint).toBe(uploaded.uploadFingerprint);
+    expect(after.syncFingerprint).toBe(await paragraphsFingerprint(saved.article.currentRevision.id));
+    expect((await listenRow(a.id))!.draftFingerprint).toBe(uploaded.uploadFingerprint);
   });
 
   it('refuses every invalid set with 422 MARKS_INVALID listing each reason, and leaves the draft untouched', async () => {
@@ -281,6 +344,7 @@ describe('PUT /api/admin/articles/:id/listen — save sync', () => {
     const state = await listen(a.id);
     const good = marksFor(state);
     const rev = a.currentRevision.id;
+    const rowBefore = await listenRow(a.id);
 
     const attempt = async (marks: ListenMarkDto[]) => {
       const res = await putMarks(a.id, { revisionId: rev, marks });
@@ -318,9 +382,10 @@ describe('PUT /api/admin/articles/:id/listen — save sync', () => {
     expect(await attempt(fractional)).toEqual([{ code: 'OUT_OF_RANGE', pid: good[0].pid, index: 0 }]);
 
     const after = await listen(a.id);
-    expect(after.status).toBe('needs_sync');
+    expect(after.status).toBe('ready');
     expect(after.marks).toEqual([]);
-    expect((await draftPayload(a.id))?.marks).toEqual([]);
+    expect(after.timing).toBe('estimated');
+    expect(await listenRow(a.id)).toEqual(rowBefore);
   });
 
   it('rejects malformed bodies with 400 VALIDATION_FAILED', async () => {
@@ -355,7 +420,7 @@ describe('PUT /api/admin/articles/:id/listen — save sync', () => {
     expect(data(ok.env).listen.status).toBe('ready');
   });
 
-  it('is ignored by the LLM ledger: syncing creates no ai_generation row', async () => {
+  it('is ignored by the LLM ledger: storing marks creates no ai_generation row', async () => {
     const a = await createArticle();
     await seedAudio(a.id);
     const state = await listen(a.id);
@@ -364,170 +429,141 @@ describe('PUT /api/admin/articles/:id/listen — save sync', () => {
   });
 });
 
-describe('stale detection + publish guard', () => {
-  async function readyArticle() {
+describe('text_changed warning + publish (Listen never blocks)', () => {
+  it('publish copies the uploaded draft (no marks) to the published Listen; readers get estimated marks', async () => {
     const a = await createArticle();
     const audio = await seedAudio(a.id);
-    const state = await listen(a.id);
-    const marks = marksFor(state);
-    const res = await putMarks(a.id, { revisionId: a.currentRevision.id, marks });
-    expect(data(res.env).listen.status).toBe('ready');
-    return { a, audio, state, marks };
-  }
+    const fp = await paragraphsFingerprint(a.currentRevision.id);
 
-  it('publish copies a ready draft to the published Listen; the public article is published', async () => {
-    const { a, audio, marks } = await readyArticle();
     const res = await publish(a.id, a.currentRevision.id);
     expect(res.status).toBe(200);
-    const article = data(res.env).article;
-    expect(article.status).toBe('published');
-    expect(article.formats.find((f) => f.kind === 'listen')).toEqual({
-      kind: 'listen',
-      status: 'ready',
-      published: true,
-      hasUnpublishedChanges: false,
-    });
+    const detail = data(res.env).article;
+    expect(detail.status).toBe('published');
+    expect(detail.formats.find((f) => f.kind === 'listen')).toEqual({ kind: 'listen', status: 'ready', published: true, hasUnpublishedChanges: false });
 
     const row = (await listenRow(a.id))!;
     const published = readListenPayload(row.publishedPayload)!;
-    expect(published.marks).toEqual(marks);
     expect(published.audio.key).toBe(audio.key);
-    expect(published.syncFingerprint).toBe(await paragraphsFingerprint(a.currentRevision.id));
-    expect(row.publishedFingerprint).toBe(published.syncFingerprint);
+    expect(published.marks).toEqual([]);
+    expect(published.uploadFingerprint).toBe(fp);
+    expect(row.publishedFingerprint).toBe(fp);
     expect(row.publishedRevisionId).toBe(a.currentRevision.id);
     expect(row.publishedAt).not.toBeNull();
 
     const state = await listen(a.id);
-    expect(state.published).toMatchObject({ durationMs: DURATION_MS, markCount: marks.length, matchesCurrentText: true });
-    expect(await getPublishedArticle(a.slug)).not.toBeNull();
+    expect(state.published).toEqual({ durationMs: DURATION_MS, publishedAt: row.publishedAt!.toISOString(), sameAudioAsDraft: true });
+
+    const reader = (await getPublishedArticle(a.slug))!;
+    expect(reader.listen?.timing).toBe('estimated');
+    expect(reader.listen?.marks).toEqual(expectedEstimate(state.paragraphs, DURATION_MS));
+    expect(reader.times.listen).toBe(1);
   });
 
-  it('editing one paragraph → stale with exactly the new pid missing and the old pid orphaned; publish blocked with LISTEN_STALE; the published Listen keeps serving', async () => {
-    const { a, state, marks } = await readyArticle();
+  it('editing one paragraph → text_changed (warning) with the upload baseline kept; publish → 200 and the live Listen is re-estimated over the new text', async () => {
+    const a = await createArticle();
+    const audio = await seedAudio(a.id);
     await publish(a.id, a.currentRevision.id);
-    const before = await publishedPayload(a.id);
+    const uploaded = await listen(a.id);
 
-    const target = state.paragraphs[2];
+    const target = uploaded.paragraphs[2];
     const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: editParagraph(BODY, target.text) });
     expect(saved.revisionCreated).toBe(true);
 
-    const stale = await listen(a.id);
-    expect(stale.status).toBe('stale');
-    expect(stale.revisionId).toBe(saved.article.currentRevision.id);
-    const newPid = stale.paragraphs[2].pid;
+    const changed = await listen(a.id);
+    expect(changed.status).toBe('text_changed');
+    expect(changed.textChangedSinceUpload).toBe(true);
+    expect(changed.uploadFingerprint).toBe(uploaded.uploadFingerprint);
+    expect(changed.timing).toBe('estimated');
+    const newPid = changed.paragraphs[2].pid;
     expect(newPid).not.toBe(target.pid);
-    expect(stale.missingPids).toEqual([newPid]);
-    expect(stale.orphanPids).toEqual([target.pid]);
-    expect(stale.marks).toEqual(marks); // kept verbatim, including the orphaned one
-    expect(stale.published?.matchesCurrentText).toBe(false);
-    expect(await deskChip(a.id, 'listen')).toMatchObject({ status: 'stale', published: true });
+    expect(await deskChip(a.id, 'listen')).toMatchObject({ status: 'text_changed', published: true });
 
-    const blocked = await publish(a.id, saved.article.currentRevision.id);
-    expect(blocked.status).toBe(422);
-    const e = err(blocked.env);
-    expect(e.code).toBe('PUBLISH_BLOCKED');
-    const reasons = (e.details as PublishBlockedDetails).reasons;
-    expect(reasons).toEqual([expect.objectContaining({ code: 'LISTEN_STALE', missingPids: [newPid], orphanPids: [target.pid] })]);
-    expect(reasons[0].message).toMatch(/text changed/i);
+    const res = await publish(a.id, saved.article.currentRevision.id);
+    expect(res.status).toBe(200);
+    expect(res.env.ok).toBe(true);
+    expect(data(res.env).article.formats.find((f) => f.kind === 'listen')).toMatchObject({ status: 'text_changed', published: true });
 
-    expect(await publishedPayload(a.id)).toEqual(before);
-    const article = await getPublishedArticle(a.slug);
-    expect(article).not.toBeNull();
+    const payload = (await publishedPayload(a.id))!;
+    expect(payload.audio.key).toBe(audio.key);
+    const reader = (await getPublishedArticle(a.slug))!;
+    expect(reader.listen?.audioUrl).toBe(`/media/${audio.key}`);
+    expect(reader.listen?.timing).toBe('estimated');
+    const pids = reader.listen!.marks.map((m) => m.pid);
+    expect(pids).toEqual(changed.paragraphs.map((p) => p.pid));
+    expect(pids).toContain(newPid);
+    expect(pids).not.toContain(target.pid);
+    expect(reader.listen?.marks).toEqual(expectedEstimate(changed.paragraphs, DURATION_MS));
     expect(await generationRows(a.id)).toBe(0);
   });
 
-  it('editing only a heading leaves Listen ready (paragraph set unchanged)', async () => {
-    const { a, marks } = await readyArticle();
-    const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: BODY.replace('## Why decks', '## Why decks matter') });
-    expect(saved.revisionCreated).toBe(true);
-    const state = await listen(a.id);
-    expect(state.status).toBe('ready');
-    expect(state.marks).toEqual(marks);
-    expect(state.missingPids).toEqual([]);
-    expect(state.orphanPids).toEqual([]);
-    expect(state.syncFingerprint).toBe(await paragraphsFingerprint(saved.article.currentRevision.id));
-    const res = await publish(a.id, saved.article.currentRevision.id);
-    expect(res.status).toBe(200);
-  });
-
-  it('re-syncing a stale draft with a complete set → ready; publish → 200 with the new marks and current key', async () => {
-    const { a, state } = await readyArticle();
-    await publish(a.id, a.currentRevision.id);
-    const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: editParagraph(BODY, state.paragraphs[0].text) });
-    const stale = await listen(a.id);
-    expect(stale.status).toBe('stale');
-
-    // Partial re-sync (orphan still present, new pid missing) is refused.
-    const partial = await putMarks(a.id, { revisionId: saved.article.currentRevision.id, marks: stale.marks });
-    expect(partial.status).toBe(422);
-    expect((err(partial.env).details as MarksInvalidDetails).reasons).toEqual([
-      { code: 'UNKNOWN_PID', pid: state.paragraphs[0].pid, index: 0 },
-      { code: 'MISSING_PID', pid: stale.paragraphs[0].pid },
-    ]);
-
-    const newMarks = marksFor(stale, 1_200, 2_400);
-    const res = await putMarks(a.id, { revisionId: saved.article.currentRevision.id, marks: newMarks });
-    expect(res.status).toBe(200);
-    expect(data(res.env).listen.status).toBe('ready');
-    expect(data(res.env).listen.orphanPids).toEqual([]);
-
-    const published = await publish(a.id, saved.article.currentRevision.id);
-    expect(published.status).toBe(200);
-    const payload = (await publishedPayload(a.id))!;
-    expect(payload.marks).toEqual(newMarks);
-    expect(payload.audio.key).toBe(stale.audio!.key);
-    expect(payload.syncFingerprint).toBe(await paragraphsFingerprint(saved.article.currentRevision.id));
-  });
-
-  it('publish with audio but no marks: allowed on a never-published Listen (not offered), allowed when the live Listen still matches (unchanged), blocked when the text changed', async () => {
+  it('editing only a heading leaves Listen ready; reverting a paragraph edit returns to ready', async () => {
     const a = await createArticle();
     await seedAudio(a.id);
+    const headingOnly = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: BODY.replace('## Why decks', '## Why decks matter') });
+    expect(headingOnly.revisionCreated).toBe(true);
+    expect((await listen(a.id)).status).toBe('ready');
+    expect((await publish(a.id, headingOnly.article.currentRevision.id)).status).toBe(200);
 
-    // 1. Never published Listen, needs_sync → publish ok, nothing published for Listen.
-    const first = await publish(a.id, a.currentRevision.id);
-    expect(first.status).toBe(200);
-    expect(await publishedPayload(a.id)).toBeNull();
-    expect(data(first.env).article.formats.find((f) => f.kind === 'listen')).toEqual({
-      kind: 'listen',
-      status: 'needs_sync',
-      published: false,
-      hasUnpublishedChanges: true,
-    });
-    const publicArticle = await getPublishedArticle(a.slug);
-    expect(publicArticle?.times.listen ?? null).toBeNull();
-
-    // 2. Sync + publish, then a new upload (marks cleared) with the text unchanged → publish ok, published Listen unchanged.
     const state = await listen(a.id);
-    await putMarks(a.id, { revisionId: a.currentRevision.id, marks: marksFor(state) });
+    const edited = await save(a.id, {
+      baseRevisionId: headingOnly.article.currentRevision.id,
+      bodyMd: editParagraph(BODY.replace('## Why decks', '## Why decks matter'), state.paragraphs[0].text),
+    });
+    expect((await listen(a.id)).status).toBe('text_changed');
+    const reverted = await save(a.id, { baseRevisionId: edited.article.currentRevision.id, bodyMd: BODY.replace('## Why decks', '## Why decks matter') });
+    expect(reverted.revisionCreated).toBe(true);
+    const back = await listen(a.id);
+    expect(back.status).toBe('ready');
+    expect(back.textChangedSinceUpload).toBe(false);
+  });
+
+  it('legacy Phase 3 payloads (no uploadFingerprint) fall back to syncFingerprint for the warning; a PUT never changes their status', async () => {
+    const a = await createArticle();
+    const fp = await paragraphsFingerprint(a.currentRevision.id);
+    const paragraphs = (await listen(a.id)).paragraphs;
+    await seedAudio(a.id, { legacy: { syncFingerprint: fp, marks: paragraphs.map((p, i) => ({ pid: p.pid, tMs: 800 + i * 2_500 })) } });
+
+    const legacy = await listen(a.id);
+    expect(legacy.status).toBe('ready');
+    expect(legacy.uploadFingerprint).toBe(fp);
+    expect(legacy.timing).toBe('synced');
+
+    const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: editParagraph(BODY, paragraphs[3].text) });
+    const changed = await listen(a.id);
+    expect(changed.status).toBe('text_changed');
+    expect(changed.timing).toBe('estimated'); // the stored marks no longer cover the text
+
+    const res = await putMarks(a.id, { revisionId: saved.article.currentRevision.id, marks: marksFor(changed) });
+    expect(res.status).toBe(200);
+    expect(data(res.env).listen.status).toBe('text_changed');
+    expect(data(res.env).listen.uploadFingerprint).toBe(fp);
+    expect(data(res.env).listen.timing).toBe('synced');
+  });
+
+  it('a new upload after publishing replaces only the draft (sameAudioAsDraft false, unpublished changes); publish then copies it', async () => {
+    const a = await createArticle();
+    const first = await seedAudio(a.id);
     await publish(a.id, a.currentRevision.id);
     const live = await publishedPayload(a.id);
-    expect(live?.marks).toHaveLength(state.paragraphs.length);
-    const replacement = await seedAudio(a.id, { ext: 'm4a' });
-    expect((await listen(a.id)).status).toBe('needs_sync');
-    expect(await deskChip(a.id, 'listen')).toMatchObject({ status: 'needs_sync', published: true, hasUnpublishedChanges: true });
-    const second = await publish(a.id, a.currentRevision.id);
-    expect(second.status).toBe(200);
-    expect(await publishedPayload(a.id)).toEqual(live);
-    expect((await publishedPayload(a.id))!.audio.key).not.toBe(replacement.key);
 
-    // 3. The text changed while the draft is unsynced → the live reading no longer matches → blocked.
-    const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: editParagraph(BODY, state.paragraphs[1].text) });
-    const blocked = await publish(a.id, saved.article.currentRevision.id);
-    expect(blocked.status).toBe(422);
-    const reasons = (err(blocked.env).details as PublishBlockedDetails).reasons;
-    expect(reasons).toHaveLength(1);
-    expect(reasons[0].code).toBe('LISTEN_STALE');
-    expect(reasons[0].message).toMatch(/live reading no longer matches/i);
-    expect(reasons[0].orphanPids).toEqual([state.paragraphs[1].pid]);
-    expect(reasons[0].missingPids).toHaveLength(1);
+    const replacement = await seedAudio(a.id, { ext: 'm4a', durationMs: 30_000 });
+    const state = await listen(a.id);
+    expect(state.status).toBe('ready');
+    expect(state.published?.sameAudioAsDraft).toBe(false);
+    expect(await deskChip(a.id, 'listen')).toMatchObject({ status: 'ready', published: true, hasUnpublishedChanges: true });
     expect(await publishedPayload(a.id)).toEqual(live);
+    expect((await getPublishedArticle(a.slug))?.listen?.audioUrl).toBe(`/media/${first.key}`);
+
+    expect((await publish(a.id, a.currentRevision.id)).status).toBe(200);
+    expect((await publishedPayload(a.id))!.audio.key).toBe(replacement.key);
+    const reader = (await getPublishedArticle(a.slug))!;
+    expect(reader.listen?.durationMs).toBe(30_000);
+    expect(reader.listen?.marks).toEqual(expectedEstimate(state.paragraphs, 30_000));
   });
 
   it('publish with no Listen draft at all clears the published Listen', async () => {
     const a = await createArticle();
     await seedAudio(a.id);
-    const state = await listen(a.id);
-    await putMarks(a.id, { revisionId: a.currentRevision.id, marks: marksFor(state) });
     await publish(a.id, a.currentRevision.id);
     expect(await publishedPayload(a.id)).not.toBeNull();
 
@@ -548,38 +584,59 @@ describe('stale detection + publish guard', () => {
       published: false,
       hasUnpublishedChanges: false,
     });
+    expect((await getPublishedArticle(a.slug))?.listen).toBeNull();
   });
 
-  it('survives a reload: the saved marks come back from the database on a fresh GET after other writes', async () => {
-    const { a, marks } = await readyArticle();
+  it('survives a reload: the stored marks and baseline come back from the database on a fresh GET after other writes', async () => {
+    const a = await createArticle();
+    await seedAudio(a.id);
+    const marks = marksFor(await listen(a.id));
+    await putMarks(a.id, { revisionId: a.currentRevision.id, marks });
     await save(a.id, { baseRevisionId: a.currentRevision.id, topic: 'Changed topic' });
     const state = await listen(a.id);
     expect(state.status).toBe('ready');
     expect(state.marks).toEqual(marks);
+    expect(state.uploadFingerprint).toBe(await paragraphsFingerprint(a.currentRevision.id));
   });
 });
 
-describe('through the real audio route (S3.2): upload → sync → publish', () => {
-  it('syncs a recording uploaded as multipart and publishes it with the stored key', async () => {
+describe('through the real audio route: upload ⇒ ready → (aligner PUT) → publish', () => {
+  it('uploads as multipart → ready with uploadFingerprint; a text edit then a re-upload re-baselines to ready', async () => {
+    resetStorage();
+    const a = await createArticle();
+    const up = await uploadFile(a.id, 'sample.mp3');
+    expect(up.status).toBe(200);
+    const uploaded = data(up.env).listen;
+    expect(uploaded.status).toBe('ready');
+    expect(uploaded.timing).toBe('estimated');
+    expect(uploaded.uploadFingerprint).toBe(await paragraphsFingerprint(a.currentRevision.id));
+    const row = (await listenRow(a.id))!;
+    expect(row.draftFingerprint).toBe(uploaded.uploadFingerprint);
+    expect(row.draftRevisionId).toBe(a.currentRevision.id);
+
+    const saved = await save(a.id, { baseRevisionId: a.currentRevision.id, bodyMd: editParagraph(BODY, uploaded.paragraphs[0].text) });
+    expect((await listen(a.id)).status).toBe('text_changed');
+
+    const again = await uploadFile(a.id, 'sample.mp3');
+    expect(again.status).toBe(200);
+    const rebased = data(again.env).listen;
+    expect(rebased.status).toBe('ready');
+    expect(rebased.uploadFingerprint).toBe(await paragraphsFingerprint(saved.article.currentRevision.id));
+    expect(rebased.uploadFingerprint).not.toBe(uploaded.uploadFingerprint);
+  });
+
+  it('stores aligner marks against the real recording and publishes them as synced timing', async () => {
     const storageDir = resetStorage();
     const known = JSON.parse(readFileSync(path.join(FIXTURES, 'sample.json'), 'utf8')) as { mp3: { durationMs: number; bytes: number } };
-    const bytes = readFileSync(path.join(FIXTURES, 'sample.mp3'));
     const a = await createArticle();
 
-    const form = new FormData();
-    form.set('file', new File([new Uint8Array(bytes)], 'sample.mp3', { type: 'audio/mpeg' }));
-    const res = await uploadRoute(
-      new Request(`${ORIGIN}/api/admin/articles/${a.id}/audio`, { method: 'POST', headers: { host: 'localhost:3410', origin: ORIGIN, cookie: writer.cookie }, body: form }),
-      { params: Promise.resolve({ id: a.id }) },
-    );
-    expect(res.status).toBe(200);
-    const uploaded = data((await res.json()) as Envelope<ListenResponse>).listen;
-    expect(uploaded.status).toBe('needs_sync');
+    const up = await uploadFile(a.id, 'sample.mp3');
+    expect(up.status).toBe(200);
+    const uploaded = data(up.env).listen;
     expect(uploaded.audio).toMatchObject({ mimeType: 'audio/mpeg', bytes: known.mp3.bytes, originalFilename: 'sample.mp3', uploadedBy: 'Asha Writer' });
     expect(Math.abs(uploaded.audio!.durationMs - known.mp3.durationMs)).toBeLessThanOrEqual(500);
     expect(uploaded.audio!.url).toBe(`/media/${uploaded.audio!.key}`);
     expect(existsSync(path.join(storageDir, uploaded.audio!.key))).toBe(true);
-    expect(uploaded.missingPids).toEqual(uploaded.paragraphs.map((p) => p.pid));
 
     // Marks must stay inside the real recording's duration.
     const tooLong = marksFor(uploaded, 500, 5_000);
@@ -590,7 +647,7 @@ describe('through the real audio route (S3.2): upload → sync → publish', () 
     const marks = marksFor(uploaded, 500, 2_500);
     const saved = await putMarks(a.id, { revisionId: a.currentRevision.id, marks });
     expect(saved.status).toBe(200);
-    expect(data(saved.env).listen.status).toBe('ready');
+    expect(data(saved.env).listen).toMatchObject({ status: 'ready', timing: 'synced', uploadFingerprint: uploaded.uploadFingerprint });
 
     const published = await publish(a.id, a.currentRevision.id);
     expect(published.status).toBe(200);
@@ -598,7 +655,9 @@ describe('through the real audio route (S3.2): upload → sync → publish', () 
     expect(payload.audio.key).toBe(uploaded.audio!.key);
     expect(payload.audio.durationMs).toBe(uploaded.audio!.durationMs);
     expect(payload.marks).toEqual(marks);
-    expect((await listen(a.id)).published).toMatchObject({ durationMs: uploaded.audio!.durationMs, markCount: marks.length, matchesCurrentText: true });
+    expect((await listen(a.id)).published).toMatchObject({ durationMs: uploaded.audio!.durationMs, sameAudioAsDraft: true });
+    const reader = (await getPublishedArticle(a.slug))!;
+    expect(reader.listen).toMatchObject({ timing: 'synced', marks });
     expect(await generationRows(a.id)).toBe(0);
   });
 });

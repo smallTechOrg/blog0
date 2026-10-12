@@ -25,6 +25,8 @@ export interface AudioPlayerHandle {
   seek(seconds: number): void;
   /** Play ↔ pause. */
   toggle(): void;
+  /** Moves the keyboard focus to the play button (Follow audio hands focus back to the player). */
+  focusPlay(): void;
 }
 
 export interface AudioPlayerProps {
@@ -42,6 +44,7 @@ const LOAD_ERROR = 'Couldn’t load the recording.';
 
 export function AudioPlayer({ audio, bylineName, hotkeys = false, onEscape, ref }: AudioPlayerProps) {
   const el = useRef<HTMLAudioElement>(null);
+  const playBtn = useRef<HTMLButtonElement>(null);
   const [playing, setPlaying] = useState(false);
   const [pos, setPos] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -78,6 +81,7 @@ export function AudioPlayer({ audio, bylineName, hotkeys = false, onEscape, ref 
       currentTime: () => el.current?.currentTime ?? 0,
       seek,
       toggle,
+      focusPlay: () => playBtn.current?.focus(),
     }),
     [seek, toggle],
   );
@@ -135,6 +139,7 @@ export function AudioPlayer({ audio, bylineName, hotkeys = false, onEscape, ref 
   return (
     <div className="audio">
       <button
+        ref={playBtn}
         className="audio__play"
         type="button"
         aria-label={playing ? 'Pause' : 'Play'}

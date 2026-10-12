@@ -1,18 +1,31 @@
-// Public Listen data (S3.5) against real blog0_test Postgres: the article view model's `listen`
-// + `times.listen`, the home/card minutes, and GET /api/public/articles/:slug/listen. Readers get
-// the PUBLISHED Listen payload over the PUBLISHED revision only — a draft recording (synced or
-// not) never leaks, an unpublished article never answers, and no admin field (asset id, storage
-// key, fingerprints, uploader) leaves the server. Listen never calls the LLM.
+// Public Listen data (S3.5 + Phase 3 fix) against real blog0_test Postgres: the article view
+// model's `listen` + `times.listen`, the home/card minutes, and GET /api/public/articles/:slug/listen.
+// Readers get the PUBLISHED recording with marks RESOLVED per request over the PUBLISHED revision's
+// paragraphs (resolveMarks: stored marks covering the text → 'synced', else estimateMarks over
+// countWords → 'estimated') — a draft recording never leaks, an unpublished article never answers,
+// and no admin field (asset id, storage key, fingerprints, uploader) leaves the server. The last
+// block walks the admin routes: upload → publish (estimated) → paragraph edit + publish
+// (re-estimated over the new pids, never blocked) → aligner PUT + publish (synced) → edit dropping
+// a marked paragraph + publish (estimated again). Listen never calls the LLM.
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { POST as createRoute } from '@/app/api/admin/articles/route';
+import { PATCH as patchRoute } from '@/app/api/admin/articles/[id]/route';
+import { POST as uploadRoute } from '@/app/api/admin/articles/[id]/audio/route';
+import { GET as adminListenRoute, PUT as listenPutRoute } from '@/app/api/admin/articles/[id]/listen/route';
+import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
 import { GET as listenRoute } from '@/app/api/public/articles/[slug]/listen/route';
 import { GET as tldrRoute } from '@/app/api/public/articles/[slug]/tldr/route';
 import type { PublicTldrDto } from '@/lib/api/dto-phase2';
-import type { PublicListenDto } from '@/lib/api/dto-phase3';
+import type { ArticleDetailDto, ArticleResponse, UpdateArticleResponse } from '@/lib/api/dto';
+import type { ListenResponse, ListenStateDto, PublicListenDto } from '@/lib/api/dto-phase3';
 import type { Envelope } from '@/lib/api/envelope';
+import { countWords, estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { listenMinutes } from '@/lib/listen/marks';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
@@ -22,6 +35,8 @@ import { getPublishedArticle, listPublishedPostCards } from '@/server/public/art
 
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
+import { loginAs, type TestLogin } from '../helpers/session';
+import { resetStorage } from '../helpers/storage';
 
 const BASE = 'http://localhost:3410';
 
@@ -43,7 +58,7 @@ const DURATION_MS = 140_000;
 interface ListenSeed {
   durationMs?: number;
   ext?: 'mp3' | 'm4a';
-  /** Published marks over the published revision's pids; omitted → no published Listen. */
+  /** Stored published marks over the published revision's pids (`none` = uploaded, no stored marks); omitted → no published Listen. */
   publishedMarks?: (pids: string[]) => Array<{ pid: string; tMs: number }>;
   /** Draft marks over the pids; `() => []` = uploaded but unsynced; omitted → no draft. */
   draftMarks?: (pids: string[]) => Array<{ pid: string; tMs: number }>;
@@ -132,7 +147,7 @@ async function seedArticle(input: { slug: string; status?: 'draft' | 'published'
       l.rawPublished !== undefined
         ? l.rawPublished
         : l.publishedMarks
-          ? { audio, marks: l.publishedMarks(pids), syncFingerprint: rendered.fingerprints.paragraphs }
+          ? { audio, marks: l.publishedMarks(pids), syncFingerprint: rendered.fingerprints.paragraphs, uploadFingerprint: rendered.fingerprints.paragraphs }
           : null;
     const draftMarks = l.draftMarks ? l.draftMarks(pids) : null;
     const draft = draftMarks
@@ -159,6 +174,11 @@ async function seedArticle(input: { slug: string; status?: 'draft' | 'published'
 const marksOver = (startMs = 500, stepMs = 30_000) => (pids: string[]) => pids.map((pid, i) => ({ pid, tMs: startMs + i * stepMs }));
 const none = () => [];
 
+/** The reader marks expected when no stored marks cover the text. */
+function estimatedFor(rendered: { paragraphs: ReadonlyArray<{ pid: string; text: string }> }, durationMs = DURATION_MS) {
+  return estimateMarks(toTimedParagraphs(rendered.paragraphs), durationMs);
+}
+
 async function callListen(slug: string) {
   const res = await listenRoute(new Request(`${BASE}/api/public/articles/${encodeURIComponent(slug)}/listen`), {
     params: Promise.resolve<Record<string, string>>({ slug }),
@@ -178,7 +198,7 @@ afterEach(() => {
 });
 
 describe('article view model — published Listen', () => {
-  it('exposes the published recording, its marks and listenMinutes; never the asset id or storage key', async () => {
+  it('exposes the published recording, its covering stored marks (synced) and listenMinutes; never the asset id or storage key', async () => {
     const { pids, audio } = await seedArticle({ slug: 'synced', listen: { publishedMarks: marksOver(), draftMarks: none } });
     const marks = marksOver()(pids);
 
@@ -192,6 +212,7 @@ describe('article view model — published Listen', () => {
       mimeType: 'audio/mpeg',
       durationMs: DURATION_MS,
       marks,
+      timing: 'synced',
       shareUrl: 'http://localhost:3410/p/synced/listen',
     });
     expect(JSON.stringify(vm.listen)).not.toContain(audio.assetId);
@@ -209,12 +230,50 @@ describe('article view model — published Listen', () => {
     }
   });
 
-  it('ignores an empty or corrupt published payload (logs a warning, never crashes the page)', async () => {
+  it('estimates the marks from the published text and duration when no marks are stored — the computed values, not just the length', async () => {
+    const { rendered } = await seedArticle({ slug: 'estimated', listen: { publishedMarks: none } });
+    const vm = await getPublishedArticle('estimated');
+    expect(vm?.listen?.timing).toBe('estimated');
+    const expected = estimateMarks(
+      rendered.paragraphs.map((p) => ({ pid: p.pid, words: countWords(p.text) })),
+      DURATION_MS,
+    );
+    expect(vm?.listen?.marks).toEqual(expected);
+    // Hand-checked against the rule: weights 21.5, 20.5, 5.5, 9.5 (W = 57) over 140 000 ms →
+    // floor(140000·21.5/57) = 52807, floor(140000·42/57) = 103157, floor(140000·47.5/57) = 116666.
+    expect(rendered.paragraphs.map((p) => countWords(p.text))).toEqual([20, 19, 4, 8]);
+    expect(vm?.listen?.marks.map((m) => m.tMs)).toEqual([0, 52807, 103157, 116666]);
+    expect(vm?.listen?.marks.map((m) => m.pid)).toEqual(rendered.paragraphs.map((p) => p.pid));
+    expect(vm?.times.listen).toBe(2);
+  });
+
+  it('falls back to the estimate when stored marks do not cover the text or are invalid (ignoring vanished pids)', async () => {
+    const partial = await seedArticle({ slug: 'partial', listen: { publishedMarks: (pids) => marksOver()(pids).slice(0, 2) } });
+    const invalid = await seedArticle({
+      slug: 'not-increasing',
+      listen: { publishedMarks: (pids) => pids.map((pid, i) => ({ pid, tMs: i === 2 ? 500 : 500 + i * 30_000 })) },
+    });
+    const extra = await seedArticle({
+      slug: 'extra-orphan',
+      listen: { publishedMarks: (pids) => [{ pid: 'p-vanished', tMs: 100 }, ...marksOver()(pids)] },
+    });
+
+    for (const [slug, seeded] of [['partial', partial], ['not-increasing', invalid]] as const) {
+      const vm = await getPublishedArticle(slug);
+      expect(vm?.listen?.timing, slug).toBe('estimated');
+      expect(vm?.listen?.marks, slug).toEqual(estimatedFor(seeded.rendered));
+    }
+    // A mark for a vanished paragraph is dropped; the rest still cover the text → synced.
+    const vm = await getPublishedArticle('extra-orphan');
+    expect(vm?.listen?.timing).toBe('synced');
+    expect(vm?.listen?.marks).toEqual(marksOver()(extra.pids));
+  });
+
+  it('ignores a corrupt published payload (logs a warning, never crashes the page)', async () => {
     await seedArticle({ slug: 'corrupt', listen: { rawPublished: { audio: { key: 'x' }, marks: 'nope' } } });
-    await seedArticle({ slug: 'empty-marks', listen: { publishedMarks: none } });
 
     expect((await getPublishedArticle('corrupt'))?.listen).toBeNull();
-    expect((await getPublishedArticle('empty-marks'))?.listen).toBeNull();
+    expect((await getPublishedArticle('corrupt'))?.times.listen).toBeNull();
     expect(logs.lines.some((l) => l.event === 'public.listen_invalid')).toBe(true);
   });
 
@@ -251,6 +310,7 @@ describe('GET /api/public/articles/:slug/listen', () => {
       meta: '8 Sep 2026 · 1 min read',
       audio: { url: `/media/${audio.key}`, mimeType: 'audio/mpeg', durationMs: DURATION_MS },
       marks,
+      timing: 'synced',
       bylineName: 'Asha Writer',
       times: { read: 1, tldr: null, listen: 2 },
       shareUrl: 'http://localhost:3410/p/synced/listen',
@@ -261,7 +321,17 @@ describe('GET /api/public/articles/:slug/listen', () => {
     expect(raw).not.toContain('-draft.');
   });
 
-  it('serves the PUBLISHED marks even when a newer draft sync exists (no draft leak)', async () => {
+  it('serves estimated marks over the published paragraphs when the published Listen has no stored marks', async () => {
+    const { rendered } = await seedArticle({ slug: 'est', listen: { publishedMarks: none, draftMarks: none } });
+    const res = await callListen('est');
+    expect(res.status).toBe(200);
+    if (!res.env.ok) return;
+    expect(res.env.data.timing).toBe('estimated');
+    expect(res.env.data.marks).toEqual(estimatedFor(rendered));
+    expect(res.env.data.marks).toHaveLength(rendered.paragraphs.length);
+  });
+
+  it('serves the PUBLISHED marks even when newer draft marks exist (no draft leak)', async () => {
     const { pids, audio } = await seedArticle({ slug: 'two-copies', listen: { publishedMarks: marksOver(1_000), draftMarks: marksOver(9_000) } });
     const published = marksOver(1_000)(pids);
 
@@ -269,6 +339,7 @@ describe('GET /api/public/articles/:slug/listen', () => {
     expect(res.status).toBe(200);
     if (!res.env.ok) return;
     expect(res.env.data.marks).toEqual(published);
+    expect(res.env.data.timing).toBe('synced');
     expect(res.env.data.audio.url).toBe(`/media/${audio!.key}`);
   });
 
@@ -304,5 +375,102 @@ describe('GET /api/public/articles/:slug/listen', () => {
     expect(res.status).toBe(200);
     const env = (await res.json()) as Envelope<PublicTldrDto>;
     expect(env.ok && env.data.times.listen).toBe(2);
+  });
+});
+
+describe('through the admin routes: estimated → re-estimated after an edit → synced → estimated again', () => {
+  const ORIGIN = 'http://localhost:3410';
+  type Handler = (request: Request, context: { params: Promise<Record<string, string>> }) => Promise<Response>;
+  let writer: TestLogin;
+
+  async function call<T>(handler: Handler, method: string, url: string, opts: { body?: unknown; form?: FormData; id?: string } = {}) {
+    const headers: Record<string, string> = { host: 'localhost:3410', cookie: writer.cookie };
+    if (method !== 'GET') headers.origin = ORIGIN;
+    if (opts.body !== undefined) headers['content-type'] = 'application/json';
+    const body = opts.form ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body));
+    const res = await handler(new Request(`${ORIGIN}${url}`, { method, headers, body }), {
+      params: Promise.resolve<Record<string, string>>(opts.id ? { id: opts.id } : {}),
+    });
+    return { status: res.status, env: (await res.json()) as Envelope<T> };
+  }
+  function ok<T>(r: { status: number; env: Envelope<T> }): T {
+    if (!r.env.ok) throw new Error(`expected ok, got ${r.status} ${r.env.error.code}: ${r.env.error.message}`);
+    return r.env.data;
+  }
+  const state = async (id: string) => ok(await call<ListenStateDto>(adminListenRoute, 'GET', `/api/admin/articles/${id}/listen`, { id }));
+  async function publishOk(id: string, revisionId: string) {
+    const res = await call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${id}/publish`, { body: { revisionId }, id });
+    expect(res.status).toBe(200); // Listen never blocks
+    return ok(res).article;
+  }
+  async function saveBody(a: { id: string }, baseRevisionId: string, bodyMd: string) {
+    const saved = ok(await call<UpdateArticleResponse>(patchRoute, 'PATCH', `/api/admin/articles/${a.id}`, { body: { baseRevisionId, bodyMd }, id: a.id }));
+    expect(saved.revisionCreated).toBe(true);
+    return saved.article.currentRevision.id;
+  }
+  async function publicListen(slug: string): Promise<PublicListenDto> {
+    const res = await callListen(slug);
+    expect(res.status).toBe(200);
+    return ok(res);
+  }
+
+  beforeEach(async () => {
+    resetStorage();
+    writer = await loginAs({ displayName: 'Asha Writer' });
+  });
+
+  it('keeps the reader timing in step with the published text across edits, an aligner PUT and publishes', async () => {
+    const a = ok(
+      await call<ArticleResponse>(createRoute, 'POST', '/api/admin/articles', { body: { title: 'Listen flow', topic: 'Craft', bodyMd: BODY } }),
+    ).article as ArticleDetailDto;
+
+    const form = new FormData();
+    const bytes = readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'audio', 'sample.mp3'));
+    form.set('file', new File([new Uint8Array(bytes)], 'sample.mp3', { type: 'audio/mpeg' }));
+    const uploaded = ok(await call<ListenResponse>(uploadRoute, 'POST', `/api/admin/articles/${a.id}/audio`, { form, id: a.id })).listen;
+    expect(uploaded.status).toBe('ready');
+    const D = uploaded.audio!.durationMs;
+
+    // 1. Publish right after the upload → estimated over the published paragraphs.
+    await publishOk(a.id, a.currentRevision.id);
+    const first = await publicListen(a.slug);
+    expect(first.timing).toBe('estimated');
+    expect(first.marks).toEqual(estimateMarks(toTimedParagraphs(uploaded.paragraphs), D));
+
+    // 2. Edit one paragraph's text → text_changed (warning), publish 200 → re-estimated over the NEW pids.
+    const target = uploaded.paragraphs[1];
+    const rev2 = await saveBody(a, a.currentRevision.id, BODY.replace(target.text, `${target.text} Then a few more words arrive.`));
+    const changed = await state(a.id);
+    expect(changed.status).toBe('text_changed');
+    const newPid = changed.paragraphs[1].pid;
+    expect(newPid).not.toBe(target.pid);
+    await publishOk(a.id, rev2);
+    const second = await publicListen(a.slug);
+    expect(second.timing).toBe('estimated');
+    expect(second.marks.map((m) => m.pid)).toContain(newPid);
+    expect(second.marks.map((m) => m.pid)).not.toContain(target.pid);
+    expect(second.marks).toEqual(estimateMarks(toTimedParagraphs(changed.paragraphs), D));
+
+    // 3. Aligner PUT with a complete valid set + publish → synced, the PUT set verbatim.
+    const aligned = changed.paragraphs.map((p, i) => ({ pid: p.pid, tMs: 300 + i * 4_000 }));
+    const put = await call<ListenResponse>(listenPutRoute, 'PUT', `/api/admin/articles/${a.id}/listen`, { body: { revisionId: rev2, marks: aligned }, id: a.id });
+    expect(put.status).toBe(200);
+    expect(ok(put).listen.status).toBe('text_changed'); // a PUT never changes the status
+    await publishOk(a.id, rev2);
+    const third = await publicListen(a.slug);
+    expect(third.timing).toBe('synced');
+    expect(third.marks).toEqual(aligned);
+
+    // 4. An edit that drops one marked paragraph and adds a new one + publish → estimated again.
+    const dropped = changed.paragraphs[2];
+    const bodyNow = BODY.replace(target.text, `${target.text} Then a few more words arrive.`);
+    const rev3 = await saveBody(a, rev2, bodyNow.replace(`- ${dropped.text}`, '- A brand new list item replaces the old one.'));
+    const after = await state(a.id);
+    expect(after.paragraphs.map((p) => p.pid)).not.toContain(dropped.pid);
+    await publishOk(a.id, rev3);
+    const fourth = await publicListen(a.slug);
+    expect(fourth.timing).toBe('estimated');
+    expect(fourth.marks).toEqual(estimateMarks(toTimedParagraphs(after.paragraphs), D));
+    expect(fourth.marks.map((m) => m.pid)).not.toContain(dropped.pid);
   });
 });

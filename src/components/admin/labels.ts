@@ -23,7 +23,7 @@ export const FORMAT_STATUS_LABEL: Record<FormatStatus, string> = {
   failed: 'failed',
   ready: 'ready',
   stale: 'stale',
-  needs_sync: 'needs sync',
+  text_changed: 'text changed',
   unavailable: 'later phase',
 };
 

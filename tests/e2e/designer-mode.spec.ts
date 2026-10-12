@@ -177,7 +177,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
 
     const uploaded = await uploadSampleMp3(page.request, article!.id, origin);
 
-    expect(uploaded.status).toBe('needs_sync');
+    expect(uploaded.status).toBe('ready');
     expect(uploaded.audio).toMatchObject({ mimeType: 'audio/mpeg', bytes: audioMeta.mp3.bytes, url: `/media/${uploaded.audio.key}` });
     expect(Math.abs(uploaded.audio.durationMs - audioMeta.mp3.durationMs)).toBeLessThanOrEqual(500);
     const stored = path.join(DEFAULT_STORAGE_DIR, uploaded.audio.key);

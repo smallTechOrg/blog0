@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
 import type { Block } from '@/lib/content/types';
@@ -9,15 +9,19 @@ import type { ListenViewModel } from '@/lib/view-models';
 
 import { ArticleBody } from './ArticleBody';
 import { AudioPlayer, type AudioPlayerHandle } from './AudioPlayer';
-import { createListenSync, isFormControl, isScrollKey, playerKeyAction, seekTarget } from './listen-sync';
+import { createListenSync, isFormControl, isManualScrollKey, playerKeyAction, seekTarget, type ListenSync } from './listen-sync';
 
 /* ============================================================
-   Listen (spec/ui.md §3 Listen; divergence 28): the design's listen frame —
-   tag, title, player — with the article text beside it. The paragraph being
-   read carries .is-live and scrolls to centre; a click on a paragraph seeks
-   the audio to its mark; Space / ← / → drive the player from the window.
-   The highlight is toggled straight on the DOM (the prose is memoised
-   html), exactly like the share highlight.
+   Listen (spec/ui.md §3 Listen; divergences 28–29): the design's listen
+   frame — tag, title, player — with the article text beside it. The player
+   is primary; the text follows it on the server-resolved (estimated or
+   stored) marks: the paragraph being read carries a soft .is-live and, while
+   following, scrolls to centre. A manual scroll pauses following and shows
+   **Follow audio** in the sticky lead; clicking it scrolls back to the live
+   paragraph, resumes following and hands focus to ▶. A paragraph click seeks
+   the audio to its start and resumes following; Space / ← / → drive the
+   player from the window. The highlight is toggled straight on the DOM (the
+   prose is memoised html), exactly like the share highlight.
    ============================================================ */
 export interface ListenViewProps {
   topic: string;
@@ -34,6 +38,9 @@ const LIVE = 'is-live';
 export function ListenView({ topic, title, bylineName, blocks, listen, onClose }: ListenViewProps) {
   const player = useRef<AudioPlayerHandle>(null);
   const textRef = useRef<HTMLDivElement>(null);
+  const syncRef = useRef<ListenSync | null>(null);
+  const [following, setFollowing] = useState(true);
+  const textId = useId();
   const live = useRef({ onClose });
   useLayoutEffect(() => {
     live.current = { onClose };
@@ -49,22 +56,25 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
       return scope!.querySelector<HTMLElement>('.para[data-pid="' + CSS.escape(pid) + '"]');
     }
 
+    function scrollToPara(pid: string) {
+      const el = paragraph(pid);
+      if (!el) return;
+      try {
+        el.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+      } catch {
+        el.scrollIntoView();
+      }
+    }
+
     const sync = createListenSync(listen.marks, {
-      onLive(pid, { scroll }) {
+      onLive(pid) {
         scope.querySelectorAll('.para.' + LIVE).forEach((el) => el.classList.remove(LIVE));
-        if (!pid) return;
-        const el = paragraph(pid);
-        if (!el) return;
-        el.classList.add(LIVE);
-        if (scroll) {
-          try {
-            el.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-          } catch {
-            el.scrollIntoView();
-          }
-        }
+        if (pid) paragraph(pid)?.classList.add(LIVE);
       },
+      onScroll: scrollToPara,
+      onFollowChange: setFollowing,
     });
+    syncRef.current = sync;
     const unbind = sync.bind(audio);
 
     /* paragraphs are reachable from the keyboard: Enter / Space seeks */
@@ -73,8 +83,9 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
       if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
     });
 
+    /* a paragraph click / Enter / Space: seek to its start (play state unchanged), follow again */
     function seekTo(pid: string): boolean {
-      const tMs = sync.markFor(pid);
+      const tMs = sync.paragraphClicked(pid);
       if (tMs === null) return false;
       player.current?.seek(tMs / 1000);
       return true;
@@ -97,15 +108,15 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
       if (pid && seekTo(pid)) e.preventDefault();
     };
 
-    /* manual scrolls pause the auto-scroll; programmatic ones never fire these */
+    /* manual scrolls pause following; programmatic ones (scrollIntoView) never fire these */
     const manual = () => sync.noteManualScroll();
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
-      if (isScrollKey(e.key)) {
-        if (!isFormControl(document.activeElement as HTMLElement | null)) manual();
+      const active = document.activeElement as HTMLElement | null;
+      if (isManualScrollKey(e.key, isFormControl(active))) {
+        manual();
         return;
       }
-      const active = document.activeElement as HTMLElement | null;
       const focusedPara = active?.closest<HTMLElement>('.para[data-pid]');
       if (focusedPara && scope.contains(focusedPara) && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) {
         if (seekTo(focusedPara.dataset.pid || '')) e.preventDefault();
@@ -128,6 +139,8 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
     window.addEventListener('keydown', onKey);
     return () => {
       unbind();
+      syncRef.current = null;
+      setFollowing(true); // a fresh tracker starts out following
       scope.removeEventListener('click', onClick);
       window.removeEventListener('wheel', manual);
       window.removeEventListener('touchmove', manual);
@@ -146,8 +159,20 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
           audio={{ url: listen.audioUrl, mimeType: listen.mimeType, durationMs: listen.durationMs }}
           bylineName={bylineName}
         />
+        <button
+          type="button"
+          className="btn-outline listenview__follow"
+          aria-controls={textId}
+          hidden={following}
+          onClick={() => {
+            syncRef.current?.followAudio();
+            player.current?.focusPlay();
+          }}
+        >
+          Follow audio
+        </button>
       </div>
-      <div className="listenview__text">
+      <div className="listenview__text" id={textId}>
         <div className="readbody" ref={textRef}>
           <ArticleBody blocks={blocks} />
         </div>

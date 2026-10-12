@@ -23,12 +23,13 @@ export interface DeckViewModel {
   shareUrl: string; // absolute …/p/<slug>/tldr
 }
 
-/** The published Listen (spec/architecture.md §3; Phase 3): the recording + its paragraph marks. */
+/** The published Listen (spec/architecture.md §3; Phase 3 + fix): the recording + its resolved paragraph marks. */
 export interface ListenViewModel {
   audioUrl: string; // '/media/' + key (same-origin)
   mimeType: 'audio/mpeg' | 'audio/mp4';
   durationMs: number;
-  marks: Array<{ pid: string; tMs: number }>; // published marks over the published revision
+  marks: Array<{ pid: string; tMs: number }>; // resolveMarks over the published revision's paragraphs (one per paragraph), computed per request
+  timing: 'synced' | 'estimated'; // stored marks covering the text → 'synced'; else estimated from word counts
   shareUrl: string; // absolute …/p/<slug>/listen
 }
 

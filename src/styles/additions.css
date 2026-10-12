@@ -43,11 +43,14 @@ html[data-printing] #blog0-root { visibility: hidden; }
 }
 /* same fill as the design's .sent.is-hl, without the underline */
 .para.is-hl { background: var(--accent-soft); border-radius: 2px; }
-/* Listen (Phase 3): the paragraph being read */
+/* Listen (Phase 3 fix): the paragraph being read — a SOFT highlight, deliberately subtler than
+   the share highlight above (half its fill, a faint rule instead of the solid accent one). The
+   tokens are scoped to the Listen view so they resolve per theme. */
+.listenview { --listen-live-bg: var(--accent-softer); --listen-live-rule: var(--accent-soft); }
 .para.is-live {
-  background: var(--accent-soft); border-radius: 2px;
-  box-shadow: -2px 0 0 0 var(--accent); /* the left rule, without moving the text */
-  transition: background .18s ease;
+  background: var(--listen-live-bg); border-radius: 2px;
+  box-shadow: -2px 0 0 0 var(--listen-live-rule); /* the left rule, without moving the text */
+  transition: background .3s ease, box-shadow .3s ease;
 }
 @media (prefers-reduced-motion: reduce) { .para.is-live { transition: none; } }
 
@@ -168,3 +171,6 @@ html[data-printing] #blog0-root { visibility: hidden; }
   }
 }
 .audio__play:disabled { opacity: .45; cursor: not-allowed; }
+/* "Follow audio" (Phase 3 fix): in the sticky lead, shown only while auto-follow is paused */
+.listenview__follow { margin-top: 12px; }
+.listenview__follow[hidden] { display: none; }

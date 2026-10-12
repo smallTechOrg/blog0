@@ -1,22 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  activeMarkIndex,
-  AUTOSCROLL_PAUSE_MS,
-  fmtClock,
-  fmtClockMs,
-  listenDiff,
-  listenMinutes,
-  NUDGE_MS,
-  nudgeMark,
-  SEEK_STEP_S,
-  TAP_DEBOUNCE_MS,
-  validateMarks,
-  type Mark,
-} from '@/lib/listen/marks';
+import { activeMarkIndex, fmtClock, listenMinutes, SEEK_STEP_S, validateMarks, type Mark } from '@/lib/listen/marks';
 
-// Pure helpers shared by the server (validation + stale diff), the admin tap-sync and the
-// reader highlight (spec/architecture.md §9.4, spec/capabilities/listen-sync.md).
+// Pure helpers shared by the server (aligner-facing mark validation), the reader highlight and
+// the players (spec/architecture.md §9.4, spec/capabilities/listen-sync.md).
 
 const PIDS = ['p-aaaa0001', 'p-bbbb0002', 'p-cccc0003', 'p-dddd0004'];
 const DURATION = 20_000;
@@ -112,52 +99,16 @@ describe('activeMarkIndex', () => {
   it('is -1 for an empty mark list', () => {
     expect(activeMarkIndex([], 5_000)).toBe(-1);
   });
-});
 
-describe('nudgeMark', () => {
-  it('moves one mark by ±250 ms and leaves the input untouched', () => {
-    const forward = nudgeMark(complete, 1, 250, DURATION);
-    expect(forward?.[1]).toEqual({ pid: PIDS[1], tMs: 4_450 });
-    expect(forward?.[0]).toEqual(complete[0]);
-    expect(complete[1].tMs).toBe(4_200);
-    const back = nudgeMark(complete, 1, -250, DURATION);
-    expect(back?.[1].tMs).toBe(3_950);
-  });
-
-  it('refuses when ordering would break', () => {
-    const tight: Mark[] = [
-      { pid: PIDS[0], tMs: 1_000 },
-      { pid: PIDS[1], tMs: 1_200 },
+  it('picks the last of tied marks (very short audio under estimated timing)', () => {
+    const tied = [
+      { pid: 'a', tMs: 0 },
+      { pid: 'b', tMs: 5 },
+      { pid: 'c', tMs: 5 },
     ];
-    expect(nudgeMark(tight, 0, 250, DURATION)).toBeNull();
-    expect(nudgeMark(tight, 1, -250, DURATION)).toBeNull();
-    expect(nudgeMark(tight, 1, 250, DURATION)?.[1].tMs).toBe(1_450);
-  });
-
-  it('refuses below 0 and at/over the duration', () => {
-    expect(nudgeMark([{ pid: PIDS[0], tMs: 100 }], 0, -250, DURATION)).toBeNull();
-    expect(nudgeMark([{ pid: PIDS[0], tMs: DURATION - 250 }], 0, 250, DURATION)).toBeNull();
-    expect(nudgeMark([{ pid: PIDS[0], tMs: DURATION - 251 }], 0, 250, DURATION)?.[0].tMs).toBe(DURATION - 1);
-  });
-
-  it('refuses an index outside the list', () => {
-    expect(nudgeMark(complete, 4, 250, DURATION)).toBeNull();
-    expect(nudgeMark(complete, -1, 250, DURATION)).toBeNull();
-  });
-});
-
-describe('listenDiff', () => {
-  it('is empty for a complete set', () => {
-    expect(listenDiff(complete, PIDS)).toEqual({ missingPids: [], orphanPids: [] });
-  });
-
-  it('lists current paragraphs without a mark and marks whose paragraph vanished', () => {
-    const edited = [PIDS[0], 'p-new00001', PIDS[2], PIDS[3], 'p-new00002'];
-    expect(listenDiff(complete, edited)).toEqual({ missingPids: ['p-new00001', 'p-new00002'], orphanPids: [PIDS[1]] });
-  });
-
-  it('treats no marks as every paragraph missing', () => {
-    expect(listenDiff([], PIDS)).toEqual({ missingPids: PIDS, orphanPids: [] });
+    expect(activeMarkIndex(tied, 5)).toBe(2);
+    expect(activeMarkIndex(tied, 4)).toBe(0);
+    expect(activeMarkIndex(tied, 0)).toBe(0);
   });
 });
 
@@ -179,16 +130,7 @@ describe('clocks and minutes', () => {
     expect(fmtClock(Number.NaN)).toBe('0:00');
   });
 
-  it('fmtClockMs renders m:ss.mmm for the admin mark list', () => {
-    expect(fmtClockMs(0)).toBe('0:00.000');
-    expect(fmtClockMs(4_250)).toBe('0:04.250');
-    expect(fmtClockMs(61_005)).toBe('1:01.005');
-  });
-
-  it('keeps the shared constants', () => {
-    expect(NUDGE_MS).toBe(250);
-    expect(TAP_DEBOUNCE_MS).toBe(300);
+  it('keeps the shared seek step', () => {
     expect(SEEK_STEP_S).toBe(5);
-    expect(AUTOSCROLL_PAUSE_MS).toBe(4000);
   });
 });

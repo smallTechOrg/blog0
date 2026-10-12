@@ -31,9 +31,12 @@ export function readTldrPayload(value: unknown): TldrPayload | null {
 }
 
 // ---------------------------------------------------------------------------------------------
-// listen (Phase 3, spec/data.md → ListenPayload). A row exists from the first upload; draft null
-// after Remove audio. `marks` is [] until synced, else one per paragraph of the synced revision.
-// Phase 6 adds optional `sentenceMarks` beside `marks` (unknown keys are stripped, not refused).
+// listen (Phase 3 + fix, spec/data.md → ListenPayload). A row exists from the first upload; draft
+// null after Remove audio. `marks` are STORED marks written only by PUT …/listen (Phase 6 aligner;
+// legacy tap data) — [] normally, cleared on every upload. `uploadFingerprint` = the paragraphs
+// fingerprint at upload (drives `text_changed`); legacy rows parse with null and fall back to
+// `syncFingerprint` (listenBaseline). Phase 6 adds optional `sentenceMarks` beside `marks`
+// (unknown keys are stripped, not refused).
 // ---------------------------------------------------------------------------------------------
 
 export const AUDIO_MIMES = ['audio/mpeg', 'audio/mp4'] as const;
@@ -55,11 +58,17 @@ export const listenPayloadSchema = z.object({
   audio: listenAudioSchema,
   marks: z.array(listenMarkSchema),
   syncFingerprint: z.string().min(1).nullable(),
+  uploadFingerprint: z.string().nullable().optional().default(null),
 });
 
 export type ListenAudio = z.infer<typeof listenAudioSchema>;
 export type ListenMark = z.infer<typeof listenMarkSchema>;
 export type ListenPayload = z.infer<typeof listenPayloadSchema>;
+
+/** The fingerprint the `text_changed` warning compares against: uploadFingerprint, else (legacy) syncFingerprint. */
+export function listenBaseline(payload: Pick<ListenPayload, 'uploadFingerprint' | 'syncFingerprint'>): string | null {
+  return payload.uploadFingerprint ?? payload.syncFingerprint ?? null;
+}
 
 /** Parses a stored Listen payload; a corrupt/unknown payload reads as "no draft" (never crashes a page). */
 export function readListenPayload(value: unknown): ListenPayload | null {

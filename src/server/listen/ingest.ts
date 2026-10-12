@@ -7,6 +7,7 @@ import type { ListenStateDto } from '@/lib/api/dto-phase3';
 import type { ActorContext } from '../articles/service';
 import { notFound } from '../articles/service';
 import { findArticle, findFormatRow, lockArticle } from '../articles/repo';
+import { requireCurrentRevision } from '../articles/views';
 import { getConfig } from '../config';
 import { getDb, type Tx } from '../db/client';
 import { articleFormat } from '../db/schema';
@@ -23,7 +24,9 @@ import { getListenState } from './sync';
 // probe (type + duration from the bytes, never the name) → storage put → one transaction
 // (media_asset row + the listen draft payload) → the replaced draft asset is deleted when no
 // payload references it anymore (row in the transaction, file after commit). A DB failure after
-// the put deletes the new file again.
+// the put deletes the new file again. Upload ⇒ `ready` (Phase 3 fix): the draft records
+// uploadFingerprint = the current revision's paragraphs fingerprint (the text the recording is
+// assumed to read); stored marks are cleared (they belonged to the old recording).
 
 const LISTEN = 'listen';
 const MIB = 1024 * 1024;
@@ -53,6 +56,7 @@ interface ListenDraftPayload {
   audio: ListenAudioPart;
   marks: Array<{ pid: string; tMs: number }>;
   syncFingerprint: string | null;
+  uploadFingerprint: string;
 }
 
 /** Limits from config at request time (spec/architecture.md §10). */
@@ -116,8 +120,8 @@ async function probeOrThrow(buf: Buffer, limits: AudioLimits, seen: { mime: Audi
 }
 
 /**
- * Upload / replace the article's draft recording. Returns the Listen state (status `needs_sync`,
- * marks cleared). The previous draft asset is deleted unless a payload still references its key.
+ * Upload / replace the article's draft recording. Returns the Listen state (status `ready`,
+ * stored marks cleared, uploadFingerprint = the current paragraphs fingerprint). The previous draft asset is deleted unless a payload still references its key.
  */
 export async function uploadAudio(articleId: string, file: File, actor: ActorContext, options: UploadAudioOptions = {}): Promise<ListenStateDto> {
   const seen: { mime: AudioMime | null } = { mime: null };
@@ -184,6 +188,7 @@ async function storeAudio(
     assetId = await db.transaction(async (tx) => {
       const row = await lockArticle(tx, actor.siteId, articleId);
       if (!row) throw notFound(articleId);
+      const revision = await requireCurrentRevision(actor.siteId, row, tx);
       const asset = await insertMediaAsset(
         {
           siteId: actor.siteId,
@@ -203,10 +208,19 @@ async function storeAudio(
         audio: { assetId: asset.id, key: stored.key, mimeType: probe.mimeType, bytes: stored.size, durationMs: probe.durationMs },
         marks: [],
         syncFingerprint: null,
+        uploadFingerprint: revision.paragraphsFingerprint,
       };
       const format = await findFormatRow(actor.siteId, row.id, LISTEN, tx);
       const previous = audioRefOf(format?.draftPayload);
-      await upsertListenDraft(tx, { siteId: actor.siteId, articleId: row.id, existingId: format?.id ?? null, payload, userId: actor.user.id, now });
+      await upsertListenDraft(tx, {
+        siteId: actor.siteId,
+        articleId: row.id,
+        existingId: format?.id ?? null,
+        payload,
+        revisionId: revision.id,
+        userId: actor.user.id,
+        now,
+      });
       // The draft now points at the new key; the old asset goes unless the published payload (or any
       // other payload of the site) still references it — the cleanup helper does that check.
       if (previous && previous.assetId !== asset.id) {
@@ -267,12 +281,12 @@ export async function removeAudio(articleId: string, actor: ActorContext, option
 
 async function upsertListenDraft(
   tx: Tx,
-  args: { siteId: string; articleId: string; existingId: string | null; payload: ListenDraftPayload; userId: string; now: Date },
+  args: { siteId: string; articleId: string; existingId: string | null; payload: ListenDraftPayload; revisionId: string; userId: string; now: Date },
 ): Promise<void> {
   const draft = {
     draftPayload: args.payload,
-    draftFingerprint: null,
-    draftRevisionId: null,
+    draftFingerprint: args.payload.uploadFingerprint,
+    draftRevisionId: args.revisionId,
     draftUpdatedBy: args.userId,
     draftUpdatedAt: args.now,
     updatedAt: args.now,

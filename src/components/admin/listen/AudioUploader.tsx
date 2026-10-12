@@ -2,6 +2,7 @@
 
 import { useRef, useState, type DragEvent, type ReactNode, type RefObject } from 'react';
 
+import { AudioPlayer, type AudioPlayerHandle } from '@/components/reader/AudioPlayer';
 import type { ListenAudioDto, ListenResponse } from '@/lib/api/dto-phase3';
 import { fmtClock } from '@/lib/listen/marks';
 
@@ -10,38 +11,40 @@ import { relativeTime } from '../relative-time';
 
 import { fmtMb, uploadAudio } from './listen-api';
 
-// Recording column of the Listen tab (spec/ui.md §4 Listen tab → Recording): dropzone + file
-// picker, XHR progress with Cancel, inline errors with Try again, and — once a recording exists —
-// the player, the file line, Replace… and Remove audio.
+// Recording section of the Listen tab (spec/ui.md §4 Listen tab → Recording; Phase 3 fix): dropzone
+// + file picker (disabled while the editor has unsaved text), XHR progress with Cancel, inline
+// errors with Try again, and — once a recording exists — the design `.audio` player as the
+// preview, the file line, Replace… (no confirm: there is no writer-made sync to lose) and Remove
+// audio (confirmed).
 
-export const ACCEPT_AUDIO = 'audio/mpeg,audio/mp4,audio/x-m4a,.mp3,.m4a';
+export const ACCEPT_AUDIO = 'audio/mpeg,audio/mp4,.mp3,.m4a';
+
+export const UNSAVED_TEXT_HINT = 'Save your text changes first — the recording is matched against the saved article.';
+export const CONFIRM_REMOVE = 'Remove the recording? The published Listen keeps serving until you publish again.';
 
 export interface AudioUploaderProps {
   articleId: string;
   audio: ListenAudioDto | null;
   limits: { maxAudioMb: number; maxAudioMinutes: number };
-  /** Marks in the working set — Replace… confirms when any exist. */
-  markCount: number;
-  audioRef: RefObject<HTMLAudioElement | null>;
-  /** Anything else to show under the player (file line, etc. are built in). */
+  /** The preview player's byline ("Read by <name> · N min"). */
+  bylineName: string;
+  /** The preview player (the tab pauses it when hidden). */
+  playerRef?: RefObject<AudioPlayerHandle | null>;
+  /** Under the player (the tab's timing note). */
   children?: ReactNode;
   timeZone: string;
   /** Reference time for "uploaded <relative time>" (the tab refreshes it with each server state). */
   now: Date;
-  disabled?: boolean;
-  /** Focus the dropzone / picker (stale banner's "Upload a new recording"). */
+  /** The editor has unsaved text: uploading is disabled with the save-first hint. */
+  editorDirty: boolean;
+  /** Focus the dropzone's picker / Replace… (the text-changed warning's "Upload a new recording"). */
   focusRef?: RefObject<HTMLButtonElement | null>;
-  /** Player events the tab follows (clock, live row, "recording ended"). */
-  playerEvents?: { onPlay?: () => void; onPause?: () => void; onEnded?: () => void; onSeeked?: () => void };
   onUploaded: (res: ListenResponse) => void;
   onRemove: () => Promise<ApiResult<ListenResponse>>;
   onRemoved: (res: ListenResponse) => void;
 }
 
 type Upload = { file: File; loaded: number; total: number; controller: AbortController };
-
-export const CONFIRM_REPLACE = (n: number) => `Replace the recording? Your ${n} ${n === 1 ? 'mark' : 'marks'} will be cleared.`;
-export const CONFIRM_REMOVE = 'Remove the recording and its marks? The published Listen keeps serving until you publish again.';
 
 const AUDIO_TYPES: ReadonlySet<string> = new Set(['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac', 'audio/x-aac']);
 
@@ -56,16 +59,17 @@ export function looksLikeAudio(file: { type: string; name: string }): boolean {
 }
 
 export function AudioUploader(props: AudioUploaderProps) {
-  const { articleId, audio, limits, markCount, audioRef, timeZone, now, disabled, focusRef, playerEvents, onUploaded, onRemove, onRemoved } = props;
+  const { articleId, audio, limits, bylineName, playerRef, timeZone, now, editorDirty, focusRef, onUploaded, onRemove, onRemoved } = props;
   const inputRef = useRef<HTMLInputElement>(null);
   const [upload, setUpload] = useState<Upload | null>(null);
   const [error, setError] = useState<{ message: string; file: File | null } | null>(null);
   const [dropping, setDropping] = useState(false);
   const [removing, setRemoving] = useState(false);
   const inFlight = useRef(false);
+  const locked = editorDirty;
 
   async function send(file: File): Promise<void> {
-    if (inFlight.current) return;
+    if (inFlight.current || locked) return;
     inFlight.current = true;
     setError(null);
     const controller = new AbortController();
@@ -86,12 +90,11 @@ export function AudioUploader(props: AudioUploaderProps) {
 
   function choose(files: FileList | File[] | null): void {
     const file = files && files.length > 0 ? files[0] : null;
-    if (!file || disabled || upload) return;
+    if (!file || locked || upload) return;
     if (!looksLikeAudio(file)) {
       setError({ message: `“${file.name}” doesn’t look like an mp3 or m4a. Choose a recording in one of those formats.`, file: null });
       return;
     }
-    if (audio && markCount > 0 && !window.confirm(CONFIRM_REPLACE(markCount))) return;
     void send(file);
   }
 
@@ -113,6 +116,11 @@ export function AudioUploader(props: AudioUploaderProps) {
 
   const limitsLine = `mp3 or m4a · up to ${limits.maxAudioMb} MB / ${limits.maxAudioMinutes} min`;
   const pct = upload ? (upload.total > 0 ? Math.min(100, Math.round((upload.loaded / upload.total) * 100)) : 0) : 0;
+  const lockedHint = locked ? (
+    <p className="admin-hint recording__locked" data-testid="upload-locked">
+      {UNSAVED_TEXT_HINT}
+    </p>
+  ) : null;
 
   return (
     <div className="recording">
@@ -121,6 +129,7 @@ export function AudioUploader(props: AudioUploaderProps) {
         type="file"
         accept={ACCEPT_AUDIO}
         hidden
+        disabled={locked}
         onChange={(e) => {
           choose(e.target.files);
           e.target.value = '';
@@ -139,22 +148,15 @@ export function AudioUploader(props: AudioUploaderProps) {
           </button>
         </div>
       ) : audio ? (
-        <div className="recording__has">
-          {/* Draft audio streams through /media/<key> (listen-audio: same route as readers). */}
-          <audio
-            ref={audioRef}
-            className="recording__player"
-            controls
-            preload="metadata"
-            src={audio.url}
-            data-testid="listen-audio"
-            onPlay={playerEvents?.onPlay}
-            onPause={playerEvents?.onPause}
-            onEnded={playerEvents?.onEnded}
-            onSeeked={playerEvents?.onSeeked}
-          >
-            Your browser can’t play this recording here.
-          </audio>
+        <div className="recording__has" data-testid="listen-preview">
+          {/* Draft audio streams through /media/<key> (listen-audio: same route and player as readers). */}
+          <AudioPlayer
+            key={audio.assetId}
+            ref={playerRef}
+            audio={{ url: audio.url, mimeType: audio.mimeType, durationMs: audio.durationMs }}
+            bylineName={bylineName}
+          />
+          {props.children}
           <p className="recording__file mono">
             <span className="recording__name" title={audio.originalFilename}>
               {audio.originalFilename}
@@ -162,39 +164,41 @@ export function AudioUploader(props: AudioUploaderProps) {
             · {fmtMb(audio.bytes)} · {fmtClock(audio.durationMs)} · uploaded {relativeTime(audio.uploadedAt, now, timeZone)} by {audio.uploadedBy}
           </p>
           <div className="recording__actions">
-            <button type="button" className="admin-btn admin-btn--small" ref={focusRef} disabled={disabled || removing} onClick={() => inputRef.current?.click()}>
+            <button type="button" className="admin-btn admin-btn--small" ref={focusRef} disabled={locked || removing} onClick={() => inputRef.current?.click()}>
               Replace…
             </button>
-            <button type="button" className="admin-btn admin-btn--small admin-btn--ghost" disabled={disabled || removing} onClick={() => void remove()}>
+            <button type="button" className="admin-btn admin-btn--small admin-btn--ghost" disabled={removing} onClick={() => void remove()}>
               {removing ? 'Removing…' : 'Remove audio'}
             </button>
           </div>
-          {props.children}
+          {lockedHint}
         </div>
       ) : (
         <div
           className={dropping ? 'dropzone is-dropping' : 'dropzone'}
+          aria-disabled={locked ? 'true' : undefined}
           onDragOver={(e) => {
             e.preventDefault();
-            if (!disabled) setDropping(true);
+            if (!locked) setDropping(true);
           }}
           onDragLeave={() => setDropping(false)}
           onDrop={onDrop}
         >
           <p className="dropzone__text">
             Drop an mp3 or m4a here, or{' '}
-            <button type="button" className="linkbtn" ref={focusRef} disabled={disabled} onClick={() => inputRef.current?.click()}>
+            <button type="button" className="linkbtn" ref={focusRef} disabled={locked} onClick={() => inputRef.current?.click()}>
               choose a file
             </button>
           </p>
           <p className="admin-hint">{limitsLine}</p>
+          {lockedHint}
         </div>
       )}
 
       {error ? (
         <p className="admin-error" role="alert">
           {error.message}{' '}
-          {error.file ? (
+          {error.file && !locked ? (
             <button type="button" className="linkbtn" onClick={() => void send(error.file as File)}>
               Try again
             </button>

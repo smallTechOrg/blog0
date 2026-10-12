@@ -6,6 +6,8 @@ import { z } from 'zod';
 
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
 import { fmtDate } from '@/lib/format-date';
+import type { RenderedArticle } from '@/lib/content/types';
+import { resolveMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { listenMinutes } from '@/lib/listen/marks';
 import { deckDisclosure, type ArticleViewModel, type DeckViewModel, type ListenViewModel, type PostCardViewModel } from '@/lib/view-models';
 
@@ -64,28 +66,39 @@ export function parsePublishedDeck(raw: unknown, ctx: { articleId: string }): Pu
 }
 
 /**
- * Validates a stored published Listen (spec/data.md ListenPayload): a usable one has at least one
- * mark (the publish path only ever copies a `ready` draft). Null (with a warning log) when
- * absent, malformed or empty — the page then simply offers no Listen.
+ * Validates a stored published Listen (spec/data.md ListenPayload). Stored marks are optional
+ * (Phase 3 fix: timing is resolved per request). Null (with a warning log) when absent or
+ * malformed — the page then simply offers no Listen.
  */
 export function parsePublishedListen(raw: unknown, ctx: { articleId: string }): ListenPayload | null {
   if (raw == null) return null;
   const payload = readListenPayload(raw);
-  if (payload && payload.marks.length > 0) return payload;
+  if (payload) return payload;
   log.warn('public.listen_invalid', {
-    msg: payload ? 'Published Listen payload has no marks — Listen not offered to readers' : 'Published Listen payload failed validation — Listen not offered to readers',
+    msg: 'Published Listen payload failed validation — Listen not offered to readers',
     article_id: ctx.articleId,
   });
   return null;
 }
 
-/** The reader's Listen view model from a published payload (reader-facing fields only). */
-function listenViewModel(payload: ListenPayload, slug: string): ListenViewModel {
+/**
+ * The reader's Listen view model from a published payload (reader-facing fields only). Marks are
+ * resolved per request over the CURRENTLY PUBLISHED revision's paragraphs and the published
+ * recording's duration (spec/capabilities/listen-sync.md → resolveMarks): stored marks covering
+ * the text are served as 'synced', otherwise estimated from word counts.
+ */
+export function listenViewModel(
+  payload: ListenPayload,
+  paragraphs: RenderedArticle['paragraphs'],
+  slug: string,
+): ListenViewModel {
+  const { marks, timing } = resolveMarks(payload.marks, toTimedParagraphs(paragraphs), payload.audio.durationMs);
   return {
     audioUrl: '/media/' + payload.audio.key,
     mimeType: payload.audio.mimeType,
     durationMs: payload.audio.durationMs,
-    marks: payload.marks.map((m) => ({ pid: m.pid, tMs: m.tMs })),
+    marks,
+    timing,
     shareUrl: absolute(articlePath(slug) + '/listen'),
   };
 }
@@ -196,7 +209,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       }
     : null;
   const listenPayload = parsePublishedListen(row.listenPayload, { articleId: row.id });
-  const listen = listenPayload ? listenViewModel(listenPayload, row.slug) : null;
+  const listen = listenPayload ? listenViewModel(listenPayload, rendered.paragraphs, row.slug) : null;
 
   const next = nextArticleOf(await publishedCandidates(site.id), row.slug);
   const publishedAt = row.firstPublishedAt as Date;

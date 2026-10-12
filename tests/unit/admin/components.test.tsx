@@ -4,11 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { ArticleTable } from '@/components/admin/ArticleTable';
 import { HistoryTab } from '@/components/admin/editor/HistoryTab';
 import { ImageUploadButton } from '@/components/admin/editor/ImageUploadButton';
-import { ListenTab, statusHelp } from '@/components/admin/editor/ListenTab';
+import { LISTEN_STATUS_LABEL, ListenTab, liveLine, statusHelp, TEXT_CHANGED_WARNING, TIMING_NOTE } from '@/components/admin/editor/ListenTab';
 import { MarkdownEditor } from '@/components/admin/editor/MarkdownEditor';
-import { PublishBar } from '@/components/admin/editor/PublishBar';
-import { MarkList } from '@/components/admin/listen/MarkList';
-import { SyncPanel } from '@/components/admin/listen/SyncPanel';
+import { confirmLeave, LEAVE_EDITOR_CONFIRM, PublishBar } from '@/components/admin/editor/PublishBar';
+import { AudioUploader, CONFIRM_REMOVE, UNSAVED_TEXT_HINT } from '@/components/admin/listen/AudioUploader';
 import { FormatChips } from '@/components/admin/FormatChips';
 import { DeckList } from '@/components/admin/tldr/DeckList';
 import { groupByHeading } from '@/components/admin/tldr/SentencePicker';
@@ -83,99 +82,101 @@ const noop = () => {};
 
 describe('ListenTab', () => {
   it('shows the loading state before GET …/listen answers', () => {
-    const html = renderToStaticMarkup(
-      <ListenTab
-        article={ARTICLE}
-        editorDirty={false}
-        timeZone="UTC"
-        saveFirst={async () => null}
-        onArticleChanged={noop}
-        onSelectTab={noop}
-        onMarksDirty={noop}
-      />,
-    );
+    const html = renderToStaticMarkup(<ListenTab article={ARTICLE} editorDirty={false} timeZone="UTC" onArticleChanged={noop} />);
     expect(html).toContain('Loading the recording…');
   });
 
-  it('writes one line of help per status with the limits and sync info', () => {
-    const base: ListenStateDto = {
-      status: 'missing', revisionId: 'r1', paragraphs: [], audio: null, marks: [], syncFingerprint: null, syncedAt: null, syncedBy: null,
-      missingPids: [], orphanPids: [], published: null, limits: { maxAudioMb: 50, maxAudioMinutes: 30 },
-    };
-    const now = new Date('2026-10-12T12:00:00Z');
-    expect(statusHelp(base, now, 'UTC')).toContain('up to 50 MB / 30 min');
-    expect(statusHelp({ ...base, status: 'needs_sync' }, now, 'UTC')).toContain('Press Start syncing');
-    const ready = statusHelp(
-      { ...base, status: 'ready', marks: [{ pid: 'p1', tMs: 0 }, { pid: 'p2', tMs: 900 }], syncedAt: '2026-10-12T11:50:00Z', syncedBy: 'Sai' },
-      now,
-      'UTC',
+  const audio = {
+    assetId: 'm1', key: 'blog0/audio/2026/10/x.mp3', url: '/media/blog0/audio/2026/10/x.mp3', mimeType: 'audio/mpeg' as const, bytes: 2_097_152,
+    durationMs: 21_000, originalFilename: 'sample.mp3', uploadedAt: '2026-10-12T11:50:00Z', uploadedBy: 'Sai',
+  };
+  const base: ListenStateDto = {
+    status: 'missing', revisionId: 'r1', paragraphs: [], audio: null, marks: [], timing: null, uploadFingerprint: null,
+    textChangedSinceUpload: false, syncFingerprint: null, syncedAt: null, syncedBy: null, published: null,
+    limits: { maxAudioMb: 50, maxAudioMinutes: 30 },
+  };
+  const now = new Date('2026-10-12T12:00:00Z');
+
+  it('labels exactly the three Phase 3 fix statuses', () => {
+    expect(LISTEN_STATUS_LABEL).toEqual({ missing: 'No recording', ready: 'Ready', text_changed: 'Text changed' });
+  });
+
+  it('writes one line of help per status with the limits and the uploader', () => {
+    expect(statusHelp(base, now, 'UTC')).toBe(
+      'Upload a word-for-word reading (mp3 or m4a, up to 50 MB / 30 min). Readers get it on the next publish.',
     );
-    expect(ready).toBe('Synced 2 paragraphs · 10 min ago by Sai');
+    expect(statusHelp({ ...base, status: 'ready', audio, timing: 'estimated' }, now, 'UTC')).toBe(
+      'Recording ready · uploaded 10 min ago by Sai. Readers get it on the next publish.',
+    );
+    expect(statusHelp({ ...base, status: 'text_changed', audio, timing: 'estimated', textChangedSinceUpload: true }, now, 'UTC')).toContain(
+      'text changed',
+    );
+  });
+
+  it('says what is live and whether it differs from the draft', () => {
+    expect(liveLine(base, 'UTC')).toBeNull();
+    const published = { durationMs: 150_000, publishedAt: '2026-10-10T09:00:00Z', sameAudioAsDraft: true };
+    expect(liveLine({ published }, 'UTC')).toMatch(/^Live: 3 min recording, published .+2026$/);
+    expect(liveLine({ published: { ...published, sameAudioAsDraft: false } }, 'UTC')).toMatch(/ · differs from the draft$/);
+  });
+
+  it('carries the non-blocking text-changed warning and both timing notes', () => {
+    expect(TEXT_CHANGED_WARNING).toContain('The recording may no longer match the text');
+    expect(TEXT_CHANGED_WARNING).toContain('Publishing is not blocked.');
+    expect(TIMING_NOTE.estimated).toContain('estimated timing');
+    expect(TIMING_NOTE.synced).toContain('paragraph timings saved for this recording');
   });
 });
 
-describe('SyncPanel', () => {
-  const props = { paragraphCount: 3, currentMs: 61_250, onStart: noop, onTap: noop, onUndo: noop, onRestart: noop, onStop: noop };
+describe('AudioUploader', () => {
+  const props = {
+    articleId: 'a1', limits: { maxAudioMb: 50, maxAudioMinutes: 30 }, bylineName: 'Sai', timeZone: 'UTC', now: new Date('2026-10-12T12:00:00Z'),
+    onUploaded: noop, onRemoved: noop, onRemove: async () => ({ ok: false as const, status: 0, error: { code: 'X', message: 'x' } }),
+  };
+  const audio = {
+    assetId: 'm1', key: 'k.mp3', url: '/media/k.mp3', mimeType: 'audio/mpeg' as const, bytes: 1_048_576, durationMs: 21_000,
+    originalFilename: 'sample.mp3', uploadedAt: '2026-10-12T11:50:00Z', uploadedBy: 'Sai',
+  };
 
-  it('disables Start syncing with the save-first reason while the editor has unsaved text', () => {
-    const html = renderToStaticMarkup(
-      <SyncPanel {...props} state={{ phase: 'idle', times: [null, null, null], nextIndex: 0, lastTapAt: null }} hasAudio editorDirty busy={false} />,
-    );
-    expect(html).toMatch(/<button[^>]*disabled[^>]*data-testid="start-syncing"/);
-    expect(html).toContain('Save your text changes first');
+  it('offers the dropzone with the limits; disabled with the save-first hint while the text is unsaved', () => {
+    const open = renderToStaticMarkup(<AudioUploader {...props} audio={null} editorDirty={false} />);
+    expect(open).toContain('mp3 or m4a · up to 50 MB / 30 min');
+    expect(open).toContain('accept="audio/mpeg,audio/mp4,.mp3,.m4a"');
+    expect(open).not.toContain(UNSAVED_TEXT_HINT);
+    expect(open).not.toContain('aria-disabled');
+
+    const locked = renderToStaticMarkup(<AudioUploader {...props} audio={null} editorDirty />);
+    expect(locked).toContain(UNSAVED_TEXT_HINT);
+    expect(locked).toContain('aria-disabled="true"');
+    expect(locked).toMatch(/<button[^>]*disabled[^>]*>choose a file<\/button>/);
   });
 
-  it('shows the tap button, clock and next paragraph while syncing', () => {
+  it('with audio: the design player as preview, the file line, Replace… and Remove audio — no tap-along controls', () => {
     const html = renderToStaticMarkup(
-      <SyncPanel {...props} state={{ phase: 'syncing', times: [0, null, null], nextIndex: 1, lastTapAt: 1 }} hasAudio editorDirty={false} busy={false} />,
+      <AudioUploader {...props} audio={audio} editorDirty={false}>
+        <p className="listentab__timing">note</p>
+      </AudioUploader>,
     );
-    expect(html).toContain('Tap — paragraph 2 starts now');
-    expect(html).toContain('Next: paragraph 2 of 3');
-    expect(html).toContain('1:01.250');
-    expect(html).toContain('aria-keyshortcuts="Space"');
-    expect(html).toContain('Space = tap · Backspace = undo');
-  });
+    expect(html).toContain('class="audio"');
+    expect(html).toContain('class="audio__play"');
+    expect(html).toContain('src="/media/k.mp3"');
+    expect(html).toContain('Read by Sai · 1 min');
+    expect(html).toContain('sample.mp3');
+    expect(html).toContain('0:21');
+    expect(html).toContain('Replace…');
+    expect(html).toContain('Remove audio');
+    expect(html).toContain('listentab__timing');
+    expect(html).not.toMatch(/Start syncing|Save sync|Tap|nudge/i);
+    expect(CONFIRM_REMOVE).toBe('Remove the recording? The published Listen keeps serving until you publish again.');
 
-  it('announces only "Next: paragraph k of n" — the per-frame clock is outside the live region', () => {
-    const html = renderToStaticMarkup(
-      <SyncPanel {...props} state={{ phase: 'syncing', times: [0, null, null], nextIndex: 1, lastTapAt: 1 }} hasAudio editorDirty={false} busy={false} />,
-    );
-    const live = [...html.matchAll(/<(\w+)[^>]*aria-live="polite"[^>]*>(.*?)<\/\1>/g)];
-    expect(live).toHaveLength(1);
-    expect(live[0][2]).toBe('Next: paragraph 2 of 3');
-    expect(live[0][2]).not.toContain('1:01.250');
-  });
-});
-
-describe('MarkList', () => {
-  it('marks the next row, shows times and flags unmarked stale paragraphs', () => {
-    const paragraphs = [
-      { pid: 'p1', index: 0, text: 'First paragraph.', kind: 'p' as const, headingPath: [] },
-      { pid: 'p2', index: 1, text: 'Second paragraph.', kind: 'p' as const, headingPath: ['Intro'] },
-    ];
-    const html = renderToStaticMarkup(
-      <MarkList
-        paragraphs={paragraphs}
-        state={{ phase: 'idle', times: [1500, null], nextIndex: 1, lastTapAt: null }}
-        durationMs={10_000}
-        missingPids={new Set(['p2'])}
-        liveIndex={-1}
-        issues={new Map()}
-        disabled={false}
-        onNudge={noop}
-        onRedoFrom={noop}
-        onPreview={noop}
-      />,
-    );
-    expect(html).toContain('0:01.500');
-    expect(html).toContain('no mark');
-    expect(html).toContain('Intro');
-    expect(html).toContain('aria-label="Nudge earlier (paragraph 1)"');
+    const locked = renderToStaticMarkup(<AudioUploader {...props} audio={audio} editorDirty />);
+    expect(locked).toMatch(/<button[^>]*disabled[^>]*>Replace…<\/button>/);
+    expect(locked).toContain(UNSAVED_TEXT_HINT);
   });
 });
 
 describe('PublishBar', () => {
-  it('offers Go to Listen next to a LISTEN_STALE reason', () => {
+  it('lists blocking reasons without any Listen link (Listen never blocks publishing)', () => {
     const html = renderToStaticMarkup(
       <PublishBar
         article={ARTICLE}
@@ -183,7 +184,7 @@ describe('PublishBar', () => {
         dirty={false}
         saveState={{ kind: 'idle' }}
         busy={null}
-        blocked={[{ code: 'LISTEN_STALE', message: 'Listen needs a re-sync.', missingPids: ['p2'], orphanPids: [] }]}
+        blocked={[{ code: 'TLDR_DECK_STALE', message: 'The deck quotes lines that changed.', sids: ['s1'] }]}
         actionError={null}
         signInHref="/admin/login"
         onSave={noop}
@@ -191,11 +192,21 @@ describe('PublishBar', () => {
         onUnpublish={noop}
         onDelete={noop}
         onDismissBlocked={noop}
-        onGoToListen={noop}
       />,
     );
-    expect(html).toContain('Listen needs a re-sync.');
-    expect(html).toContain('Go to Listen');
+    expect(html).toContain('The deck quotes lines that changed.');
+    expect(html).toContain('see the TLDR tab');
+    expect(html).not.toContain('Go to Listen');
+  });
+
+  it('← Desk confirms only with unsaved text', () => {
+    let asked = 0;
+    expect(confirmLeave({ dirty: false }, () => (asked++, false))).toBe(true);
+    expect(asked).toBe(0);
+    const seen: string[] = [];
+    expect(confirmLeave({ dirty: true }, (m) => (seen.push(m), false))).toBe(false);
+    expect(confirmLeave({ dirty: true }, () => true)).toBe(true);
+    expect(seen).toEqual([LEAVE_EDITOR_CONFIRM]);
   });
 });
 
@@ -212,10 +223,11 @@ describe('Image toolbar', () => {
 });
 
 describe('editor stubs', () => {
-  it('labels the History tab as a later-phase stub', () => {
+  it('labels the History tab as a deferred stub (no phase number)', () => {
     const history = renderToStaticMarkup(<HistoryTab revisionCount={3} />);
     expect(history).toContain('3 revisions');
-    expect(history).toContain('Phase 4');
+    expect(history).toContain('arrives in a later version.');
+    expect(history).not.toContain('Phase');
   });
 });
 

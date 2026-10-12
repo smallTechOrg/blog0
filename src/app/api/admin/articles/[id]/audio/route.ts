@@ -4,7 +4,8 @@ import { ApiError, withApi } from '@/server/http/api';
 import { configuredAudioLimits, removeAudio, uploadAudio } from '@/server/listen/ingest';
 
 // POST   /api/admin/articles/:id/audio — multipart `file`: upload / replace the draft recording
-//        (200 ListenResponse, status 'needs_sync', marks []). 413 / 415 / 422 per spec/api.md.
+//        (200 ListenResponse, status 'ready', marks [], timing 'estimated', uploadFingerprint = the
+//        current paragraphs fingerprint). 413 / 415 / 422 per spec/api.md.
 // DELETE /api/admin/articles/:id/audio — remove the draft recording (200, status 'missing'). Idempotent.
 
 export const dynamic = 'force-dynamic';

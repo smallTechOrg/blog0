@@ -18,8 +18,6 @@ export interface PublishBarProps {
   article: ArticleDetailDto;
   title: string;
   dirty: boolean;
-  /** Unsaved Listen marks (the ← Desk link confirms before leaving, like the tab switch). */
-  marksDirty?: boolean;
   saveState: SaveState;
   busy: null | 'publish' | 'unpublish' | 'delete';
   blocked: PublishBlockedDetails['reasons'] | null;
@@ -30,15 +28,13 @@ export interface PublishBarProps {
   onUnpublish: () => void;
   onDelete: () => void;
   onDismissBlocked: () => void;
-  /** LISTEN_STALE reason → "Go to Listen" selects the Listen tab (and closes the popover). */
-  onGoToListen?: () => void;
 }
 
 export const LEAVE_EDITOR_CONFIRM = 'You have unsaved changes. Leave the editor anyway? They will be lost.';
 
-/** The ← Desk link's leave guard: confirm only when text or Listen marks are unsaved. */
-export function confirmLeave(unsaved: { dirty: boolean; marksDirty?: boolean }, confirm: (message: string) => boolean): boolean {
-  if (!unsaved.dirty && !unsaved.marksDirty) return true;
+/** The ← Desk link's leave guard: confirm only when the text is unsaved (Listen never holds unsaved work). */
+export function confirmLeave(unsaved: { dirty: boolean }, confirm: (message: string) => boolean): boolean {
+  if (!unsaved.dirty) return true;
   return confirm(LEAVE_EDITOR_CONFIRM);
 }
 
@@ -88,7 +84,7 @@ export function PublishBar(props: PublishBarProps) {
           href="/admin"
           className="pubbar__back"
           onClick={(e) => {
-            if (!confirmLeave({ dirty, marksDirty: props.marksDirty }, (m) => window.confirm(m))) e.preventDefault();
+            if (!confirmLeave({ dirty }, (m) => window.confirm(m))) e.preventDefault();
           }}
         >
           ← Desk
@@ -149,14 +145,6 @@ export function PublishBar(props: PublishBarProps) {
                           {' '}
                           ({r.sids.length} {r.sids.length === 1 ? 'line' : 'lines'} — see the TLDR tab)
                         </span>
-                      ) : null}
-                      {r.code === 'LISTEN_STALE' && props.onGoToListen ? (
-                        <>
-                          {' '}
-                          <button type="button" className="linkbtn" onClick={props.onGoToListen}>
-                            Go to Listen
-                          </button>
-                        </>
                       ) : null}
                     </li>
                   ))}

@@ -288,13 +288,12 @@ async function publishReasons(
   for (const adapter of formatAdapters()) {
     const check = adapter.validateForPublish({ row: rows.find((r) => r.kind === adapter.kind) ?? null, revision, rendered });
     if (!check.ok) {
-      const details = (check.details ?? {}) as { sids?: string[]; missingPids?: string[]; orphanPids?: string[] };
+      // Only TLDR blocks (sids); Listen never blocks publishing (Phase 3 fix).
+      const details = (check.details ?? {}) as { sids?: string[] };
       reasons.push({
         code: check.code as PublishBlockedReasonCode,
         message: check.message,
         ...(details.sids ? { sids: details.sids } : {}),
-        ...(details.missingPids ? { missingPids: details.missingPids } : {}),
-        ...(details.orphanPids ? { orphanPids: details.orphanPids } : {}),
       });
     }
   }

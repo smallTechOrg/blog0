@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { RenderedArticle } from '@/lib/content/types';
 import type { ArticleFormatRow, RevisionRow } from '@/server/db/schema';
+import type { Tx } from '@/server/db/client';
 import { listenAdapter } from '@/server/formats/listen';
-import { readListenPayload, type ListenPayload } from '@/server/formats/payload';
+import { listenBaseline, readListenPayload, type ListenPayload } from '@/server/formats/payload';
 
-// Listen adapter status + publish rules (spec/architecture.md §5, spec/capabilities/listen-sync.md
-// → Publishing). Status is computed from payload + fingerprints; nothing is stored.
+// Listen adapter status + publish rules (spec/architecture.md §5 as revised by the Phase 3 fix;
+// spec/capabilities/listen-audio.md). missing | ready | text_changed, computed from the draft's
+// baseline (uploadFingerprint ?? legacy syncFingerprint) vs the current paragraphs fingerprint.
+// Listen never blocks publishing; publish copies the draft whatever its status.
 
 const NOW = new Date('2026-10-12T10:00:00Z');
 const FP_A = 'fp-paragraphs-a';
@@ -49,13 +52,13 @@ function row(draft: ListenPayload | null, published: ListenPayload | null = null
     articleId: 'art',
     kind: 'listen',
     draftPayload: draft,
-    draftRevisionId: draft?.syncFingerprint ? 'rev-1' : null,
-    draftFingerprint: draft?.syncFingerprint ?? null,
+    draftRevisionId: draft ? 'rev-1' : null,
+    draftFingerprint: draft ? listenBaseline(draft) : null,
     draftUpdatedBy: 'u',
     draftUpdatedAt: NOW,
     publishedPayload: published,
     publishedRevisionId: published ? 'rev-0' : null,
-    publishedFingerprint: published?.syncFingerprint ?? null,
+    publishedFingerprint: published ? listenBaseline(published) : null,
     publishedAt: published ? NOW : null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -73,35 +76,68 @@ function rendered(pids: readonly string[], paragraphsFingerprint: string): Rende
   };
 }
 
-const unsynced: ListenPayload = { audio, marks: [], syncFingerprint: null };
-const synced: ListenPayload = { audio, marks, syncFingerprint: FP_A };
+/** Right after an upload: no stored marks, baseline = the paragraphs fingerprint at upload. */
+const uploaded: ListenPayload = { audio, marks: [], syncFingerprint: null, uploadFingerprint: FP_A };
+/** Upload + aligner-written marks (PUT) against the same text. */
+const withMarks: ListenPayload = { audio, marks, syncFingerprint: FP_A, uploadFingerprint: FP_A };
+/** Legacy Phase 3 rows had no uploadFingerprint. */
+const legacySynced: ListenPayload = { audio, marks, syncFingerprint: FP_A, uploadFingerprint: null };
+const legacyUnsynced: ListenPayload = { audio, marks: [], syncFingerprint: null, uploadFingerprint: null };
+
+function status(r: ArticleFormatRow | null, fp: string) {
+  return listenAdapter.computeStatus({ row: r, currentRevision: revision(fp), now: NOW });
+}
+
+describe('readListenPayload / listenBaseline', () => {
+  it('parses a legacy payload without uploadFingerprint as null (zod default)', () => {
+    const parsed = readListenPayload({ audio, marks, syncFingerprint: FP_A });
+    expect(parsed).not.toBeNull();
+    expect(parsed!.uploadFingerprint).toBeNull();
+    expect(listenBaseline(parsed!)).toBe(FP_A);
+  });
+
+  it('prefers uploadFingerprint over syncFingerprint', () => {
+    expect(listenBaseline({ uploadFingerprint: FP_B, syncFingerprint: FP_A })).toBe(FP_B);
+    expect(listenBaseline({ uploadFingerprint: null, syncFingerprint: null })).toBeNull();
+  });
+});
 
 describe('listenAdapter.computeStatus', () => {
   it('is missing with no row or no draft payload', () => {
-    expect(listenAdapter.computeStatus({ row: null, currentRevision: revision(FP_A), now: NOW })).toBe('missing');
-    expect(listenAdapter.computeStatus({ row: row(null), currentRevision: revision(FP_A), now: NOW })).toBe('missing');
+    expect(status(null, FP_A)).toBe('missing');
+    expect(status(row(null), FP_A)).toBe('missing');
   });
 
   it('is missing for a corrupt payload (never crashes a page)', () => {
     const bad = { ...row(null), draftPayload: { audio: { nope: true }, marks: 'x' } } as ArticleFormatRow;
-    expect(listenAdapter.computeStatus({ row: bad, currentRevision: revision(FP_A), now: NOW })).toBe('missing');
+    expect(status(bad, FP_A)).toBe('missing');
     expect(readListenPayload(bad.draftPayload)).toBeNull();
   });
 
-  it('is needs_sync right after an upload (audio, no marks)', () => {
-    expect(listenAdapter.computeStatus({ row: row(unsynced), currentRevision: revision(FP_A), now: NOW })).toBe('needs_sync');
+  it('is ready right after an upload (no syncing step)', () => {
+    expect(status(row(uploaded), FP_A)).toBe('ready');
   });
 
-  it('is ready when the sync fingerprint equals the current paragraphs fingerprint, else stale', () => {
-    expect(listenAdapter.computeStatus({ row: row(synced), currentRevision: revision(FP_A), now: NOW })).toBe('ready');
-    expect(listenAdapter.computeStatus({ row: row(synced), currentRevision: revision(FP_B), now: NOW })).toBe('stale');
+  it('is text_changed when the paragraphs fingerprint differs from the upload baseline; back to ready on revert', () => {
+    expect(status(row(uploaded), FP_B)).toBe('text_changed');
+    expect(status(row(uploaded), FP_A)).toBe('ready');
   });
 
-  it('never returns unavailable, generating or failed', () => {
-    const statuses = [null, row(null), row(unsynced), row(synced)].map((r) =>
-      listenAdapter.computeStatus({ row: r, currentRevision: revision(FP_B), now: NOW }),
-    );
-    for (const s of statuses) expect(['missing', 'needs_sync', 'ready', 'stale']).toContain(s);
+  it('ignores stored marks: the baseline is uploadFingerprint even when syncFingerprint differs', () => {
+    const alignedLater: ListenPayload = { ...withMarks, syncFingerprint: FP_B };
+    expect(status(row(alignedLater), FP_A)).toBe('ready');
+    expect(status(row(alignedLater), FP_B)).toBe('text_changed');
+  });
+
+  it('legacy rows fall back to syncFingerprint; a legacy unsynced row (no baseline) is ready', () => {
+    expect(status(row(legacySynced), FP_A)).toBe('ready');
+    expect(status(row(legacySynced), FP_B)).toBe('text_changed');
+    expect(status(row(legacyUnsynced), FP_B)).toBe('ready');
+  });
+
+  it('only ever returns missing, ready or text_changed', () => {
+    const rows = [null, row(null), row(uploaded), row(withMarks), row(legacySynced), row(legacyUnsynced)];
+    for (const r of rows) for (const fp of [FP_A, FP_B]) expect(['missing', 'ready', 'text_changed']).toContain(status(r, fp));
   });
 });
 
@@ -110,54 +146,74 @@ describe('listenAdapter chips', () => {
   const draftArticle = { status: 'draft' as const, currentRevisionId: 'rev-1', publishedRevisionId: null };
 
   it('isPublished only when the article is published and a published Listen exists', () => {
-    expect(listenAdapter.isPublished({ article: published, row: row(synced, synced) })).toBe(true);
-    expect(listenAdapter.isPublished({ article: published, row: row(synced, null) })).toBe(false);
-    expect(listenAdapter.isPublished({ article: draftArticle, row: row(synced, synced) })).toBe(false);
+    expect(listenAdapter.isPublished({ article: published, row: row(uploaded, uploaded) })).toBe(true);
+    expect(listenAdapter.isPublished({ article: published, row: row(uploaded, null) })).toBe(false);
+    expect(listenAdapter.isPublished({ article: draftArticle, row: row(uploaded, uploaded) })).toBe(false);
     expect(listenAdapter.isPublished({ article: published, row: null })).toBe(false);
   });
 
-  it('hasUnpublishedChanges when the draft audio key or marks differ from the published copy', () => {
-    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(synced, synced) })).toBe(false);
+  it('hasUnpublishedChanges when the draft audio key or stored marks differ from the published copy', () => {
+    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(withMarks, withMarks) })).toBe(false);
     expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(null, null) })).toBe(false);
-    const newAudio = { ...synced, audio: { ...audio, key: 'blog0/audio/2026/10/33333333-3333-4333-8333-333333333333.mp3' } };
-    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(newAudio, synced) })).toBe(true);
-    const nudged = { ...synced, marks: marks.map((m, i) => (i === 1 ? { ...m, tMs: m.tMs + 250 } : m)) };
-    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(nudged, synced) })).toBe(true);
-    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(null, synced) })).toBe(true);
-    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(unsynced, null) })).toBe(true);
-    expect(listenAdapter.hasUnpublishedChanges({ article: draftArticle, row: row(unsynced, null) })).toBe(false);
+    const newAudio = { ...uploaded, audio: { ...audio, key: 'blog0/audio/2026/10/33333333-3333-4333-8333-333333333333.mp3' } };
+    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(newAudio, uploaded) })).toBe(true);
+    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(withMarks, uploaded) })).toBe(true);
+    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(null, uploaded) })).toBe(true);
+    expect(listenAdapter.hasUnpublishedChanges({ article: published, row: row(uploaded, null) })).toBe(true);
+    expect(listenAdapter.hasUnpublishedChanges({ article: draftArticle, row: row(uploaded, null) })).toBe(false);
   });
 });
 
-describe('listenAdapter.validateForPublish', () => {
-  it('passes with no row, no draft, or a ready draft', () => {
-    expect(listenAdapter.validateForPublish({ row: null, revision: revision(FP_A), rendered: rendered(PIDS, FP_A) })).toEqual({ ok: true });
-    expect(listenAdapter.validateForPublish({ row: row(null), revision: revision(FP_A), rendered: rendered(PIDS, FP_A) })).toEqual({ ok: true });
-    expect(listenAdapter.validateForPublish({ row: row(synced), revision: revision(FP_A), rendered: rendered(PIDS, FP_A) })).toEqual({ ok: true });
-  });
-
-  it('blocks a stale draft with LISTEN_STALE carrying missingPids and orphanPids', () => {
+describe('listenAdapter.validateForPublish — Listen never blocks', () => {
+  it('passes with no row, no draft, a ready draft, a text_changed draft, and a draft whose text changed under a live Listen', () => {
     const newPids = [PIDS[0], 'p-0009zzzz', PIDS[2]];
-    const check = listenAdapter.validateForPublish({ row: row(synced), revision: revision(FP_B), rendered: rendered(newPids, FP_B) });
-    expect(check.ok).toBe(false);
-    if (check.ok) return;
-    expect(check.code).toBe('LISTEN_STALE');
-    expect(check.message).toMatch(/text changed/i);
-    expect(check.details).toEqual({ missingPids: ['p-0009zzzz'], orphanPids: [PIDS[1]] });
+    const cases: Array<[ArticleFormatRow | null, string, readonly string[]]> = [
+      [null, FP_A, PIDS],
+      [row(null), FP_A, PIDS],
+      [row(null, withMarks), FP_B, newPids],
+      [row(uploaded), FP_A, PIDS],
+      [row(uploaded), FP_B, newPids],
+      [row(withMarks, withMarks), FP_B, newPids],
+      [row(legacyUnsynced, legacySynced), FP_B, newPids],
+    ];
+    for (const [r, fp, pids] of cases) {
+      expect(listenAdapter.validateForPublish({ row: r, revision: revision(fp), rendered: rendered(pids, fp) })).toEqual({ ok: true });
+    }
+  });
+});
+
+describe('listenAdapter.publish', () => {
+  function fakeTx() {
+    const sets: Array<Record<string, unknown>> = [];
+    const tx = {
+      update: () => ({
+        set: (values: Record<string, unknown>) => {
+          sets.push(values);
+          return { where: async () => undefined };
+        },
+      }),
+    } as unknown as Tx;
+    return { tx, sets };
+  }
+
+  it('copies a text_changed draft (any status) with the baseline as published_fingerprint', async () => {
+    const { tx, sets } = fakeTx();
+    await listenAdapter.publish(tx, { row: row(uploaded), revision: revision(FP_B), userId: 'u', now: NOW });
+    expect(sets).toEqual([{ publishedPayload: uploaded, publishedRevisionId: 'rev-1', publishedFingerprint: FP_A, publishedAt: NOW }]);
   });
 
-  it('allows an unsynced draft when there is no published Listen or the published one still matches', () => {
-    expect(listenAdapter.validateForPublish({ row: row(unsynced, null), revision: revision(FP_B), rendered: rendered(PIDS, FP_B) })).toEqual({ ok: true });
-    expect(listenAdapter.validateForPublish({ row: row(unsynced, synced), revision: revision(FP_A), rendered: rendered(PIDS, FP_A) })).toEqual({ ok: true });
+  it('copies a legacy draft with syncFingerprint as the baseline', async () => {
+    const { tx, sets } = fakeTx();
+    await listenAdapter.publish(tx, { row: row(legacySynced), revision: revision(FP_A), userId: 'u', now: NOW });
+    expect(sets[0]).toMatchObject({ publishedPayload: legacySynced, publishedFingerprint: FP_A });
   });
 
-  it('blocks an unsynced draft when the live reading no longer matches the text', () => {
-    const newPids = ['p-0009zzzz', PIDS[1], PIDS[2]];
-    const check = listenAdapter.validateForPublish({ row: row(unsynced, synced), revision: revision(FP_B), rendered: rendered(newPids, FP_B) });
-    expect(check.ok).toBe(false);
-    if (check.ok) return;
-    expect(check.code).toBe('LISTEN_STALE');
-    expect(check.message).toMatch(/live reading no longer matches/i);
-    expect(check.details).toEqual({ missingPids: ['p-0009zzzz'], orphanPids: [PIDS[0]] });
+  it('clears the published copy when there is no draft; does nothing without a row', async () => {
+    const { tx, sets } = fakeTx();
+    await listenAdapter.publish(tx, { row: row(null, uploaded), revision: revision(FP_A), userId: 'u', now: NOW });
+    expect(sets).toEqual([{ publishedPayload: null, publishedRevisionId: null, publishedFingerprint: null, publishedAt: null }]);
+    const none = fakeTx();
+    await listenAdapter.publish(none.tx, { row: null, revision: revision(FP_A), userId: 'u', now: NOW });
+    expect(none.sets).toEqual([]);
   });
 });

@@ -2,18 +2,23 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createListenSync,
+  isManualScrollKey,
   isScrollKey,
   livePid,
+  nextFollowing,
   playerKeyAction,
   seekTarget,
-  shouldAutoScroll,
   type AudioLike,
+  type ListenSync,
 } from '@/components/reader/listen-sync';
-import { AUTOSCROLL_PAUSE_MS, SEEK_STEP_S } from '@/lib/listen/marks';
+import { estimateMarks } from '@/lib/listen/estimate';
+import { SEEK_STEP_S } from '@/lib/listen/marks';
 
-// spec/ui.md §3 Listen + spec/capabilities/listen-sync.md "Reader highlight": the live paragraph
-// follows currentTime (timeupdate + seeked), one at a time, centred unless the reader scrolled
-// manually in the last 4 s; Space / ← / → on the window, ignored in form controls.
+// spec/ui.md §3 Listen + spec/capabilities/listen-sync.md "Reader highlight" / "Auto-follow": the
+// live paragraph follows currentTime (timeupdate + seeked), one at a time; following is on when the
+// view opens and scrolls each new live paragraph to centre; a manual scroll (wheel / touchmove /
+// scroll key) pauses it and shows Follow audio; Follow audio resumes and scrolls once at once; a
+// paragraph click seeks to its mark and resumes; Space / ← / → on the window, ignored in form controls.
 
 const MARKS = [
   { pid: 'p-a', tMs: 500 },
@@ -58,13 +63,22 @@ describe('livePid', () => {
   });
 });
 
-describe('shouldAutoScroll', () => {
-  it('scrolls when the reader never scrolled, and again once the 4 s pause has elapsed', () => {
-    expect(AUTOSCROLL_PAUSE_MS).toBe(4_000);
-    expect(shouldAutoScroll(null, 10_000)).toBe(true);
-    expect(shouldAutoScroll(10_000, 10_000)).toBe(false);
-    expect(shouldAutoScroll(10_000, 10_000 + AUTOSCROLL_PAUSE_MS - 1)).toBe(false);
-    expect(shouldAutoScroll(10_000, 10_000 + AUTOSCROLL_PAUSE_MS)).toBe(true);
+describe('nextFollowing (follow pause/resume decisions)', () => {
+  it('a manual scroll pauses following; Follow audio and a paragraph click resume it', () => {
+    expect(nextFollowing(true, 'manual-scroll')).toBe(false);
+    expect(nextFollowing(false, 'manual-scroll')).toBe(false);
+    expect(nextFollowing(false, 'follow-audio')).toBe(true);
+    expect(nextFollowing(true, 'follow-audio')).toBe(true);
+    expect(nextFollowing(false, 'paragraph-click')).toBe(true);
+    expect(nextFollowing(true, 'paragraph-click')).toBe(true);
+  });
+
+  it('counts scroll keys as manual only outside form controls', () => {
+    expect(isManualScrollKey('PageDown', false)).toBe(true);
+    expect(isManualScrollKey('ArrowUp', false)).toBe(true);
+    expect(isManualScrollKey('PageDown', true)).toBe(false);
+    expect(isManualScrollKey('ArrowLeft', false)).toBe(false);
+    expect(isManualScrollKey(' ', false)).toBe(false);
   });
 });
 
@@ -105,79 +119,164 @@ describe('seekTarget', () => {
   });
 });
 
-describe('createListenSync (fake <audio>)', () => {
-  it('reports the live paragraph on timeupdate and seeked, only when it changes, with scroll on', () => {
-    const audio = fakeAudio();
-    const seen: Array<[string | null, boolean]> = [];
-    let now = 100_000;
-    const sync = createListenSync(MARKS, { onLive: (pid, o) => seen.push([pid, o.scroll]), now: () => now });
-    const unbind = sync.bind(audio);
+type Seen = { live: Array<string | null>; scrolls: string[]; follow: boolean[] };
+
+/** A tracker wired to a fake <audio>, recording highlight moves, scroll requests and follow changes. */
+function rig(marks = MARKS, startS = 0): { audio: ReturnType<typeof fakeAudio>; sync: ListenSync; seen: Seen; unbind: () => void } {
+  const audio = fakeAudio();
+  audio.currentTime = startS;
+  const seen: Seen = { live: [], scrolls: [], follow: [] };
+  const sync = createListenSync(marks, {
+    onLive: (pid) => seen.live.push(pid),
+    onScroll: (pid) => seen.scrolls.push(pid),
+    onFollowChange: (f) => seen.follow.push(f),
+  });
+  const unbind = sync.bind(audio);
+  return { audio, sync, seen, unbind };
+}
+
+function at(audio: ReturnType<typeof fakeAudio>, seconds: number, type: 'timeupdate' | 'seeked' = 'timeupdate') {
+  audio.currentTime = seconds;
+  audio.emit(type);
+}
+
+describe('createListenSync (fake <audio>, fake scroll target)', () => {
+  it('moves the live paragraph on timeupdate and seeked, only when it changes; each change scrolls while following', () => {
+    const { audio, sync, seen, unbind } = rig();
     expect(audio.listeners).toEqual({ timeupdate: 1, seeked: 1 });
-    expect(seen).toEqual([]); // nothing live at 0
+    expect(sync.following()).toBe(true);
+    expect(seen.live).toEqual([]); // nothing live at 0 with these marks
 
-    audio.currentTime = 0.3;
-    audio.emit('timeupdate');
-    expect(seen).toEqual([]);
+    at(audio, 0.3);
+    expect(seen.live).toEqual([]);
+    at(audio, 0.6);
+    at(audio, 2.0);
+    expect(seen.live).toEqual(['p-a']);
+    expect(seen.scrolls).toEqual(['p-a']);
 
-    audio.currentTime = 0.6;
-    audio.emit('timeupdate');
-    audio.currentTime = 2.0;
-    audio.emit('timeupdate');
-    expect(seen).toEqual([['p-a', true]]);
+    at(audio, 9.3, 'seeked');
+    expect(seen.live).toEqual(['p-a', 'p-c']);
+    expect(seen.scrolls).toEqual(['p-a', 'p-c']);
 
-    audio.currentTime = 9.3;
-    audio.emit('seeked');
-    expect(seen).toEqual([
-      ['p-a', true],
-      ['p-c', true],
-    ]);
-
-    // back before the first mark: the highlight clears (no scroll)
-    audio.currentTime = 0;
-    audio.emit('seeked');
-    expect(seen[2]).toEqual([null, false]);
+    // back before the first mark: the highlight clears, nothing to scroll to
+    at(audio, 0, 'seeked');
+    expect(seen.live[2]).toBeNull();
+    expect(seen.scrolls).toHaveLength(2);
     expect(sync.current()).toBeNull();
 
-    now += 1;
     unbind();
     expect(audio.listeners).toEqual({ timeupdate: 0, seeked: 0 });
-    audio.currentTime = 5;
-    audio.emit('timeupdate');
-    expect(seen).toHaveLength(3);
+    at(audio, 5);
+    expect(seen.live).toHaveLength(3);
   });
 
-  it('skips the auto-scroll for 4 s after a manual scroll, then resumes', () => {
-    const audio = fakeAudio();
-    const seen: Array<[string | null, boolean]> = [];
-    let now = 50_000;
-    const sync = createListenSync(MARKS, { onLive: (pid, o) => seen.push([pid, o.scroll]), now: () => now });
-    sync.bind(audio);
-
-    sync.noteManualScroll();
-    audio.currentTime = 1;
-    audio.emit('timeupdate');
-    expect(seen).toEqual([['p-a', false]]);
-
-    now += 2_000;
-    audio.currentTime = 4.5;
-    audio.emit('timeupdate');
-    expect(seen[1]).toEqual(['p-b', false]);
-
-    now += AUTOSCROLL_PAUSE_MS;
-    audio.currentTime = 10;
-    audio.emit('timeupdate');
-    expect(seen[2]).toEqual(['p-c', true]);
-  });
-
-  it('re-syncs immediately when asked (e.g. after the text mounts), even without an event', () => {
-    const audio = fakeAudio();
-    audio.currentTime = 4.2;
-    const seen: Array<string | null> = [];
-    const sync = createListenSync(MARKS, { onLive: (pid) => seen.push(pid), now: () => 0 });
-    sync.bind(audio);
-    expect(seen).toEqual(['p-b']);
+  it('highlights where the audio is when the view opens, without scrolling the page', () => {
+    const { sync, seen } = rig(MARKS, 4.2);
+    expect(seen.live).toEqual(['p-b']);
+    expect(seen.scrolls).toEqual([]);
     expect(sync.current()).toBe('p-b');
     expect(sync.markFor('p-c')).toBe(9_250);
     expect(sync.markFor('nope')).toBeNull();
+  });
+
+  it('with estimated marks paragraph 1 is live from 0, also while paused at 0', () => {
+    const marks = estimateMarks(
+      [
+        { pid: 'p-1', words: 10 },
+        { pid: 'p-2', words: 0 },
+        { pid: 'p-3', words: 20 },
+      ],
+      10_000,
+    );
+    expect(marks.map((m) => m.tMs)).toEqual([0, 3333, 3768]);
+    const { audio, seen } = rig(marks, 0);
+    expect(seen.live).toEqual(['p-1']);
+    at(audio, 3.5);
+    expect(seen.live).toEqual(['p-1', 'p-2']);
+    at(audio, 3.8);
+    expect(seen.live).toEqual(['p-1', 'p-2', 'p-3']);
+  });
+
+  for (const how of ['wheel', 'touchmove', 'PageDown'] as const) {
+    it(`after a manual scroll (${how}) no further change requests a scroll and Follow audio shows; the highlight keeps moving`, () => {
+      const { audio, sync, seen } = rig();
+      at(audio, 1);
+      expect(seen.scrolls).toEqual(['p-a']);
+
+      // ListenView maps wheel / touchmove / a scroll key outside form controls to noteManualScroll.
+      if (how === 'PageDown') expect(isManualScrollKey(how, false)).toBe(true);
+      sync.noteManualScroll();
+      expect(sync.following()).toBe(false);
+      expect(seen.follow).toEqual([false]); // Follow audio becomes visible
+
+      at(audio, 4.5);
+      at(audio, 10, 'seeked'); // a seek while paused does not scroll either
+      expect(seen.live).toEqual(['p-a', 'p-b', 'p-c']);
+      expect(seen.scrolls).toEqual(['p-a']);
+
+      // more manual scrolls change nothing (no repeated follow notifications)
+      sync.noteManualScroll();
+      expect(seen.follow).toEqual([false]);
+    });
+  }
+
+  it('Follow audio hides the button and requests exactly one scroll to the current live paragraph at once', () => {
+    const { audio, sync, seen } = rig();
+    at(audio, 1);
+    sync.noteManualScroll();
+    at(audio, 5);
+    expect(seen.scrolls).toEqual(['p-a']);
+
+    sync.followAudio();
+    expect(sync.following()).toBe(true);
+    expect(seen.follow).toEqual([false, true]);
+    expect(seen.scrolls).toEqual(['p-a', 'p-b']); // one scroll, to the live pid, with no audio event
+
+    // following again: the next change scrolls as usual
+    at(audio, 9.5);
+    expect(seen.scrolls).toEqual(['p-a', 'p-b', 'p-c']);
+  });
+
+  it('Follow audio before the first mark turns following on without a scroll', () => {
+    const { sync, seen } = rig();
+    sync.noteManualScroll();
+    sync.followAudio();
+    expect(sync.following()).toBe(true);
+    expect(seen.scrolls).toEqual([]);
+  });
+
+  it('a paragraph click returns its mark to seek to and turns following back on', () => {
+    const { audio, sync, seen } = rig();
+    at(audio, 10);
+    sync.noteManualScroll();
+    expect(sync.following()).toBe(false);
+
+    const tMs = sync.paragraphClicked('p-b');
+    expect(tMs).toBe(4_000);
+    expect(sync.following()).toBe(true);
+    expect(seen.follow).toEqual([false, true]);
+
+    // the caller seeks the audio; the seeked event moves (and scrolls) the highlight
+    at(audio, tMs! / 1000, 'seeked');
+    expect(sync.current()).toBe('p-b');
+    expect(seen.scrolls.at(-1)).toBe('p-b');
+  });
+
+  it('a click on a paragraph without a mark does nothing (no seek, follow unchanged)', () => {
+    const { sync, seen } = rig();
+    sync.noteManualScroll();
+    expect(sync.paragraphClicked('p-unknown')).toBeNull();
+    expect(sync.following()).toBe(false);
+    expect(seen.follow).toEqual([false]);
+  });
+
+  it('a programmatic scroll never turns following off', () => {
+    const { audio, sync, seen } = rig();
+    // Scroll requests are carried out by the view (scrollIntoView); nothing feeds them back as manual.
+    for (const s of [1, 4.5, 9.5, 0.6, 4.1]) at(audio, s, 'seeked');
+    sync.followAudio();
+    expect(seen.scrolls.length).toBeGreaterThanOrEqual(5);
+    expect(sync.following()).toBe(true);
+    expect(seen.follow).toEqual([]);
   });
 });

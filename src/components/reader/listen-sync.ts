@@ -1,17 +1,23 @@
-// The reader's text ↔ audio sync decisions (pure — unit-tested in tests/unit/reader/listen-view.test.ts).
-// Rules: spec/capabilities/listen-sync.md "Reader highlight" + spec/ui.md §3 Listen. The live
-// paragraph is the mark with the greatest tMs ≤ currentTime (activeMarkIndex); it changes on
-// `timeupdate` and `seeked`; a change scrolls it to centre unless the reader scrolled manually in
-// the last AUTOSCROLL_PAUSE_MS. Space / ← / → work on the window, not in form controls.
+// The reader's text ↔ audio follow decisions (pure — unit-tested in tests/unit/reader/listen-view.test.ts).
+// Rules: spec/capabilities/listen-sync.md "Reader highlight" / "Auto-follow" + spec/ui.md §3 Listen.
+// The live paragraph is the mark with the greatest tMs ≤ currentTime (activeMarkIndex over the
+// server-resolved marks — estimated or stored); it changes on `timeupdate` and `seeked`. Following
+// is on when the view opens; while on, each change of live paragraph asks for a scroll to centre.
+// A manual scroll (wheel / touchmove / scroll key) turns following off; **Follow audio** turns it on
+// and scrolls the current live paragraph at once; a paragraph click seeks and turns it back on.
+// Programmatic scrolls never reach this module, so they can never turn following off.
 
-import { AUTOSCROLL_PAUSE_MS, SEEK_STEP_S, activeMarkIndex, type Mark } from '@/lib/listen/marks';
+import { SEEK_STEP_S, activeMarkIndex, type Mark } from '@/lib/listen/marks';
 
 export type PlayerKeyAction = 'toggle' | 'back' | 'forward' | 'close' | null;
+
+/** What can change the follow state. */
+export type FollowEvent = 'manual-scroll' | 'follow-audio' | 'paragraph-click';
 
 const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown']);
 const FORM_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON']);
 
-/** Keys that scroll the page by themselves — a manual scroll for the auto-scroll pause. */
+/** Keys that scroll the page by themselves — a manual scroll that pauses following. */
 export function isScrollKey(key: string): boolean {
   return SCROLL_KEYS.has(key);
 }
@@ -39,15 +45,20 @@ export function seekTarget(action: 'back' | 'forward', currentS: number, duratio
   return Math.min(hi, Math.max(0, next));
 }
 
-/** The paragraph live at `tMs`, or null before the first mark. */
+/** The paragraph live at `tMs`, or null before the first mark (estimated marks start at 0). */
 export function livePid(marks: readonly Mark[], tMs: number): string | null {
   const i = activeMarkIndex(marks, tMs);
   return i === -1 ? null : marks[i].pid;
 }
 
-/** Auto-scroll is allowed unless the reader scrolled manually within the last 4 s. */
-export function shouldAutoScroll(lastManualAt: number | null, now: number): boolean {
-  return lastManualAt === null || now - lastManualAt >= AUTOSCROLL_PAUSE_MS;
+/** The follow state after an event: a manual scroll pauses it; Follow audio and a paragraph click resume it. */
+export function nextFollowing(_following: boolean, event: FollowEvent): boolean {
+  return event !== 'manual-scroll';
+}
+
+/** Whether a scroll key press counts as a manual scroll (never while typing in a form control). */
+export function isManualScrollKey(key: string, inFormControl: boolean): boolean {
+  return !inFormControl && isScrollKey(key);
 }
 
 /** The slice of `<audio>` the sync reads: the position and the two events. */
@@ -57,51 +68,82 @@ export interface AudioLike {
   removeEventListener(type: 'timeupdate' | 'seeked', fn: () => void): void;
 }
 
+export interface ListenSyncOptions {
+  /** The live paragraph changed (null before the first mark) — move the highlight. */
+  onLive: (pid: string | null) => void;
+  /** Scroll this paragraph to the viewport centre (programmatic — never a "manual" scroll). */
+  onScroll: (pid: string) => void;
+  /** Following turned on/off — show or hide **Follow audio**. Fires only on a change. */
+  onFollowChange?: (following: boolean) => void;
+}
+
 export interface ListenSync {
-  /** Attaches to an audio element (syncs once immediately); returns the detach function. */
+  /** Attaches to an audio element (syncs once immediately, without scrolling); returns the detach function. */
   bind(audio: AudioLike): () => void;
   /** Re-evaluates the live paragraph for a position (seconds). */
   update(currentTimeS: number): void;
-  /** The reader scrolled by hand: pause the auto-scroll for AUTOSCROLL_PAUSE_MS. */
+  /** The reader scrolled by hand (wheel / touchmove / scroll key): following turns off. */
   noteManualScroll(): void;
+  /** **Follow audio**: following turns on and the current live paragraph is scrolled to at once. */
+  followAudio(): void;
+  /**
+   * A paragraph click / Enter / Space: its mark (ms) for the caller to seek to, or null when it has
+   * none. Following turns on (the seek's `seeked` then moves — and scrolls — the highlight).
+   */
+  paragraphClicked(pid: string): number | null;
+  /** Following right now. */
+  following(): boolean;
   /** The live pid right now. */
   current(): string | null;
   /** A paragraph's mark (ms), or null when it has none. */
   markFor(pid: string): number | null;
 }
 
-/**
- * The live-paragraph tracker: `onLive(pid, { scroll })` fires only when the live paragraph
- * changes; `scroll` says whether the change should scroll it into view.
- */
-export function createListenSync(
-  marks: readonly Mark[],
-  opts: { onLive: (pid: string | null, o: { scroll: boolean }) => void; now?: () => number },
-): ListenSync {
-  const now = opts.now ?? (() => Date.now());
+/** The live-paragraph tracker + follow state machine for one open Listen view. */
+export function createListenSync(marks: readonly Mark[], opts: ListenSyncOptions): ListenSync {
   const byPid = new Map(marks.map((m) => [m.pid, m.tMs]));
   let live: string | null = null;
-  let lastManualAt: number | null = null;
+  let following = true; // on each time the view opens
 
-  function update(currentTimeS: number) {
+  function setFollowing(event: FollowEvent) {
+    const next = nextFollowing(following, event);
+    if (next === following) return;
+    following = next;
+    opts.onFollowChange?.(following);
+  }
+
+  function evaluate(currentTimeS: number, allowScroll: boolean) {
     const pid = livePid(marks, (Number.isFinite(currentTimeS) ? currentTimeS : 0) * 1000);
     if (pid === live) return;
     live = pid;
-    opts.onLive(pid, { scroll: pid !== null && shouldAutoScroll(lastManualAt, now()) });
+    opts.onLive(pid);
+    if (pid !== null && following && allowScroll) opts.onScroll(pid);
   }
 
   return {
-    update,
+    update: (s) => evaluate(s, true),
     noteManualScroll() {
-      lastManualAt = now();
+      setFollowing('manual-scroll');
     },
+    followAudio() {
+      setFollowing('follow-audio');
+      if (live !== null) opts.onScroll(live);
+    },
+    paragraphClicked(pid) {
+      const tMs = byPid.get(pid);
+      if (tMs === undefined) return null;
+      setFollowing('paragraph-click');
+      return tMs;
+    },
+    following: () => following,
     current: () => live,
     markFor: (pid) => byPid.get(pid) ?? null,
     bind(audio) {
-      const onTime = () => update(audio.currentTime);
+      const onTime = () => evaluate(audio.currentTime, true);
       audio.addEventListener('timeupdate', onTime);
       audio.addEventListener('seeked', onTime);
-      onTime();
+      // The view just opened: highlight where the audio is, but leave the page where the reader is.
+      evaluate(audio.currentTime, false);
       return () => {
         audio.removeEventListener('timeupdate', onTime);
         audio.removeEventListener('seeked', onTime);

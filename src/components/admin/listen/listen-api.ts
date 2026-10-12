@@ -1,13 +1,12 @@
-// Listen tab + image button → the Phase 3 routes (spec/api.md Endpoints — Phase 3). JSON calls
+// Listen tab + image button → the Phase 3 routes (spec/api.md Endpoints — Phase 3). The admin UI
+// never calls PUT …/listen (aligner-facing since the Phase 3 fix). JSON calls
 // go through the shared apiRequest; uploads use XHR so `upload.onprogress` can drive the
 // progress bar and `abort()` the Cancel button. Same envelope handling as apiRequest.
 
 import type { Envelope } from '@/lib/api/envelope';
-import type { GetListenResponse, ImageUploadResponse, ListenResponse, ListenSaveRequest, PublicListenDto } from '@/lib/api/dto-phase3';
+import type { GetListenResponse, ImageUploadResponse, ListenResponse } from '@/lib/api/dto-phase3';
 
 import { apiRequest, NETWORK_MESSAGE, UNEXPECTED_MESSAGE, type ApiFailure, type ApiResult } from '../api';
-
-import { mediaKeyOf } from './save-sync';
 
 export interface UploadProgress {
   loaded: number;
@@ -78,31 +77,6 @@ export function audioPath(articleId: string): string {
 
 export function getListen(articleId: string): Promise<ApiResult<GetListenResponse>> {
   return apiRequest<GetListenResponse>(listenPath(articleId));
-}
-
-export function saveListen(articleId: string, body: ListenSaveRequest): Promise<ApiResult<ListenResponse>> {
-  return apiRequest<ListenResponse>(listenPath(articleId), { method: 'PUT', body });
-}
-
-/**
- * The published recording's storage key, read from the public Listen endpoint (the admin
- * `published` summary carries no key). null when there is no public Listen (unpublished article,
- * 404) or the request fails. Never cached: the admin needs the current answer.
- */
-export async function getPublishedAudioKey(slug: string): Promise<string | null> {
-  try {
-    const res = await fetch(`/api/public/articles/${encodeURIComponent(slug)}/listen`, {
-      headers: { accept: 'application/json' },
-      cache: 'no-store',
-      credentials: 'same-origin',
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as Envelope<PublicListenDto>;
-    if (!body || body.ok !== true) return null;
-    return mediaKeyOf(body.data.audio?.url);
-  } catch {
-    return null;
-  }
 }
 
 export function deleteAudio(articleId: string): Promise<ApiResult<ListenResponse>> {

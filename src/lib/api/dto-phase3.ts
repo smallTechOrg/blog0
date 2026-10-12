@@ -4,7 +4,14 @@
 
 import type { FormatStatus } from './dto';
 
-export type ListenStatus = Extract<FormatStatus, 'missing' | 'needs_sync' | 'ready' | 'stale'>;
+/**
+ * Phase 3 fix: missing = no draft audio; ready = audio uploaded and the paragraph text unchanged
+ * since; text_changed = the current paragraphs fingerprint ≠ the draft's uploadFingerprint
+ * (warning only, never blocks publishing).
+ */
+export type ListenStatus = Extract<FormatStatus, 'missing' | 'ready' | 'text_changed'>;
+/** resolveMarks (spec/capabilities/listen-sync.md): stored marks covering the text, else estimated. */
+export type ListenTiming = 'synced' | 'estimated';
 export type AudioMime = 'audio/mpeg' | 'audio/mp4';
 export type ImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
 
@@ -44,20 +51,24 @@ export interface ListenStateDto {
   paragraphs: ListenParagraphDto[];
   /** Draft recording. */
   audio: ListenAudioDto | null;
-  /** Draft marks ([] until synced); may reference vanished pids (see orphanPids). */
+  /** STORED draft marks (aligner / legacy tap data; [] normally) — not what readers get. */
   marks: ListenMarkDto[];
+  /** What readers would get over the CURRENT text (resolveMarks); null without audio. */
+  timing: ListenTiming | null;
+  /** Paragraphs fingerprint at upload (legacy rows: syncFingerprint). */
+  uploadFingerprint: string | null;
+  /** === (status === 'text_changed'). */
+  textChangedSinceUpload: boolean;
+  /** Set by PUT …/listen only. */
   syncFingerprint: string | null;
   syncedAt: string | null;
   syncedBy: string | null;
-  /** Current paragraphs without a mark (document order). */
-  missingPids: string[];
-  /** Marks whose paragraph is no longer in the text. */
-  orphanPids: string[];
-  published: { durationMs: number; markCount: number; publishedAt: string; matchesCurrentText: boolean } | null;
+  /** sameAudioAsDraft: published audio.key === draft audio.key. */
+  published: { durationMs: number; publishedAt: string; sameAudioAsDraft: boolean } | null;
   limits: { maxAudioMb: number; maxAudioMinutes: number };
 }
 
-/** PUT /api/admin/articles/:id/listen (revisionId must be current). */
+/** PUT /api/admin/articles/:id/listen (revisionId must be current). Aligner-facing (Phase 6) — no admin UI caller. */
 export interface ListenSaveRequest {
   revisionId: string;
   marks: ListenMarkDto[];
@@ -78,7 +89,6 @@ export interface MarksInvalidDetails {
 /** Error codes the Listen sync save answers with (spec/api.md → Error codes). */
 export const MARKS_INVALID = 'MARKS_INVALID';
 export const LISTEN_NO_AUDIO = 'LISTEN_NO_AUDIO';
-export const LISTEN_STALE = 'LISTEN_STALE';
 
 /** POST /api/admin/uploads/images → 201 data. */
 export interface ImageUploadResponse {
@@ -96,8 +106,9 @@ export interface PublicListenDto {
   /** "<date> · <read> min read" as the deck's. */
   meta: string;
   audio: { url: string; mimeType: AudioMime; durationMs: number };
-  /** Published marks over the published revision. */
+  /** resolveMarks(published stored marks, published revision's paragraphs, durationMs) — per request, one per published paragraph. */
   marks: ListenMarkDto[];
+  timing: ListenTiming;
   bylineName: string;
   times: { read: number; tldr: number | null; listen: number };
   /** Absolute …/p/<slug>/listen. */

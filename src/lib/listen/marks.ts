@@ -1,6 +1,6 @@
 // Listen marks helpers (spec/architecture.md §9.4). Pure + isomorphic: the server validates
-// saves and computes the stale diff with them, the admin tap-sync nudges/undoes with them, the
-// reader highlight finds the live paragraph with them. Rules: spec/capabilities/listen-sync.md.
+// aligner-facing mark saves with them, the reader highlight finds the live paragraph with them,
+// the players format clocks and minutes with them. Rules: spec/capabilities/listen-sync.md.
 
 export interface Mark {
   pid: string;
@@ -10,14 +10,8 @@ export interface Mark {
 export type MarkIssueCode = 'UNKNOWN_PID' | 'MISSING_PID' | 'DUPLICATE_PID' | 'OUT_OF_ORDER' | 'NOT_INCREASING' | 'OUT_OF_RANGE';
 export type MarkIssue = { code: MarkIssueCode; pid?: string; index?: number };
 
-/** One nudge step (ms). */
-export const NUDGE_MS = 250;
-/** Taps closer than this are ignored during syncing. */
-export const TAP_DEBOUNCE_MS = 300;
 /** ←/→ seek step (seconds) in the reader's player. */
 export const SEEK_STEP_S = 5;
-/** Auto-scroll pauses this long after a manual scroll. */
-export const AUTOSCROLL_PAUSE_MS = 4000;
 
 function isValidTime(tMs: number, durationMs: number): boolean {
   return Number.isInteger(tMs) && tMs >= 0 && tMs < durationMs;
@@ -85,45 +79,16 @@ export function activeMarkIndex(marks: readonly Mark[], tMs: number): number {
   return found;
 }
 
-/** A copy with mark `index` moved by ±250 ms, or null when ordering or the bounds would break. */
-export function nudgeMark(marks: readonly Mark[], index: number, deltaMs: 250 | -250, durationMs: number): Mark[] | null {
-  if (!Number.isInteger(index) || index < 0 || index >= marks.length) return null;
-  const next = marks[index].tMs + deltaMs;
-  if (!isValidTime(next, durationMs)) return null;
-  if (index > 0 && next <= marks[index - 1].tMs) return null;
-  if (index < marks.length - 1 && next >= marks[index + 1].tMs) return null;
-  return marks.map((m, i) => (i === index ? { pid: m.pid, tMs: next } : { pid: m.pid, tMs: m.tMs }));
-}
-
-/** Paragraphs without a mark (document order) and marks whose paragraph vanished (mark order). */
-export function listenDiff(marks: readonly Mark[], paragraphPids: readonly string[]): { missingPids: string[]; orphanPids: string[] } {
-  const marked = new Set(marks.map((m) => m.pid));
-  const present = new Set(paragraphPids);
-  return {
-    missingPids: paragraphPids.filter((pid) => !marked.has(pid)),
-    orphanPids: marks.filter((m) => !present.has(m.pid)).map((m) => m.pid),
-  };
-}
-
 /** max(1, round(durationMs / 60000)) — the design's `audioMinutes`. */
 export function listenMinutes(durationMs: number): number {
   return Math.max(1, Math.round((Number.isFinite(durationMs) ? durationMs : 0) / 60_000));
 }
 
-function clockParts(ms: number): { m: number; s: number; rest: number } {
-  const safe = Number.isFinite(ms) && ms > 0 ? ms : 0;
-  const totalSec = Math.floor(safe / 1000);
-  return { m: Math.floor(totalSec / 60), s: totalSec % 60, rest: Math.floor(safe % 1000) };
-}
-
 /** "m:ss" — the design's `fmtClock`, over milliseconds. */
 export function fmtClock(ms: number): string {
-  const { m, s } = clockParts(ms);
+  const safe = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const totalSec = Math.floor(safe / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
   return `${m}:${s < 10 ? '0' : ''}${s}`;
-}
-
-/** "m:ss.mmm" for the admin mark list. */
-export function fmtClockMs(ms: number): string {
-  const { rest } = clockParts(ms);
-  return `${fmtClock(ms)}.${String(rest).padStart(3, '0')}`;
 }

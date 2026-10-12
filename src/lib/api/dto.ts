@@ -128,9 +128,10 @@ export type ClearDeckResponse = TldrResponse;
 export interface PublishRequest { revisionId: string }
 export type PublishResponse = ArticleResponse;
 /** 422 PUBLISH_BLOCKED → error.details */
-export type PublishBlockedReasonCode = 'TITLE_REQUIRED' | 'TOPIC_REQUIRED' | 'BODY_REQUIRED' | 'TLDR_DECK_STALE' | 'LISTEN_STALE';
-/** `sids` for TLDR_DECK_STALE; `missingPids` / `orphanPids` for LISTEN_STALE (Phase 3). */
-export interface PublishBlockedReason { code: PublishBlockedReasonCode; message: string; sids?: string[]; missingPids?: string[]; orphanPids?: string[] }
+/** Listen never blocks publishing (Phase 3 fix: its publish-block code was removed). */
+export type PublishBlockedReasonCode = 'TITLE_REQUIRED' | 'TOPIC_REQUIRED' | 'BODY_REQUIRED' | 'TLDR_DECK_STALE';
+/** `sids` for TLDR_DECK_STALE. */
+export interface PublishBlockedReason { code: PublishBlockedReasonCode; message: string; sids?: string[] }
 export interface PublishBlockedDetails { reasons: PublishBlockedReason[] }
 
 /** 422 DECK_INVALID → error.details */

@@ -1,11 +1,13 @@
 // Audio ingest (S3.2) against real blog0_test + real files under var/storage-test
 // (spec/capabilities/listen-audio.md → Success Criteria; spec/architecture.md §9.3, §9.5).
 //
-// Happy paths: m4a + mp3 uploads → needs_sync, content-detected mime, duration vs sample.json, file
-// + media_asset row + listen draft payload. Edge/error paths: renamed text file, WAV, over-size
+// Happy paths: m4a + mp3 uploads → ready (Phase 3 fix: no sync step; uploadFingerprint = the
+// current paragraphs fingerprint, timing estimated), content-detected mime, duration vs
+// sample.json, file + media_asset row + listen draft payload. Edge/error paths: renamed text file, WAV, over-size
 // (413, nothing on disk / in the DB), over-length (422 via injected limits), unknown article, no
 // file field. Lifecycle: replace (old file + row gone), remove (idempotent), a published Listen
-// keeps its file across replace + remove.
+// keeps its file across replace + remove; publish copies the uploaded draft at once and deletes the
+// superseded published recording.
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
@@ -16,14 +18,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { POST as createRoute } from '@/app/api/admin/articles/route';
 import { DELETE as deleteAudioRoute, POST as uploadRoute } from '@/app/api/admin/articles/[id]/audio/route';
-import { PUT as listenPutRoute } from '@/app/api/admin/articles/[id]/listen/route';
 import { POST as publishRoute } from '@/app/api/admin/articles/[id]/publish/route';
 import type { ArticleDetailDto, ArticleResponse } from '@/lib/api/dto';
 import type { ListenResponse, ListenStateDto } from '@/lib/api/dto-phase3';
 import type { Envelope, Err } from '@/lib/api/envelope';
 import { getConfig, resetConfigForTests } from '@/server/config';
 import { getDb } from '@/server/db/client';
-import { article as articleTable, articleFormat, mediaAsset, type MediaAssetRow } from '@/server/db/schema';
+import { article as articleTable, articleFormat, articleRevision, mediaAsset, type MediaAssetRow } from '@/server/db/schema';
 import { ApiError } from '@/server/http/api';
 import { uploadAudio } from '@/server/listen/ingest';
 import { getPublishedArticle } from '@/server/public/articles';
@@ -103,11 +104,9 @@ async function remove(id: string) {
   return call<ListenResponse>(deleteAudioRoute, 'DELETE', `/api/admin/articles/${id}/audio`, { id });
 }
 
-async function putMarks(id: string, revisionId: string, state: ListenStateDto) {
-  const marks = state.paragraphs.map((p, i) => ({ pid: p.pid, tMs: 800 + i * 2_500 }));
-  const res = await call<ListenResponse>(listenPutRoute, 'PUT', `/api/admin/articles/${id}/listen`, { json: { revisionId, marks }, id });
-  expect(res.status).toBe(200);
-  expect(data(res.env).listen.status).toBe('ready');
+async function paragraphsFingerprint(revisionId: string): Promise<string> {
+  const [row] = await getDb().select({ fp: articleRevision.paragraphsFingerprint }).from(articleRevision).where(eq(articleRevision.id, revisionId));
+  return row.fp;
 }
 
 async function publish(id: string, revisionId: string) {
@@ -153,12 +152,16 @@ afterEach(() => {
 });
 
 describe('POST /api/admin/articles/:id/audio — upload', () => {
-  it('stores sample.m4a: needs_sync, audio/mp4, duration vs sample.json, file + row + listen draft', async () => {
+  it('stores sample.m4a: ready, audio/mp4, duration vs sample.json, file + row + listen draft', async () => {
     const article = await createArticle();
+    const fp = await paragraphsFingerprint(article.currentRevision.id);
     const bytes = fixture('sample.m4a');
     const listen = await uploadOk(article.id, fileOf(bytes, 'reading.m4a', 'audio/mp4'));
 
-    expect(listen.status).toBe('needs_sync');
+    expect(listen.status).toBe('ready');
+    expect(listen.uploadFingerprint).toBe(fp);
+    expect(listen.timing).toBe('estimated');
+    expect(listen.textChangedSinceUpload).toBe(false);
     expect(listen.marks).toEqual([]);
     expect(listen.syncFingerprint).toBeNull();
     expect(listen.audio).not.toBeNull();
@@ -197,9 +200,10 @@ describe('POST /api/admin/articles/:id/audio — upload', () => {
       audio: { assetId: audio.assetId, key: audio.key, mimeType: 'audio/mp4', bytes: known.m4a.bytes, durationMs: audio.durationMs },
       marks: [],
       syncFingerprint: null,
+      uploadFingerprint: fp,
     });
-    expect(row!.draftFingerprint).toBeNull();
-    expect(row!.draftRevisionId).toBeNull();
+    expect(row!.draftFingerprint).toBe(fp);
+    expect(row!.draftRevisionId).toBe(article.currentRevision.id);
     expect(row!.draftUpdatedBy).toBe(writer.user.id);
     expect(row!.publishedPayload).toBeNull();
 
@@ -222,7 +226,8 @@ describe('POST /api/admin/articles/:id/audio — upload', () => {
   it('stores sample.mp3 as audio/mpeg under a .mp3 key, detected by content even with a wrong name/type', async () => {
     const article = await createArticle();
     const listen = await uploadOk(article.id, fileOf(fixture('sample.mp3'), 'whatever.bin', 'application/octet-stream'));
-    expect(listen.status).toBe('needs_sync');
+    expect(listen.status).toBe('ready');
+    expect(listen.timing).toBe('estimated');
     expect(listen.audio!.mimeType).toBe('audio/mpeg');
     expect(listen.audio!.key).toMatch(/\.mp3$/);
     expect(listen.audio!.bytes).toBe(known.mp3.bytes);
@@ -328,14 +333,14 @@ describe('POST /api/admin/articles/:id/audio — upload', () => {
 });
 
 describe('replace and remove', () => {
-  it('a second upload replaces the asset, clears marks, and deletes the first (unpublished) file + row', async () => {
+  it('a second upload replaces the asset, clears stored marks, re-baselines, and deletes the first (unpublished) file + row', async () => {
     const article = await createArticle();
     const first = await uploadOk(article.id, fileOf(fixture('sample.m4a'), 'take-1.m4a', 'audio/mp4'));
-    // Simulate a sync in progress on the draft (marks get cleared by the replace).
+    // Simulate stored (aligner) marks + an old baseline on the draft (cleared / re-set by the replace).
     const draft = (await listenRow(article.id))!.draftPayload as { audio: object };
     await getDb()
       .update(articleFormat)
-      .set({ draftPayload: { ...draft, marks: [{ pid: 'p1', tMs: 0 }], syncFingerprint: 'fp' }, draftFingerprint: 'fp' })
+      .set({ draftPayload: { ...draft, marks: [{ pid: 'p1', tMs: 0 }], syncFingerprint: 'fp', uploadFingerprint: 'fp-old' }, draftFingerprint: 'fp-old' })
       .where(eq(articleFormat.articleId, article.id));
 
     const second = await uploadOk(article.id, fileOf(fixture('sample.mp3'), 'take-2.mp3', 'audio/mpeg'));
@@ -343,7 +348,9 @@ describe('replace and remove', () => {
     expect(second.audio!.key).not.toBe(first.audio!.key);
     expect(second.audio!.mimeType).toBe('audio/mpeg');
     expect(second.marks).toEqual([]);
-    expect(second.status).toBe('needs_sync');
+    expect(second.status).toBe('ready');
+    expect(second.syncFingerprint).toBeNull();
+    expect(second.uploadFingerprint).toBe(await paragraphsFingerprint(article.currentRevision.id));
 
     expect(existsSync(onDisk(first.audio!.key))).toBe(false);
     expect(existsSync(onDisk(second.audio!.key))).toBe(true);
@@ -410,7 +417,7 @@ describe('replace and remove', () => {
     let row = (await listenRow(article.id))!;
     expect(row.publishedPayload).toEqual(payload);
     expect((row.publishedPayload as { audio: { durationMs: number } }).audio.durationMs).toBe(published.audio!.durationMs);
-    expect(replaced.published).toMatchObject({ durationMs: published.audio!.durationMs, markCount: 2 });
+    expect(replaced.published).toMatchObject({ durationMs: published.audio!.durationMs, sameAudioAsDraft: false });
 
     // Remove: the retake goes, the published recording stays.
     const removed = data((await remove(article.id)).env).listen;
@@ -477,27 +484,24 @@ describe('publish deletes the superseded published recording (listen-audio file 
   async function publishedWithListen() {
     const article = await createArticle({ topic: 'Craft' });
     const first = await uploadOk(article.id, fileOf(fixture('sample.m4a'), 'first.m4a', 'audio/mp4'));
-    await putMarks(article.id, article.currentRevision.id, first);
-    await publish(article.id, article.currentRevision.id);
+    expect(first.status).toBe('ready');
+    await publish(article.id, article.currentRevision.id); // no sync step: the uploaded draft publishes as is
     const row = (await listenRow(article.id))!;
     expect((row.publishedPayload as { audio: { key: string } }).audio.key).toBe(first.audio!.key);
     return { article, first };
   }
 
-  it('replace + sync + publish: the old published file and row are deleted, the new one serves', async () => {
+  it('replace + publish: the old published file and row are deleted, the new one serves', async () => {
     const { article, first } = await publishedWithListen();
 
-    // Replace: the published recording stays while the draft moves on.
+    // Replace: the published recording stays (and keeps serving) while the draft moves on.
     const second = await uploadOk(article.id, fileOf(fixture('sample.mp3'), 'second.mp3', 'audio/mpeg'));
+    expect(second.status).toBe('ready');
     expect(existsSync(onDisk(first.audio!.key))).toBe(true);
-    expect(second.published).toMatchObject({ durationMs: first.audio!.durationMs });
-
-    // Publishing while the new draft still needs sync leaves the published copy (and its file) alone.
-    await publish(article.id, article.currentRevision.id);
-    expect(existsSync(onDisk(first.audio!.key))).toBe(true);
+    expect(second.published).toMatchObject({ durationMs: first.audio!.durationMs, sameAudioAsDraft: false });
     expect((await assetRows()).map((r) => r.id).sort()).toEqual([first.audio!.assetId, second.audio!.assetId].sort());
+    expect((await getPublishedArticle(article.slug))!.listen!.audioUrl).toBe(`/media/${first.audio!.key}`);
 
-    await putMarks(article.id, article.currentRevision.id, second);
     logs.lines.length = 0;
     const published = await publish(article.id, article.currentRevision.id);
     expect(published.status).toBe('published');
@@ -537,7 +541,6 @@ describe('publish deletes the superseded published recording (listen-audio file 
   it('a blocked publish (rolled back) deletes nothing', async () => {
     const { article, first } = await publishedWithListen();
     const second = await uploadOk(article.id, fileOf(fixture('sample.mp3'), 'second.mp3', 'audio/mpeg'));
-    await putMarks(article.id, article.currentRevision.id, second);
     // Clearing the topic makes the publish fail its guard → the transaction rolls back.
     await getDb().update(articleTable).set({ topic: '' }).where(eq(articleTable.id, article.id));
     const res = await call<ArticleResponse>(publishRoute, 'POST', `/api/admin/articles/${article.id}/publish`, { json: { revisionId: article.currentRevision.id }, id: article.id });

@@ -2,15 +2,22 @@
 // GET /api/public/articles/:slug/tldr (the card → deck overlay), /sitemap.xml, /robots.txt and the
 // article route metadata (OG times from the DB). Articles are inserted directly with the schema
 // and rendered with the real content pipeline. No LLM is involved anywhere in this capability.
+// Phase 3 fix: GET /api/public/articles/:slug/listen serves marks resolved per request (estimated
+// over the published paragraphs when no stored marks cover them) and the same times as the deck DTO.
+import { randomUUID } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { GET as listenRoute } from '@/app/api/public/articles/[slug]/listen/route';
 import { GET as tldrRoute } from '@/app/api/public/articles/[slug]/tldr/route';
 import robots from '@/app/robots';
 import sitemap from '@/app/sitemap';
 import type { PublicTldrDto } from '@/lib/api/dto-phase2';
+import type { PublicListenDto } from '@/lib/api/dto-phase3';
 import type { Envelope } from '@/lib/api/envelope';
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
+import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { DECK_DISCLOSURE } from '@/lib/view-models';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
@@ -48,6 +55,8 @@ interface SeedArticle {
   deck?: unknown;
   draftDeck?: unknown;
   withPublishedRevision?: boolean;
+  /** Listen payloads (raw jsonb); omitted → no listen row. */
+  listen?: { published?: unknown; draft?: unknown };
 }
 
 let siteRow: SiteRow;
@@ -119,7 +128,38 @@ async function seedArticle(a: SeedArticle) {
         publishedAt: a.deck ? new Date() : null,
       });
   }
+  if (a.listen) {
+    await getDb()
+      .insert(articleFormat)
+      .values({
+        siteId,
+        articleId: row.id,
+        kind: 'listen',
+        draftPayload: a.listen.draft ?? null,
+        publishedPayload: a.listen.published ?? null,
+        publishedRevisionId: a.listen.published ? rev.id : null,
+        publishedAt: a.listen.published ? new Date() : null,
+      });
+  }
   return { id: row.id, rendered: r };
+}
+
+/** An uploaded-and-published Listen payload with no stored marks (spec/data.md). */
+function listenPayload(durationMs: number) {
+  return {
+    audio: { assetId: randomUUID(), key: `blog0/audio/2026/10/${randomUUID()}.m4a`, mimeType: 'audio/mp4', bytes: 4321, durationMs },
+    marks: [],
+    syncFingerprint: null,
+    uploadFingerprint: 'fp-at-upload',
+  };
+}
+
+async function getListen(slug: string) {
+  const res = await listenRoute(new Request(`${BASE}/api/public/articles/${encodeURIComponent(slug)}/listen`, { headers: { host: 'localhost:3410' } }), {
+    params: Promise.resolve({ slug }),
+  });
+  const text = await res.text();
+  return { status: res.status, headers: res.headers, text, env: JSON.parse(text) as Envelope<PublicListenDto> };
 }
 
 function deckFrom(rendered: Awaited<ReturnType<typeof renderArticle>>, picks: number[], sources?: Array<'jev' | 'writer'>) {
@@ -299,5 +339,53 @@ describe('article route metadata', () => {
     expect(await articleRouteMetadata(null, 'read')).toEqual({});
     expect(await publishedModifiedAt('was-live')).toBeNull();
     expect(await publishedModifiedAt('never-existed')).toBeNull();
+  });
+});
+
+describe('GET /api/public/articles/:slug/listen (Phase 3 fix)', () => {
+  it('serves estimated marks over the published paragraphs + the same times as the deck DTO; no admin fields', async () => {
+    const pre = await renderArticle({ title: 'Hear the work', dek: 'Benchmarks are not the job.', bodyMd: BODY_A });
+    const payload = listenPayload(95_000);
+    await seedArticle({
+      slug: 'hear-the-work',
+      title: 'Hear the work',
+      dek: 'Benchmarks are not the job.',
+      topic: 'Op-Ed',
+      bodyMd: BODY_A,
+      firstPublishedAt: day(8),
+      deck: deckFrom(pre, [0, 2]),
+      listen: { published: payload },
+    });
+
+    const res = await getListen('hear-the-work');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    if (!res.env.ok) throw new Error('expected ok');
+    const d = res.env.data;
+    expect(d.timing).toBe('estimated');
+    expect(d.marks).toEqual(estimateMarks(toTimedParagraphs(pre.paragraphs), 95_000));
+    expect(d.marks.map((m) => m.pid)).toEqual(pre.paragraphs.map((p) => p.pid));
+    expect(d.marks[0].tMs).toBe(0);
+    expect(d.audio).toEqual({ url: `/media/${payload.audio.key}`, mimeType: 'audio/mp4', durationMs: 95_000 });
+    expect(d.times.listen).toBe(2);
+    expect(res.text).not.toMatch(/"(assetId|uploadFingerprint|syncFingerprint|key)"/);
+
+    const tldr = await getTldr('hear-the-work');
+    if (!tldr.env.ok) throw new Error('expected ok');
+    expect(tldr.env.data.times).toEqual(d.times);
+    const line = logs.lines.find((l) => l.event === 'api.request' && l.status === 200 && String(l.path).endsWith('/listen'));
+    expect(line?.output_summary).toEqual({ marks: pre.paragraphs.length, timing: 'estimated' });
+  });
+
+  it('404s when only a draft Listen exists, and when the published payload is corrupt', async () => {
+    await seedArticle({ slug: 'draft-listen', title: 'Draft listen', bodyMd: BODY_B, listen: { draft: listenPayload(30_000) } });
+    await seedArticle({ slug: 'corrupt-listen', title: 'Corrupt listen', bodyMd: BODY_B, listen: { published: { audio: { key: 1 } } } });
+    for (const slug of ['draft-listen', 'corrupt-listen']) {
+      const res = await getListen(slug);
+      expect(res.status, slug).toBe(404);
+      expect(res.env.ok).toBe(false);
+    }
+    const tldr = await getTldr('draft-listen');
+    expect(tldr.status).toBe(404); // no deck either; just proving no Listen-driven 500s
   });
 });
