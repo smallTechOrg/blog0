@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // Loads .env via @next/env, then runs `next <dev|start> -p ${BLOG0_PORT || 3410}` and forwards signals.
+// On the first SIGTERM/SIGINT it also arms a kill timer of BLOG0_SHUTDOWN_TIMEOUT_MS (default 8000)
+// + 5000 ms: a server that has not exited by then is SIGKILLed and this script exits 1 (§12.2).
 // Usage (from the repo root): pnpm dev | pnpm start   (designer mode: pnpm dev:design, which ends here)
 // `start` refuses an absent/empty BLOG0_DATABASE_URL (no silent PGlite in production).
 // BLOG0_DIST_DIR (shell or .env) reaches next.config.ts `distDir` through the inherited env, so
@@ -40,17 +42,33 @@ if ((process.env.BLOG0_DATABASE_URL ?? '').replace(/\s+#.*$/, '').trim() === '')
   console.log('BLOG0_DATABASE_URL not set — using embedded PGlite at ./var/pglite (run `pnpm dev:design` once to migrate + seed it).');
 }
 
+// Same rule as src/server/config.ts; an invalid value falls back here (the server itself refuses to boot).
+const rawShutdown = (process.env.BLOG0_SHUTDOWN_TIMEOUT_MS ?? '').replace(/\s+#.*$/, '').trim();
+const shutdownTimeoutMs =
+  /^\d+$/.test(rawShutdown) && Number(rawShutdown) >= 1000 && Number(rawShutdown) <= 120000 ? Number(rawShutdown) : 8000;
+const KILL_GRACE_MS = 5000;
+
 const require = createRequire(import.meta.url);
 const nextBin = require.resolve('next/dist/bin/next');
 const child = spawn(process.execPath, [nextBin, mode, '-p', port], { stdio: 'inherit', env: process.env });
 
+let killTimer = null;
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
-    if (!child.killed) child.kill(signal);
+    if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    if (killTimer === null && signal !== 'SIGHUP') {
+      const limit = shutdownTimeoutMs + KILL_GRACE_MS;
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        console.error(`blog0: server did not exit within ${limit} ms — killed`);
+        process.exit(1);
+      }, limit);
+    }
   });
 }
 
 child.on('exit', (code, signal) => {
+  if (killTimer !== null) clearTimeout(killTimer);
   if (signal) {
     process.kill(process.pid, signal);
     return;

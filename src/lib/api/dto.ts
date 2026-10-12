@@ -19,6 +19,22 @@ export interface HealthDto {
   dbEngine: 'postgres' | 'pglite';
 }
 
+/** GET /api/health/live → data. Always 200 while the process serves; never touches the DB. */
+export interface HealthLiveDto { status: 'live'; version: string; uptimeSec: number; shuttingDown: boolean }
+
+/** GET /api/health/ready → data. Not ready → 503 NOT_READY with `NotReadyDetails`. */
+export interface HealthReadyDto {
+  status: 'ready'; db: 'ok'; dbLatencyMs: number; dbEngine: 'postgres' | 'pglite';
+  migrations: { applied: number; pending: 0; latest: string | null };
+  version: string;
+}
+
+/** `error.details` of a 503 NOT_READY from /api/health/ready. */
+export interface NotReadyDetails {
+  reason: 'SHUTTING_DOWN' | 'DB_UNAVAILABLE' | 'MIGRATIONS_PENDING';
+  pending?: string[];
+}
+
 /** POST /api/auth/login */
 export interface LoginRequest { email: string; password: string }
 export interface LoginResponse { user: UserDto }

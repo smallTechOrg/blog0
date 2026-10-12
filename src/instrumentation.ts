@@ -1,5 +1,6 @@
 // Next.js boot hook: validate config (fail fast: log every problem, exit 1), open an embedded
-// PGlite database before the first request, and log `app.boot` (engine, data dir, Jev key state).
+// PGlite database before the first request, log `app.boot` (engine, data dir, Jev key state), and in
+// production install the graceful-shutdown hook (src/server/ops/lifecycle.ts, §12.2).
 // Skipped during `next build` so the build stays env-free.
 
 export async function register(): Promise<void> {
@@ -58,4 +59,9 @@ export async function register(): Promise<void> {
       : {}),
     openrouter_key: config.openrouterApiKey === null ? 'not configured (Jev disabled)' : 'configured',
   });
+
+  if (process.env.NODE_ENV === 'production') {
+    const { installShutdownHandlers } = await import('./server/ops/lifecycle');
+    installShutdownHandlers();
+  }
 }

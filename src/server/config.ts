@@ -89,6 +89,8 @@ export interface Config {
   trustedProxyHops: number;
   /** BLOG0_RATE_LIMIT_STORE: `auto` = Postgres-backed on postgres://, in-memory on pglite:// (§6). */
   rateLimitStore: RateLimitStoreSetting;
+  /** BLOG0_SHUTDOWN_TIMEOUT_MS: drain deadline after SIGTERM/SIGINT (§12.2). */
+  shutdownTimeoutMs: number;
   isProduction: boolean;
 }
 
@@ -110,6 +112,7 @@ export const CONFIG_DEFAULTS = {
   maxImageMb: 8,
   trustedProxyHops: 0,
   rateLimitStore: 'auto' as RateLimitStoreSetting,
+  shutdownTimeoutMs: 8000,
 } as const;
 
 export class ConfigError extends Error {
@@ -330,6 +333,8 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     : null;
   if (rateLimitStore === null) problems.push(`BLOG0_RATE_LIMIT_STORE must be one of ${RATE_LIMIT_STORES.join('|')}`);
 
+  const shutdownTimeoutMs = int(problems, env, 'BLOG0_SHUTDOWN_TIMEOUT_MS', CONFIG_DEFAULTS.shutdownTimeoutMs, 1000, 120_000);
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const target = database as ParsedDatabaseUrl;
@@ -361,6 +366,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     e2eBaseUrl,
     trustedProxyHops,
     rateLimitStore: rateLimitStore as RateLimitStoreSetting,
+    shutdownTimeoutMs,
     isProduction,
   };
 }

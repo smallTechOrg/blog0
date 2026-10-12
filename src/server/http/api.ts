@@ -74,6 +74,8 @@ export interface ApiOptions<S extends BodySpec, A extends AuthMode> {
   summarizeOutput?: (data: unknown) => Summary;
   /** Cache-Control for a 200 (public reads); everything else stays `no-store`. */
   cacheControl?: string;
+  /** `debug`: a 2xx `api.request` line logs at debug (probe noise); anything else at the normal level. */
+  logLevel?: 'debug' | 'info';
 }
 
 export interface ApiContext<S extends BodySpec, A extends AuthMode> {
@@ -256,7 +258,8 @@ export function withApi<S extends BodySpec = undefined, A extends AuthMode = Aut
       }
     }
 
-    log.info('api.request', {
+    const logAt = options.logLevel === 'debug' && status >= 200 && status < 300 ? log.debug : log.info;
+    logAt('api.request', {
       msg: `${method} ${path} ${status}`,
       request_id: requestId,
       method,
