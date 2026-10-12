@@ -1,6 +1,8 @@
 // Playwright global setup (spec/architecture.md → Test wiring): reset + migrate blog0_test, seed the
-// site row and the admin through src/server/seed/admin.ts. Playwright starts the web server first;
-// the app connects to the DB lazily, so resetting the schema here (before any test request) is safe.
+// site row and the admin through src/server/seed/admin.ts, then (Phase 2, S2.9) the 5 design
+// articles (seedPosts) and their decks from the committed fixture (seedTldr source 'fixture'), so
+// the reader walk makes 0 LLM calls. Playwright starts the web server first; the app connects to
+// the DB lazily, so resetting the schema here (before any test request) is safe.
 //
 // Admin credentials: BLOG0_ADMIN_EMAIL + BLOG0_ADMIN_PASSWORD when both are set (from the shell or
 // .env, validated like `pnpm db:seed`); otherwise a test-only admin is generated in-process. Either
@@ -13,6 +15,8 @@ import { randomBytes } from 'node:crypto';
 import { closeDb, getDb } from '@/server/db/client';
 import { resetConfigForTests } from '@/server/config';
 import { adminCredentialsFromEnv, seedAdmin, type AdminCredentials } from '@/server/seed/admin';
+import { seedPosts } from '@/server/seed/seed-posts';
+import { seedTldr } from '@/server/seed/seed-tldr';
 
 import { prepareTestDatabase, resetDb } from '../helpers/db';
 import { pointAtTestDatabase } from '../helpers/env';
@@ -37,7 +41,13 @@ export default async function globalSetup(): Promise<void> {
     resetConfigForTests();
     const site = await resetDb();
     const credentials = e2eAdminCredentials();
-    await seedAdmin(getDb(), site.id, credentials, { resetPassword: true });
+    const admin = await seedAdmin(getDb(), site.id, credentials, { resetPassword: true });
+    const posts = await seedPosts(getDb(), site.id, admin.userId);
+    if (posts.created.length !== 5) throw new Error(`E2E seed: expected 5 posts created, got ${posts.created.length}`);
+    const decks = await seedTldr(getDb(), site.id, admin.userId, { source: 'fixture' });
+    if (decks.seeded.length !== 5 || decks.calls !== 0 || decks.failed.length > 0) {
+      throw new Error(`E2E seed: expected 5 fixture decks with 0 calls, got ${decks.seeded.length} (failed: ${decks.failed.join(', ') || 'none'}, calls: ${decks.calls})`);
+    }
     process.env[E2E_ADMIN_ENV.email] = credentials.email;
     process.env[E2E_ADMIN_ENV.password] = credentials.password;
     process.env[E2E_ADMIN_ENV.name] = credentials.displayName;

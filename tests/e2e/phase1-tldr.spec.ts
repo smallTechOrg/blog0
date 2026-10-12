@@ -72,14 +72,16 @@ test.describe('Phase 1 golden path: paste → TLDR → publish → read', () => 
     await anon.dispose();
   });
 
-  test('/admin redirects to sign-in; signing in lands on the empty desk', async () => {
+  test('/admin redirects to sign-in; signing in lands on the desk (the 5 seeded posts from global setup)', async () => {
     const { page } = journey();
 
     await page.goto('/admin');
 
     await expect(page).toHaveURL(/\/admin\/login\?next=%2Fadmin$/);
     await signInThroughForm(page);
-    await expect(page.getByText('No articles yet. Paste your Markdown and see it exactly as readers will.')).toBeVisible();
+    // Phase 2 global setup seeds the 5 design articles (seedPosts) before this walk.
+    await expect(page.locator('.admin-table tbody tr')).toHaveCount(5);
+    await expect(page.locator('.admin-table__title', { hasText: 'Humans are Software' })).toBeVisible();
   });
 
   test('New article → paste Markdown → the editor shows "Saved · rev 1" and a live Read preview', async () => {
