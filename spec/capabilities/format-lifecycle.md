@@ -36,5 +36,5 @@ while the published versions keep serving.
 ## Success Criteria
 - [ ] Desk chips for an article with a ready deck show TLDR `ready`; after a sentence edit, `stale`; after Regenerate, `ready`; at no point does a save create an `ai_generation` row.
 - [ ] Heading-only edits leave TLDR `ready`; paragraph text edits make Listen `stale`.
-- [ ] The public page serves the published deck/cues throughout.
+- [ ] The public page serves the published deck / Listen marks + audio throughout.
 - [ ] Registering a fake test-only format kind in a unit test makes it appear in chips without schema changes.

@@ -119,7 +119,7 @@ text validated against `src/lib/formats/registry.ts` (extensible without migrati
 | kind | text not null | `tldr`, `listen` (Read is implied by the revision; no row needed) |
 | draft_payload | jsonb null | writer's working copy |
 | draft_revision_id | uuid null fk → article_revision | revision the draft was built against |
-| draft_fingerprint | text null | sentences fp (tldr) / paragraphs fp (listen) at draft time |
+| draft_fingerprint | text null | sentences fp (tldr) at draft time / paragraphs fp (listen) at **sync** time — for listen it mirrors `draft_payload.syncFingerprint` (null while unsynced) so the generic chip query reads one column |
 | draft_updated_by | uuid null fk → app_user | |
 | draft_updated_at | timestamptz null | |
 | published_payload | jsonb null | what readers get |
@@ -138,12 +138,27 @@ interface TldrPayload {
   slides: Array<{ sid: string; text: string; source: 'jev' | 'writer'; reason: string | null }>; // 1..12, text verbatim from the revision's sentence
   generationId: string | null;   // ai_generation that produced the Jev picks this deck started from
 }
-// kind = 'listen' (Phase 3)
+// kind = 'listen' (Phase 3) — src/server/formats/payload.ts `listenPayloadSchema`
 interface ListenPayload {
-  audioAssetId: string; durationSec: number; mimeType: string;
-  cues: Array<{ pid: string; startSec: number }>;  // one per paragraph in document order, startSec strictly increasing, < durationSec
+  audio: {
+    assetId: string;                 // media_asset.id (kind 'audio')
+    key: string;                     // media_asset.storage_key, copied so the payload is self-describing (served as '/media/' + key)
+    mimeType: 'audio/mpeg' | 'audio/mp4';
+    bytes: number;
+    durationMs: number;              // integer, from the probe
+  };
+  marks: Array<{ pid: string; tMs: number }>;   // [] until synced; else exactly one per paragraph of the synced revision,
+                                                // document order, tMs integer ≥ 0, strictly increasing, < audio.durationMs
+  syncFingerprint: string | null;  // paragraphs fingerprint of the revision the marks were recorded against; null while marks = []
 }
 ```
+
+A `listen` row exists from the first upload. `draft_payload` null (after Remove audio) = no draft.
+`draft_revision_id` = the revision at sync time (null while unsynced). `published_payload` has the
+same shape and is only ever a copy of a `ready` draft (marks non-empty, `syncFingerprint` ==
+the published revision's paragraphs fingerprint), so readers never see a partial sync.
+`published_fingerprint` mirrors `published_payload.syncFingerprint`. Phase 6 adds optional
+`sentenceMarks` beside `marks` without a migration.
 
 ### ai_generation
 The AI cost ledger and audit trail (one row per explicit Generate click that reaches the model
@@ -194,16 +209,21 @@ Index (site_id, started_at desc); (article_id, started_at desc).
 | id | uuid pk | |
 | site_id | uuid fk | |
 | kind | text not null | check in (`image`,`audio`) |
-| storage_key | text unique not null | see architecture §9 |
-| original_filename | text not null | |
-| mime_type | text not null | image/png, image/jpeg, image/webp, image/gif, audio/mpeg, audio/mp4 |
+| storage_key | text unique not null | `<siteSlug>/<kind>/<yyyy>/<mm>/<uuid>.<ext>` (architecture §9); the public URL is `/media/<storage_key>` |
+| original_filename | text not null | as uploaded, basename only, ≤ 255 chars (control chars stripped) |
+| mime_type | text not null | image/png, image/jpeg, image/webp, image/gif, audio/mpeg, audio/mp4 — detected from bytes, served verbatim |
 | byte_size | bigint not null | |
-| sha256 | text not null | |
-| duration_sec | numeric(10,3) null | audio |
-| width, height | integer null | images |
-| article_id | uuid null fk → article on delete set null | |
+| sha256 | text not null | hex; doubles as the `ETag` |
+| duration_sec | numeric(10,3) null | audio only; **stored as whole milliseconds / 1000** (the API and payload use integer `durationMs = round(duration_sec × 1000)`). Column name kept from the scaffold migration — no Phase 3 migration. |
+| width, height | integer null | images only |
+| article_id | uuid null fk → article on delete set null | the article the file was uploaded for (images: optional; audio: always) |
 | created_by | uuid fk → app_user | |
 | created_at | timestamptz | |
+
+Rules: an `audio` row (and its file) is deleted when the recording is replaced or removed and no
+`article_format` draft/published payload references its key; `image` rows are never deleted
+automatically (v0.1). Deleting an article leaves its media rows (`article_id` → null) and files
+in place (> **Assumed:** acceptable orphan cost for < 100 articles).
 
 ## Relationships
 
@@ -231,8 +251,13 @@ new revision copying an old one.
   revision's sentences fingerprint differs from the draft's; `stale` → `ready` after Regenerate
   or a deck save against the current revision. Publishing copies draft → published; the published
   deck is served until the next publish.
-- listen (Phase 3): `missing` → `needs_sync` (audio uploaded) → `ready` (cues saved) → `stale`
-  (paragraphs fingerprint changed) → `ready` after re-sync.
+- listen (Phase 3): `missing` (no draft audio) → `needs_sync` (audio uploaded, `marks = []`) →
+  `ready` (marks saved; `syncFingerprint` == current revision's paragraphs fingerprint) →
+  `stale` (paragraph set changed after the sync) → `ready` after re-sync (PUT with a complete
+  set) — or back to `needs_sync` when a new recording is uploaded (marks cleared), or `missing`
+  after Remove audio. Publishing copies a `ready` draft → published; a `needs_sync` draft leaves
+  the published copy untouched; no draft clears it; a `stale` draft blocks publish
+  (`LISTEN_STALE`). Never automatic.
 
 **ai_generation:** `running` → `succeeded` | `failed`; a `running` row older than 3 minutes is
 reported as abandoned/failed and no longer blocks a new Generate.

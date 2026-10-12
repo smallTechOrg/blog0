@@ -33,13 +33,17 @@ S4.1), and other slices of that phase code against the shapes written here.
 | NOT_DELETABLE | 409 | Delete of an article that was ever published |
 | PUBLISH_BLOCKED | 422 | Publish validation failed; `details: { reasons: Array<{ code, message, sids? }> }` (codes: `TITLE_REQUIRED`, `TOPIC_REQUIRED`, `BODY_REQUIRED`, `TLDR_DECK_STALE`, `LISTEN_STALE`) |
 | DECK_INVALID | 422 | Deck save: unknown/duplicate sid or count outside 1–12; `details.sids` |
+| MARKS_INVALID | 422 | Listen sync save (Phase 3): `details: { reasons: Array<{ code: 'UNKNOWN_PID' \| 'MISSING_PID' \| 'DUPLICATE_PID' \| 'OUT_OF_ORDER' \| 'NOT_INCREASING' \| 'OUT_OF_RANGE', pid?: string, index?: number }> }` |
+| LISTEN_NO_AUDIO | 409 | Listen sync save without an uploaded draft recording (Phase 3) |
+| AUDIO_TOO_LONG | 422 | Recording longer than `BLOG0_MAX_AUDIO_MINUTES` (Phase 3); message carries both values |
+| IMAGE_TOO_LARGE | 422 | Image wider or taller than 12 000 px (Phase 3) |
 | JEV_NO_SENTENCES / JEV_INPUT_TOO_LONG | 422 | Guard failures (no LLM call) |
 | LLM_AUTH / LLM_INSUFFICIENT_CREDITS / LLM_MODEL_NOT_FOUND | 502 | Provider config problems (message points at `.env`) |
 | LLM_RATE_LIMITED / LLM_UNAVAILABLE / LLM_TIMEOUT | 503 | Transient provider failure |
 | LLM_INVALID_OUTPUT | 502 | Model output invalid twice |
 | LLM_NOT_CONFIGURED | 503 | Phase 2, designer mode only: no OpenRouter key; Generate refused before any row is written |
 | RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header |
-| PAYLOAD_TOO_LARGE / UNSUPPORTED_MEDIA | 413 / 415 | Uploads (Phase 3) |
+| PAYLOAD_TOO_LARGE / UNSUPPORTED_MEDIA | 413 / 415 | Uploads (Phase 3): over `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_IMAGE_MB` (checked on `Content-Length` and while reading) / content not in the allowlist (detected from bytes; message names the detected type) |
 | DB_UNAVAILABLE | 503 | Health check only |
 | INTERNAL | 500 | Unexpected |
 
@@ -127,22 +131,79 @@ interface TldrStateDto {
 
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
-| GET `/api/public/articles/:slug/tldr` | none | — | `{ slug, title, topic, dek, meta: string, slides: Array<{ text: string }>, disclosure: string, times: { read: number, tldr: number, listen: number \| null }, shareUrl: string }` — published only, else 404. `Cache-Control: public, max-age=60`. |
+| GET `/api/public/articles/:slug/tldr` | none | — | `{ slug, title, topic, dek, meta: string, slides: Array<{ text: string }>, disclosure: string, times: { read: number, tldr: number, listen: number \| null }, shareUrl: string }` — published only, else 404. `Cache-Control: public, max-age=60`. (`times.listen` becomes real in Phase 3: the published recording's minutes, else null.) |
 | POST `/api/newsletter` | none | `{ email: string, name?: string }` | `{ subscribed: true }` (also for an already-subscribed address — no enumeration). Invalid bodies → 400 `VALIDATION_FAILED` before any rate-limit counting. `RATE_LIMITED` (429 + `Retry-After`) when any cap is hit: 3 per lower-cased email per hour, 300 per site per hour, and 10 per client IP per hour — the per-IP cap applies only when a real client IP is derived (`BLOG0_TRUSTED_PROXY_HOPS` > 0); with `direct`/`unknown` it is skipped (`spec/architecture.md` §6). Production behind a proxy must set `BLOG0_TRUSTED_PROXY_HOPS`. |
 | GET `/api/admin/subscribers` | admin | `?format=csv` optional | `{ subscribers: Array<{ email, name, createdAt, status }>, total }` or CSV download |
 | GET `/api/admin/site` | admin | — | `{ site: { tagline, contactEmail, aboutStrap, aboutStand, aboutBodyMd, socialXUrl, socialLinkedinUrl } }` |
 | PATCH `/api/admin/site` | admin | any subset of the above | `{ site: … }` |
 
+## Phase 3 DTOs (`src/lib/api/dto-phase3.ts`, owned by S3.3)
+
+```ts
+type ListenStatus = Extract<FormatStatus, 'missing' | 'needs_sync' | 'ready' | 'stale'>;
+type AudioMime = 'audio/mpeg' | 'audio/mp4';
+type ImageMime = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+
+interface ListenMarkDto { pid: string; tMs: number }                      // integer ms into the recording
+interface ListenParagraphDto { pid: string; index: number; text: string; kind: 'p' | 'li' | 'quote'; headingPath: string[] }
+interface ListenAudioDto {
+  assetId: string; key: string; url: string;                             // url = '/media/' + key (same-origin, relative)
+  mimeType: AudioMime; bytes: number; durationMs: number;
+  originalFilename: string; uploadedAt: string; uploadedBy: string;      // display name
+}
+interface ListenStateDto {
+  status: ListenStatus;
+  revisionId: string;                                                    // the current revision the paragraphs come from
+  paragraphs: ListenParagraphDto[];                                      // current revision, document order (all of them)
+  audio: ListenAudioDto | null;                                          // draft recording
+  marks: ListenMarkDto[];                                                // draft marks ([] until synced); may reference vanished pids (see orphanPids)
+  syncFingerprint: string | null; syncedAt: string | null; syncedBy: string | null;
+  missingPids: string[];                                                 // current paragraphs without a mark (document order)
+  orphanPids: string[];                                                  // marks whose paragraph is no longer in the text
+  published: { durationMs: number; markCount: number; publishedAt: string; matchesCurrentText: boolean } | null;
+  limits: { maxAudioMb: number; maxAudioMinutes: number };
+}
+interface ListenSaveRequest { revisionId: string; marks: ListenMarkDto[] }
+interface ListenResponse { listen: ListenStateDto }
+
+interface ImageUploadResponse {
+  asset: { id: string; key: string; url: string; mimeType: ImageMime; bytes: number; width: number; height: number };
+  markdown: string;                                                      // '![alt](/media/<key>)' or '![alt](/media/<key> "caption")'
+}
+
+// Public (reader) — the Listen view model (also in src/lib/view-models.ts as ListenViewModel)
+interface PublicListenDto {
+  slug: string; title: string; topic: string; dek: string; meta: string;  // meta = "<date> · <read> min read" as the deck's
+  audio: { url: string; mimeType: AudioMime; durationMs: number };
+  marks: ListenMarkDto[];                                                // published marks over the published revision
+  bylineName: string;
+  times: { read: number; tldr: number | null; listen: number };
+  shareUrl: string;                                                      // absolute …/p/<slug>/listen
+}
+```
+
+`FormatChipDto` and `ArticleListItemDto` are unchanged: the `listen` chip's `status` stops being
+`unavailable` once the Phase 3 adapter lands (`spec/architecture.md` §5).
+
 ## Endpoints — Phase 3
 
-| Method & path | Auth | Request | Response |
+Uploads are `multipart/form-data` (`withApi({ auth: 'admin', csrf: true, body: 'multipart' })`
+— the wrapper enforces `Origin`, parses the form with the Web `request.formData()`, and
+applies the declared `Content-Length` pre-check). All other rules of the envelope apply.
+
+| Method & path | Auth | Request | Response `data` / notes |
 |---|---|---|---|
-| POST `/api/admin/uploads/images` | admin | multipart `file` (png/jpeg/webp/gif ≤ `BLOG0_MAX_IMAGE_MB`), `articleId?`, `alt?` | `{ asset: { id, url: '/media/<key>', width, height }, markdown: '![alt](/media/<key>)' }` |
-| POST `/api/admin/articles/:id/audio` | admin | multipart `file` (audio/mpeg or audio/mp4, ≤ `BLOG0_MAX_AUDIO_MB`, ≤ `BLOG0_MAX_AUDIO_MINUTES`) | `{ listen: ListenStateDto }` (replaces the draft audio; cues cleared) |
-| DELETE `/api/admin/articles/:id/audio` | admin | — | `{ listen: ListenStateDto }` |
-| GET `/api/admin/articles/:id/listen` | admin | — | `ListenStateDto = { status, audio: { url, durationSec, mimeType } \| null, paragraphs: Array<{ pid, text, index }>, draftCues: Array<{ pid, startSec }> \| null, missingPids: string[], published: boolean }` |
-| PUT `/api/admin/articles/:id/listen` | admin | `{ revisionId, cues: Array<{ pid, startSec }> }` | `{ listen: ListenStateDto }`; 422 `CUES_INVALID` (pid unknown, not strictly increasing, ≥ duration, first cue > 0 allowed) |
-| GET `/media/:key*` | none | `Range` optional | 200 full or 206 partial (`Accept-Ranges: bytes`, `Content-Range`), 416 on bad range; `Cache-Control: public, max-age=31536000, immutable` |
+| POST `/api/admin/uploads/images` | admin | multipart: `file` (required), `alt` (string ≤ 200, default `''`), `caption?` (≤ 200), `articleId?` (uuid of an article in this site, else 404) | 201 `ImageUploadResponse`. Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA` (incl. SVG), `IMAGE_TOO_LARGE`, `VALIDATION_FAILED`. |
+| POST `/api/admin/articles/:id/audio` | admin | multipart: `file` (required) | 200 `ListenResponse` with `status 'needs_sync'`, `marks []`. Replaces the draft recording (old unpublished file + row deleted). Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA`, `AUDIO_TOO_LONG`. Exports `maxDuration = 120`. |
+| DELETE `/api/admin/articles/:id/audio` | admin | — | 200 `ListenResponse` with `status 'missing'`, `audio null`, `marks []` (draft cleared; published Listen untouched; unpublished file + row deleted). Idempotent. |
+| GET `/api/admin/articles/:id/listen` | admin | — | `ListenStateDto` |
+| PUT `/api/admin/articles/:id/listen` | admin | `ListenSaveRequest` — `revisionId` must be current | 200 `ListenResponse` with `status 'ready'`. Errors: `CONFLICT`, `LISTEN_NO_AUDIO`, `MARKS_INVALID` (rules: `spec/capabilities/listen-sync.md`). Sets `syncFingerprint` = the revision's paragraphs fingerprint, `syncedAt`/`syncedBy`. |
+| GET `/api/public/articles/:slug/listen` | none | — | `PublicListenDto` — only when the article is published **and** has a published Listen, else 404. `Cache-Control: public, max-age=60`. |
+| GET / HEAD `/media/[...key]` | none | `Range`, `If-None-Match`, `If-Range` optional | Not JSON. 200 full body / 206 one range (`Content-Range: bytes a-b/size`) / 304 (`If-None-Match` equal) / 416 (`Content-Range: bytes */size`, empty body). Always: `Content-Type` (stored mime), `Accept-Ranges: bytes`, `ETag: "<sha256>"`, `Last-Modified`, `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, `x-request-id`. Invalid key, unknown key, or file missing on disk → 404 `NOT_FOUND` as a JSON envelope. Methods other than GET/HEAD → 405. |
+
+`POST /api/admin/articles/:id/publish` (Phase 1) gains the Listen guard: `PUBLISH_BLOCKED` reason
+`LISTEN_STALE` with `{ code, message, missingPids, orphanPids }` (`spec/capabilities/listen-sync.md`
+→ Publishing). The reasons array type widens to `Array<{ code, message, sids?, missingPids?, orphanPids? }>`.
 
 ## Endpoints — Phase 4
 

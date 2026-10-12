@@ -435,34 +435,72 @@ files live on local disk behind a storage interface and stream with HTTP range r
 writer syncs audio by tapping along at each paragraph start; readers get a Listen view with
 player + text side by side, the current paragraph highlighted and auto-scrolled.
 
-Capabilities: `listen-audio`, `listen-sync`, `media-images`.
+Capabilities: `listen-audio`, `listen-sync`, `media-images`. Contracts every slice codes
+against without waiting: `spec/architecture.md` §9 (storage interface, `/media/` route, probe
+table, `src/lib/listen/marks.ts` signatures), `spec/api.md` → Phase 3 DTOs (written into
+`src/lib/api/dto-phase3.ts` by S3.3; others import the shapes from the spec until it lands),
+`spec/data.md` → `ListenPayload`, and `spec/ui.md` §3 *Listen* / §4 *Listen tab* class names.
+
+Real vs stubbed after Phase 3: everything Listen and media is real; the only remaining labelled
+stub is the editor History tab. The `listen` kind needs **no registry change** —
+`src/lib/formats/registry.ts` already lists it (`availableFromPhase: 3`) and `FormatChips` /
+`labels.ts` already carry the `needs_sync` label; the chips stop reading "later phase" the
+moment S3.3's adapter stops returning `unavailable`.
+
+Dependencies already in the orchestrator's Phase 3 commit: `music-metadata` 12.1, `image-size`
+2.0 (main deps). No new scripts. No migration (the scaffold schema already has `media_asset`
+and the free-text `article_format.kind`).
 
 | Wave | Slice | Owns | Depends on |
 |---|---|---|---|
-| A | **S3.1 Storage + media streaming** | `src/server/storage/**`, `src/server/media/**`, `src/app/media/[...key]/route.ts`, `src/app/api/admin/uploads/images/route.ts`, `tests/integration/media.test.ts` | Phase 2 |
-| A | **S3.2 Audio ingest** | `src/server/listen/ingest.ts`, `src/server/listen/probe.ts`, `src/app/api/admin/articles/[id]/audio/route.ts`, `tests/integration/audio-ingest.test.ts`, `tests/fixtures/audio/**` (`sample.m4a`, ~20 s, ≤ 300 KB, generated once on macOS by `scripts/make-audio-fixture.sh` via `say` + `afconvert` and committed; known duration recorded in `tests/fixtures/audio/sample.json`), `scripts/make-audio-fixture.sh` | S3.1 (storage interface — code against `src/server/storage/types.ts` contract in `spec/architecture.md`) |
-| A | **S3.3 Listen format + sync API** | `src/server/formats/listen.ts`, `src/server/formats/index.ts` (takes over: register listen), `src/server/listen/sync.ts`, `src/app/api/admin/articles/[id]/listen/route.ts`, `tests/integration/listen-sync.test.ts` | Phase 2 |
-| A | **S3.4 Admin Listen + image UI** | `src/components/admin/editor/ListenTab.tsx` (takes over), `src/components/admin/listen/**`, `src/components/admin/editor/ImageUploadButton.tsx`, `src/components/admin/editor/MarkdownEditor.tsx` (takes over: toolbar slot) | Phase 2 |
-| A | **S3.5 Reader Listen view** | `src/components/reader/ListenView.tsx`, `src/components/reader/ListenStub.tsx` (deleted), `src/components/reader/ArticleView.tsx` (takes over), `src/components/site/SummaryHost.tsx` (takes over: Listen overlay), `src/app/(site)/p/[slug]/listen/page.tsx`, `src/server/public/articles.ts` (takes over: listen view model) | Phase 2 |
-| B | **S3.6 Listen E2E** | `tests/e2e/phase3-listen.spec.ts` | S3.1–S3.5 |
+| A | **S3.1 Storage + media route + image upload** | `src/server/storage/{types,local-disk,index}.ts`, `src/server/media/{repo,ingest,image-probe,range,cleanup}.ts`, `src/app/media/[...key]/route.ts`, `src/app/api/admin/uploads/images/route.ts`, `src/server/http/api.ts` (takes over: `body: 'multipart'` + `Content-Length` pre-check), `tests/unit/media/{range,storage-key}.test.ts`, `tests/integration/media.test.ts`, `tests/helpers/storage.ts` (`resetStorage()` wipes `BLOG0_STORAGE_DIR`), `tests/setup/integration-env.ts` (takes over: `BLOG0_STORAGE_DIR=var/storage-test`), `tests/fixtures/images/**` (`sample.png` 320×200, `sample.jpg`, `sample.webp`, `tiny.gif` 1 frame, `sample.svg`, `sample.json` with the known dimensions — generated once by `scripts/make-image-fixtures.ts` with Node + `image-size` round-trip check and committed), `scripts/make-image-fixtures.ts` | Phase 2 |
+| A | **S3.2 Audio ingest** | `src/server/listen/{probe,ingest}.ts`, `src/app/api/admin/articles/[id]/audio/route.ts`, `tests/unit/listen/probe.test.ts`, `tests/integration/audio-ingest.test.ts`, `tests/fixtures/audio/**` (`sample.mp3` and `sample.m4a`, the same ~20 s spoken text, each ≤ 400 KB; `not-audio.wav` 1 s silence; `sample.json` = `{ "mp3": { "durationMs", "bytes", "sha256" }, "m4a": {…} }`; generated once on macOS by `scripts/make-audio-fixture.sh` — `say` → AIFF → `afconvert` → m4a (AAC), and `ffmpeg` (Homebrew) → mp3 — and committed), `scripts/make-audio-fixture.sh`, `next.config.ts` (takes over **only if** a probe library needs `serverExternalPackages`; reports it) | S3.1 for the gate (codes against §9.1/§9.3 contracts: `getStorage()`, `ingestUpload`, `deleteAssetIfUnreferenced`) |
+| A | **S3.3 Listen format + sync API + shared contracts** | `src/lib/api/dto-phase3.ts`, `src/lib/listen/marks.ts`, `src/server/formats/listen.ts` (takes over: real adapter — status, stale, publish guard), `src/server/formats/payload.ts` (takes over: `listenPayloadSchema`), `src/server/formats/index.ts` (takes over: re-exports), `src/server/listen/sync.ts`, `src/app/api/admin/articles/[id]/listen/route.ts`, `src/lib/api/dto.ts` (takes over: `PublishBlockedDetails` reasons gain `missingPids?`/`orphanPids?`), `tests/unit/listen/marks.test.ts`, `tests/unit/formats/listen-status.test.ts`, `tests/integration/listen-sync.test.ts` | Phase 2; its integration test uploads through S3.2's route, so **gate S3.3 after S3.2 lands** (unit tests run alone) |
+| A | **S3.4 Admin Listen tab + image UI** | `src/components/admin/editor/ListenTab.tsx` (takes over), `src/components/admin/listen/**` (`AudioUploader.tsx`, `SyncPanel.tsx`, `MarkList.tsx`, `useTapSync.ts`, `listen-api.ts` — XHR upload with progress + the JSON calls), `src/components/admin/editor/ArticleEditor.tsx` (takes over: Listen tab chip, `ListenTab` props `article`/`editorDirty`/`saveFirst`/`onArticleChanged`/`onSelectTab`, unsaved-marks guard), `src/components/admin/editor/PublishBar.tsx` (takes over: `LISTEN_STALE` reason → **Go to Listen**), `src/components/admin/editor/ImageUploadButton.tsx`, `src/components/admin/editor/insert-image.ts` (pure: snippet + `insertAtCursor`), `src/components/admin/editor/MarkdownEditor.tsx` (takes over: `.mdedit__tools` slot, drop target, `insertAtCursor` ref API), `src/components/admin/editor/WriteTab.tsx` (takes over: passes the article id to the button), `src/styles/admin.css` (takes over: §5 Phase 3 admin rules), `tests/unit/admin/{insert-image,tap-sync}.test.ts` | Phase 2 (codes against the Phase 3 DTOs and `marks.ts` signatures from the spec) |
+| A | **S3.5 Reader Listen view + public listen data** | `src/components/reader/ListenView.tsx`, `src/components/reader/AudioPlayer.tsx`, `src/components/reader/ListenStub.tsx` (deleted), `src/components/reader/ArticleView.tsx` (takes over: `initialMode 'listen'`, `/listen` replaceState, Listen branch), `src/components/reader/ModeCapsule.tsx` (takes over: disabled "No recording yet"), `src/components/site/SummaryHost.tsx` (takes over: `mode: 'tldr' \| 'listen'`, deck ↔ listen switch), `src/components/site/ListenOverlay.tsx`, `src/components/site/PostCard.tsx` (takes over: Listen opens the overlay), `src/lib/view-models.ts` (takes over: `ListenViewModel`), `src/app/(site)/p/[slug]/listen/page.tsx`, `src/app/(site)/p/[slug]/page.tsx` + `tldr/page.tsx` (take over only if the shared page component needs the `initialMode` union widened), `src/app/api/public/articles/[slug]/listen/route.ts`, `src/server/public/articles.ts` (takes over: listen view model + `times.listen`), `src/server/public/home.ts` (takes over: card `times.listen`), `src/proxy.ts` (takes over: `/p/:slug/listen` in the matcher), `src/styles/additions.css` (takes over: §5 Phase 3 reader rules), `tests/unit/reader/listen-view.test.tsx` (highlight + autoscroll pause logic with a fake `<audio>`), `tests/integration/public-queries.test.ts` + `tests/integration/public-api.test.ts` (take over: listen cases) | Phase 2 (codes against `ListenViewModel` / `PublicListenDto` / `marks.ts` from the spec) |
+| B | **S3.6 Listen E2E** | `tests/e2e/phase3-listen.spec.ts`, `tests/e2e/helpers/upload.ts`, `playwright.config.ts` (takes over: `BLOG0_STORAGE_DIR: 'var/storage-e2e'`, wiped in `global-setup.ts`), `tests/e2e/global-setup.ts` (takes over: wipe the storage dir), `tests/e2e/designer-mode.spec.ts` (takes over: one upload → stream assertion on PGlite) | S3.1–S3.5 |
+
+Ownership notes (gaps closed): the `listen` kind in `src/lib/formats/registry.ts` — no change
+(already registered); stale detection — S3.3 (`src/server/formats/listen.ts` +
+`src/server/listen/sync.ts`); the desk Listen chip — no change (generic `FormatChips`); the
+editor Listen tab chip — S3.4 (`ArticleEditor.tsx`); capsule / card / deck minutes — S3.5
+(`src/server/public/{articles,home}.ts`, `ModeCapsule.tsx`); `/media/` and image upload — S3.1;
+the publish guard reason plumbing — S3.3 (server) + S3.4 (popover); `withApi` multipart — S3.1
+(S3.2 codes against `body: 'multipart'`).
 
 **Gate (exact):**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
-pnpm db:migrate && pnpm db:verify
-pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration
-pnpm build && pnpm test:e2e              # phase3 spec uploads tests/fixtures/audio/sample.m4a, taps sync via keyboard, publishes, asserts reader highlight follows currentTime and that /media/<key> answers 206 to a Range request
-# Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
-# (range streaming 200/206/416 is asserted against real files by tests/integration/media.test.ts)
+# cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running; real OpenRouter key)
+pnpm install                              # picks up music-metadata + image-size from the orchestrator commit
+pnpm db:migrate && pnpm db:verify         # no new migration; prints "0 pending"
+pnpm typecheck && pnpm lint
+pnpm test:unit                            # incl. listen/marks, listen/probe (fixture durations), media/range, media/storage-key, admin/insert-image, admin/tap-sync, reader/listen-view, formats/listen-status
+pnpm test:integration                     # real blog0_test + real files under var/storage-test: media (200/206/304/416, traversal 404, images incl. SVG 415), audio-ingest (m4a + mp3 durations vs sample.json, 413/415/422, replace/remove cleanup), listen-sync (marks save, MARKS_INVALID cases, stale, LISTEN_STALE publish guard, re-sync), public-queries/public-api (times.listen, /listen 404 vs 200)
+pnpm build && pnpm test:e2e               # smoke + phase1-tldr + phase2-reader + phase3-listen on 3411: upload sample.mp3, Space-tap every paragraph, Save sync, Publish, Listen view highlight follows currentTime, paragraph click seeks, card overlay, /media/<key> 206, image upload → figure in preview and live page
+# Boot check (background tool): pnpm start   then:
+curl -fsS http://localhost:3410/api/health
+curl -fsS -o /dev/null -w "%{http_code}\n" -H "Range: bytes=0-1" "http://localhost:3410/media/$(ls var/storage/blog0/audio/*/*/ | head -1 | sed 's#.*/##; s#^#blog0/audio/#')"   # 206 after at least one upload (adjust the key by hand if the dir layout differs)
+curl -fsS -o /dev/null -w "%{http_code}\n" "http://localhost:3410/media/..%2F..%2Fetc%2Fpasswd"   # 404
+# Designer mode: env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design  (background tool); sign in with the printed admin, upload an mp3 in the Listen tab → it plays; ls var/storage/blog0/audio shows the file
 ```
 
-**How the user tests it:** in the editor's **Listen** tab upload an mp3/m4a; press **Start
-syncing**, the audio plays and the first paragraph is highlighted — press **Space** (or tap the
-big button) as each paragraph begins; **Save sync**; Publish. On the article page choose
-**Listen**: the player and text sit side by side, the current paragraph highlights and scrolls into
-view; seeking jumps the highlight. On a home card, **Listen** opens the compact player overlay.
-Drag an image into the editor toolbar's **Image** button → Markdown `![alt](/media/...)` is
-inserted and renders in preview.
+**How the user tests it:** in the editor's **Listen** tab upload an mp3/m4a (drop it or choose a
+file; the limits are stated; a renamed text file is refused with the reason). Press **Start
+syncing**: the audio plays from the start and paragraph 1 is marked "next" — press **Space** (or
+tap the big button) as each paragraph begins; Backspace undoes the last tap; use **Redo from
+here** on any paragraph to re-tap from there; nudge any mark by ±250 ms; **Save sync** → the tab
+chip reads **Synced**; **Publish**. On the article page choose **Listen** in the capsule (it now
+reads "Listen · N min"): the player and the text sit side by side, the current paragraph
+highlights and scrolls into view; drag the seek bar → the highlight jumps; click a paragraph →
+the audio jumps there; Space / ← / → work. The address bar shows `/p/<slug>/listen`; reload
+keeps Listen open. On a home card, **Listen** opens the compact player overlay (no text), with
+the capsule switching to the deck or the article. Back in the editor, edit one paragraph's text
+and save → the Listen chip turns **stale**, the tab shows which paragraph lost its mark and warns
+that a changed wording needs a new recording; **Publish changes** is blocked with the reason
+until you re-sync or remove the audio; the live page keeps playing the old synced reading
+throughout. Nothing re-syncs by itself. In the Write tab, click **Image** (or drop a PNG on the
+textarea), type alt text → `![alt](/media/…)` is inserted at the cursor and renders in the
+preview; an SVG is refused. Remaining labelled stub: the History tab.
 
 ---
 

@@ -109,7 +109,9 @@ export interface ArticleViewModel {
   blocks: Block[];                   // from RenderedArticle
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null;        // published deck only
-  listen: null;                      // Phase 3 widens this type
+  listen: ListenViewModel | null;    // Phase 3 (S3.5 takes over this file): published Listen only; null before Phase 3 / without one
+  // Phase 3: export interface ListenViewModel { audioUrl: string; mimeType: 'audio/mpeg' | 'audio/mp4'; durationMs: number;
+  //   marks: Array<{ pid: string; tMs: number }>; shareUrl: string }   // shareUrl absolute …/p/<slug>/listen
   correctionsHtml: string | null;    // Phase 4
   next: { slug: string; title: string } | null;
   articleUrl: string;                // absolute
@@ -220,9 +222,16 @@ Status rules: **read** → `ready` if the current revision body is non-empty els
 **tldr** → `generating` if the latest generation is `running` and < 3 min old; else `ready` if a
 draft payload exists and its `sentences` fingerprint equals the current revision's; `stale` if it
 exists and differs; `failed` if no draft and the latest generation failed; else `missing`.
-**listen** (Phase 1 adapter returns `unavailable`; Phase 3) → `missing` (no audio), `needs_sync`
-(audio, no cues), `ready` (cues cover every paragraph of the fingerprint), `stale` (paragraph
-fingerprint changed). Status is computed, never stored.
+**listen** (Phase 1 adapter returns `unavailable`; Phase 3, S3.3 takes over
+`src/server/formats/listen.ts`) — with `draft = readListenPayload(row?.draftPayload)`:
+`missing` if no draft; `needs_sync` if `draft.marks.length === 0`; `ready` if
+`draft.syncFingerprint === currentRevision.paragraphsFingerprint`; else `stale`. No
+`generating`/`failed` for Listen in Phase 3 (no background work). `isPublished` = article
+published and a published Listen payload exists; `hasUnpublishedChanges` = draft audio key or
+marks differ from the published copy. `validateForPublish` / `publish` follow
+`spec/capabilities/listen-sync.md` → Publishing (`LISTEN_STALE` with `missingPids`/`orphanPids`
+computed by `listenDiff(draft.marks, rendered.paragraphs)` in `src/server/listen/sync.ts`).
+Status is computed, never stored.
 
 ## 6. Auth & security
 
@@ -255,8 +264,12 @@ fingerprint changed). Status is computed, never stored.
   with `direct`/`unknown` the per-IP bucket is skipped (a shared constant would otherwise let one
   caller exhaust it for everyone). Any cap → 429 `RATE_LIMITED` with `Retry-After`. Production
   behind a reverse proxy MUST set `BLOG0_TRUSTED_PROXY_HOPS`, or the per-IP cap is inert.
-- Raw HTML in Markdown is never rendered. Uploaded files (Phase 3) are served with their stored
-  MIME type, `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`.
+- Raw HTML in Markdown is never rendered. Uploaded files (Phase 3) are validated by content
+  (§9.3), stored under unguessable uuid keys, and served with their stored MIME type,
+  `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`; the `/media/` route never
+  touches the filesystem for a key that fails `isValidStorageKey` or has no `media_asset` row.
+  Draft (unpublished) audio is reachable through `/media/` by anyone holding the key
+  (> **Assumed:** acceptable — keys are 122-bit random and never listed publicly).
 - Tenancy: every table has `site_id`; every query filters by the current site id from
   `getCurrentSite()`; no cross-site reads exist.
 
@@ -273,6 +286,8 @@ tests (`captureLogs()`).
 | `jev.run` | `runJev` | `request_id, article_id, revision_id, sentence_count, bounds, picks, attempts, outcome, err_code?` |
 | `auth.login` | login route | `outcome ('ok'|'bad_credentials'|'rate_limited'), email_masked` |
 | `app.boot` | `instrumentation.ts` | `version, port, node, site_slug` |
+| `media.upload` (Phase 3) | audio/image ingest | `request_id, kind ('audio'\|'image'), mime, bytes, duration_ms?, width?, height?, article_id?, outcome ('ok'\|'rejected'), err_code?` |
+| `media.request` (Phase 3) | `/media/[...key]` (not `withApi`; one line per request) | `request_id, key, status (200\|206\|304\|404\|416), range?, bytes_sent, latency_ms` |
 | `error` | anywhere unexpected | `err_message, err_stack (non-prod only), request_id` |
 
 `input_summary` / `output_summary` are small objects of counts and ids (e.g.
@@ -290,7 +305,7 @@ path (never a blank screen). Public page errors: `src/app/(site)/error.tsx` (cli
 inside site chrome).
 
 **Unknown/unpublished slugs (`src/proxy.ts`).** Next 16 proxy, `matcher: ['/p/:slug', '/p/:slug/tldr']`
-only. It calls `publishedSlugExists(slug)` (`src/server/public/articles.ts`, same published-only
+only (Phase 3, S3.5 takes over: `+ '/p/:slug/listen'`). It calls `publishedSlugExists(slug)` (`src/server/public/articles.ts`, same published-only
 filter as the page queries); when false it rewrites to an unmatched internal path so the root
 `src/app/not-found.tsx` server-renders a 404 **with site chrome**. If the DB check throws, the
 proxy logs and falls through to the page, whose own `notFound()` remains the fallback. Reason:
@@ -298,21 +313,125 @@ in Next 16.4, `notFound()` thrown from a page segment during SSR returns the bar
 `__next_error__` HTML (status 404) and the chrome appears only after hydration. The proxy never
 does auth (layouts + route handlers own it). Cost: one indexed query per `/p/*` request.
 
-## 9. Storage interface (Phase 3 contract; written here so S3.2 can code against it)
+## 9. Media: storage interface, `/media/` route, ingest (Phase 3; the contract every Phase 3 slice codes against)
+
+### 9.1 Storage interface (`src/server/storage/types.ts`, S3.1)
 
 ```ts
-// src/server/storage/types.ts
-export interface StoredObject { key: string; size: number; mimeType: string; sha256: string }
+export interface StoredObject { key: string; size: number; sha256: string }
+export interface ByteRange { start: number; end: number }                 // inclusive, 0-based, start ≤ end < size
+export interface StorageStat { size: number; mtime: Date }
+export interface StorageStream { stream: ReadableStream<Uint8Array>; size: number; range: ByteRange | null }
+
+export class StorageError extends Error { constructor(public code: 'NOT_FOUND' | 'TOO_LARGE' | 'BAD_KEY' | 'BAD_RANGE' | 'IO', message: string) }
+
 export interface Storage {
-  put(key: string, body: ReadableStream<Uint8Array> | Buffer, opts: { mimeType: string; maxBytes: number }): Promise<StoredObject>;
-  stat(key: string): Promise<{ size: number } | null>;
-  read(key: string, range?: { start: number; end: number }): Promise<ReadableStream<Uint8Array>>;
+  /** Write atomically: temp file in the same dir → fsync → rename. Over `maxBytes` → StorageError TOO_LARGE and nothing left on disk. Returns size + sha256 computed while writing. */
+  put(key: string, body: Buffer | ReadableStream<Uint8Array>, opts: { maxBytes: number }): Promise<StoredObject>;
+  /** Whole object (probes, tests). null when missing. */
+  get(key: string): Promise<Buffer | null>;
+  stat(key: string): Promise<StorageStat | null>;
+  /** Idempotent: deleting a missing key resolves. */
   delete(key: string): Promise<void>;
+  /** Byte stream of the whole object or one range. NOT_FOUND / BAD_RANGE as StorageError. */
+  stream(key: string, range?: ByteRange): Promise<StorageStream>;
 }
+
+export const STORAGE_EXTENSIONS = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' } as const;
+export type StoredMime = keyof typeof STORAGE_EXTENSIONS;
+/** `<siteSlug>/<audio|image>/<yyyy>/<mm>/<uuid v4>.<ext>` — the only accepted shape. */
+export const STORAGE_KEY_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/(?:audio|image)\/\d{4}\/\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:mp3|m4a|png|jpg|webp|gif)$/;
+export function isValidStorageKey(key: string): boolean;                 // STORAGE_KEY_RE.test(key) && key.length <= 160 (no '..', no leading '/', no '%' survive the regex)
+export function makeStorageKey(siteSlug: string, kind: 'audio' | 'image', mime: StoredMime, now: Date): string;
 ```
-Keys: `<siteSlug>/<kind>/<yyyy>/<mm>/<uuid>.<ext>`. `LocalDiskStorage` roots at
-`BLOG0_STORAGE_DIR` (default `./var/storage`, gitignored), writes to a temp file then renames,
-rejects `..` and absolute keys.
+
+`src/server/storage/local-disk.ts` — `LocalDiskStorage(rootDir)`: `rootDir` =
+`path.resolve(process.cwd(), getConfig().storageDir)` (`BLOG0_STORAGE_DIR`, default
+`./var/storage`, gitignored); `mkdir -p` of the key's directory on `put`; every method first
+asserts `isValidStorageKey(key)` (else `BAD_KEY`) and that `path.resolve(rootDir, key)` starts
+with `rootDir + path.sep` (belt and braces); `stream` uses `fs.createReadStream(path, { start,
+end })` wrapped with `Readable.toWeb`. `src/server/storage/index.ts` — `getStorage(): Storage`
+(singleton; `resetStorageForTests()`). No other adapter in v0.1; S3 (object storage) would
+implement the same interface later. **Designer mode needs nothing new**: the default dir is
+created on first write, so `pnpm dev:design` uploads and streams out of the box.
+
+### 9.2 `/media/[...key]` route (`src/app/media/[...key]/route.ts`, S3.1)
+
+`GET` and `HEAD` (`export const dynamic = 'force-dynamic'`; not `withApi` because the body is
+not JSON — it still sets `x-request-id` and writes one `media.request` log line). Steps:
+
+1. `key = segments.join('/')` (Next passes decoded segments). `!isValidStorageKey(key)` → 404
+   JSON envelope `NOT_FOUND` (no filesystem access, no log at `error`).
+2. `mediaAsset` row by `(site_id, storage_key)` via `src/server/media/repo.ts` → none → 404.
+3. `getStorage().stat(key)` → null → 404 (row without a file is logged at `warn`).
+4. `ETag = '"' + row.sha256 + '"'`. `If-None-Match` matches (any listed tag, `W/` tolerated) →
+   304 with `ETag`, `Cache-Control`, no body.
+5. `Range` present and (`If-Range` absent or equal to the ETag): parse with
+   `parseRange(header, size)` (`src/server/media/range.ts`, pure): exactly one of
+   `bytes=a-b` (b clamped to size−1), `bytes=a-`, `bytes=-n` (n ≥ 1, clamped to size); anything
+   else (multiple ranges, non-`bytes` unit, malformed) → `null` = ignore the header (200 full);
+   `a ≥ size` or `n === 0` → 416 with `Content-Range: bytes */<size>`, empty body.
+6. Respond 206 (`Content-Range: bytes a-b/size`, `Content-Length: b-a+1`) or 200
+   (`Content-Length: size`) with the stream (`HEAD`: headers only). Common headers:
+   `Content-Type: row.mime_type`, `Accept-Ranges: bytes`, `ETag`, `Last-Modified` (row
+   `created_at`, RFC 7231), `Cache-Control: public, max-age=31536000, immutable`,
+   `X-Content-Type-Options: nosniff`, `Content-Disposition: inline; filename="<ascii-safe original filename>"`.
+7. Other methods → 405 with `Allow: GET, HEAD`.
+
+### 9.3 Ingest, probing, limits (S3.1 images, S3.2 audio)
+
+`src/server/media/ingest.ts` (S3.1) — `ingestUpload(form, { field: 'file', maxBytes })`: reads
+the multipart `File` into a `Buffer` (uploads are ≤ 50 MB and writers are few — > **Assumed:**
+buffering in memory is acceptable in v0.1); rejects before reading when the request's
+`Content-Length` exceeds `maxBytes + 64 KiB` (form overhead) and again if the buffer exceeds
+`maxBytes` → `ApiError('PAYLOAD_TOO_LARGE', 413)`. Then `probe` → `put` → DB row, in that
+order; a DB failure after `put` deletes the file (`try/finally`).
+
+| Kind | Probe | Accept | Reject |
+|---|---|---|---|
+| Audio (`src/server/listen/probe.ts`, S3.2) | `music-metadata` `parseBuffer(buf, undefined, { duration: true, skipCovers: true })` | `format.container` `MPEG` with `codec` `MPEG 1 Layer 3`/`MPEG 2 Layer 3` → `audio/mpeg`; container `M4A`/`isom`/`mp42`/`iso2`/`M4B` with codec `AAC`/`ALAC` and **no** video track → `audio/mp4`; `format.duration` must be a finite number → `durationMs = Math.round(duration * 1000)` | anything else or a parse error → 415 `UNSUPPORTED_MEDIA` ("… is <container or 'not an audio file'>; upload an mp3 or m4a"); duration missing → 415 ("Couldn't read the recording's length"); `durationMs > maxAudioMinutes × 60 000` → 422 `AUDIO_TOO_LONG` |
+| Image (`src/server/media/image-probe.ts`, S3.1) | `image-size` `imageSize(buf)` | `type` `png` → `image/png`, `jpg` → `image/jpeg`, `webp` → `image/webp`, `gif` → `image/gif`; `width`/`height` > 0 | any other `type` (incl. `svg`, `bmp`, `tiff`, `avif`, `ico`) or a throw → 415; `width` or `height` > 12 000 → 422 `IMAGE_TOO_LARGE` |
+
+Limits come from `getConfig()` at request time: `maxAudioMb`, `maxAudioMinutes`, `maxImageMb`
+(§10). `music-metadata` and `image-size` are ESM, pure JS; > **Assumed:** neither needs a
+`serverExternalPackages` entry — if Turbopack bundling breaks either, S3.2 takes over
+`next.config.ts` for the one-line addition and reports it.
+
+### 9.4 Listen marks helpers (`src/lib/listen/marks.ts`, pure, isomorphic; S3.3 owns, S3.4/S3.5 import)
+
+```ts
+export interface Mark { pid: string; tMs: number }
+export type MarkIssue = { code: 'UNKNOWN_PID' | 'MISSING_PID' | 'DUPLICATE_PID' | 'OUT_OF_ORDER' | 'NOT_INCREASING' | 'OUT_OF_RANGE'; pid?: string; index?: number };
+export function validateMarks(marks: readonly Mark[], paragraphPids: readonly string[], durationMs: number): { ok: true } | { ok: false; reasons: MarkIssue[] };
+export function activeMarkIndex(marks: readonly Mark[], tMs: number): number;          // -1 before the first mark; binary search
+export function nudgeMark(marks: readonly Mark[], index: number, deltaMs: 250 | -250, durationMs: number): Mark[] | null;  // null when refused
+export function listenDiff(marks: readonly Mark[], paragraphPids: readonly string[]): { missingPids: string[]; orphanPids: string[] };
+export function listenMinutes(durationMs: number): number;                              // max(1, round(durationMs / 60000)) — design audioMinutes
+export function fmtClock(ms: number): string;                                          // design fmtClock over seconds: "m:ss"
+export function fmtClockMs(ms: number): string;                                        // "m:ss.mmm" for the admin mark list
+export const NUDGE_MS = 250; export const TAP_DEBOUNCE_MS = 300; export const SEEK_STEP_S = 5; export const AUTOSCROLL_PAUSE_MS = 4000;
+```
+
+`src/server/formats/payload.ts` (S3.3 takes over) adds `listenPayloadSchema` /
+`readListenPayload` (shape in `spec/data.md`) beside the TLDR schema.
+
+### 9.5 Listen service (`src/server/listen/*`)
+
+- `ingest.ts` (S3.2): `uploadAudio(articleId, file, userId, { limits?: { maxBytes: number; maxDurationMs: number } })`
+  (the route passes `getConfig()` values; tests inject smaller ones) → probe → `put` → in one
+  transaction: insert `media_asset(kind='audio', article_id)`, upsert the `listen` row's
+  `draft_payload = { audio, marks: [], syncFingerprint: null }`, `draft_fingerprint = null`,
+  `draft_revision_id = null`, `draft_updated_*`; then delete the previous draft asset (row +
+  file) unless its key equals the published payload's key. `removeAudio(articleId)` → draft
+  payload null (row kept) + the same conditional delete.
+- `sync.ts` (S3.3): `getListenState(articleId)` (renders the current revision through the cache,
+  builds `ListenStateDto`), `saveMarks(articleId, revisionId, marks, userId)` (CONFLICT check,
+  `LISTEN_NO_AUDIO`, `validateMarks` against the revision's paragraph pids and
+  `audio.durationMs`, writes `marks`, `syncFingerprint = revision.paragraphsFingerprint`,
+  `draft_fingerprint` mirror, `draft_revision_id`), `listenDiff` re-exported for the adapter.
+- `media/cleanup.ts` (S3.1): `deleteAssetIfUnreferenced(tx, assetId)` — the one place that
+  checks every `article_format` draft/published payload of the site for the key before
+  deleting row + file (file delete after commit; a failed file delete is logged at `warn`).
 
 ## 10. Configuration (env → `src/server/config.ts`, documented 1:1 in `.env.example`)
 
@@ -584,17 +703,20 @@ blog0/
 │   │   │   ├── admin/articles/[id]/tldr/route.ts  admin/articles/[id]/tldr/generate/route.ts
 │   │   │   ├── public/articles/[slug]/tldr/route.ts (P2)  newsletter/route.ts (P2)  admin/site/route.ts (P2)
 │   │   │   └── …later phases per spec/api.md
-│   │   ├── media/[...key]/route.ts (P3)
+│   │   ├── media/[...key]/route.ts (P3, S3.1: GET/HEAD, 200/206/304/416)
+│   │   ├── api/admin/uploads/images/route.ts (P3, S3.1)  api/admin/articles/[id]/audio/route.ts (P3, S3.2)
+│   │   ├── api/admin/articles/[id]/listen/route.ts (P3, S3.3)  api/public/articles/[slug]/listen/route.ts (P3, S3.5)
 │   │   ├── sitemap.ts  robots.ts (P2)
 │   ├── components/
 │   │   ├── design/              # Icon, Typewriter, Wordmark, SplitHeadline, Dek, motion.ts
 │   │   ├── site/                # Masthead, Footer, NewsletterForm, AsciiHand, Boot, PrintIn, PostCard, home/, archive/, about/
-│   │   ├── reader/              # ArticleView, ModeBar, ModeCapsule, ReadHead, ArticleBody, ArticleFoot, TldrDeck, ShareLinkButton, ListenStub
+│   │   ├── reader/              # ArticleView, ModeBar, ModeCapsule, ReadHead, ArticleBody, ArticleFoot, TldrDeck, ShareLinkButton, ListenStub (deleted in P3) → ListenView, AudioPlayer (P3)
 │   │   ├── figures/             # FigSlide47, FigAB, registry.ts
-│   │   ├── admin/               # LoginForm, DeskHeader, ArticleTable, FormatChips, editor/*, tldr/*
+│   │   ├── admin/               # LoginForm, DeskHeader, ArticleTable, FormatChips, editor/* (P3: + ImageUploadButton, insert-image.ts), tldr/*, listen/* (P3: AudioUploader, SyncPanel, MarkList, useTapSync.ts, listen-api.ts)
 │   │   └── StubNotice.tsx
 │   ├── lib/                     # isomorphic, pure, no I/O
-│   │   ├── api/envelope.ts  api/dto.ts
+│   │   ├── api/envelope.ts  api/dto.ts  api/dto-phase2.ts  api/dto-phase3.ts (P3, S3.3)
+│   │   ├── listen/marks.ts      # P3 (S3.3): validateMarks, activeMarkIndex, nudgeMark, listenDiff, listenMinutes, fmtClock (§9.4)
 │   │   ├── content/types.ts
 │   │   ├── formats/registry.ts
 │   │   ├── deck/timing.ts       # tldrDwell, tldrType, tldrMinutes, slide words (ported verbatim)
@@ -614,7 +736,9 @@ blog0/
 │   │   ├── jev/{state,bounds,build-input,validate,run,prompt}.ts  jev/prompts/select-v1.md
 │   │   ├── public/{articles,home,metadata}.ts
 │   │   ├── seed/{site,admin,seed-posts,seed-tldr}.ts  seed/posts/{index.ts,*.md}  seed/decks/{index.ts,<slug>.json}  (decks = committed Jev fixture, S2.7)
-│   │   └── storage/ media/ listen/ newsletter/ ai-usage/ (later phases)
+│   │   ├── storage/{types,local-disk,index}.ts (P3, S3.1)   media/{repo,ingest,image-probe,range,cleanup}.ts (P3, S3.1)
+│   │   ├── listen/{probe,ingest}.ts (P3, S3.2)   listen/sync.ts (P3, S3.3)
+│   │   └── ai-usage/ (P4)
 │   └── styles/
 │       ├── index.css            # @import design.css, additions.css (admin.css imported by admin layout)
 │       ├── design.css           # VERBATIM copy of spec/design/design-app.css
@@ -626,7 +750,7 @@ blog0/
 │   ├── helpers/{db,session,env,logs}.ts   # resetDb() truncates all tables + seeds site; loginAs(); captureLogs()
 │   ├── unit/**  integration/**  e2e/**
 │   ├── e2e/designer-mode.spec.ts  e2e/designer.global-setup.ts   # S2.9: own Playwright config `playwright.design.config.ts` (root), port 3413
-│   └── fixtures/articles/{hard-cases.md,e2e-article.md}  fixtures/audio/ (P3)
+│   └── fixtures/articles/{hard-cases.md,e2e-article.md}  fixtures/audio/{sample.mp3,sample.m4a,sample.json,not-audio.wav} (P3)  fixtures/images/{sample.png,sample.jpg,sample.webp,tiny.gif,sample.svg,sample.json} (P3)
 ├── spec/spikes/pglite.md        # S2.0 verdict (the only spec file a slice writes)
 └── var/                         # gitignored runtime data (storage, backups, pglite/, pglite-e2e/, pglite-session-secret, designer-admin.txt)
 ```
@@ -761,8 +885,10 @@ the question for the user.
    placement (intro slide only vs every slide).
 9. **Listen before Phase 3.** Design shows a mock player with fake durations. v0.1 Phase 1–2:
    capsule Listen shows "—" instead of minutes and opens a labelled stub panel; card Listen
-   buttons are hidden when an article has no published audio. *Ask:* hide capsule Listen
-   entirely when no audio?
+   buttons are hidden when an article has no published audio. From Phase 3 (decided for the
+   build, reversible): the capsule's Listen stays visible but **disabled** with "No recording
+   yet" when there is no published Listen — the same treatment as TLDR without a deck — and
+   card Listen buttons stay hidden. *Ask:* hide capsule Listen entirely when no audio?
 10. **Computed times.** Design hard-codes `readMin`/`audioSec`. v0.1: read = ceil(words/230),
     TLDR = design's `tldrMinutes` formula over the published deck, listen = audio duration.
     *Ask:* 230 wpm OK?
@@ -827,3 +953,13 @@ the question for the user.
     `db:seed:posts` skips that slug (`spec/data.md` → Seed data). Consequence: a dev DB that
     already had such an article shows 2 featured instead of 3. Default = keep (never clobber
     writer content). *Ask:* OK, or should seeding take over the slug / pick a substitute?
+28. **Listen view shows the text (Phase 3).** The design's listen branch of `ArticlePage` shows
+    only the tag, the title and a mock player ("nothing else on screen"); the card overlay does
+    the same. v0.1 (user requirement in `spec/roadmap.md` → Phase 3): the article's Listen view
+    places the real player beside the full article text with the current paragraph highlighted
+    and auto-scrolled (`spec/ui.md` §3 *Listen*); the **card overlay stays compact** (player
+    only) as designed. `AudioPanel` divergences: real `<audio>` instead of the 250 ms interval
+    mock; `.audio__note` reads "Read by <byline> · N min" instead of the placeholder sentence;
+    everything else (markup, classes, `▶`/`⏸`, range step 0.25, `fmtClock`) is kept. The
+    `/p/<slug>/listen` address and `history.replaceState` mirror the deck's. *Ask:* OK with text
+    beside the player on the article page, and player-only in the card overlay?
