@@ -1,14 +1,16 @@
 # blog0 — Data model
 
 PostgreSQL 18 in production and in every gate; the identical schema also runs on embedded PGlite
-(PG 17 WASM) in designer mode (`spec/architecture.md` §11). All tables are created by the scaffold migration `0000_init` (Phases 1–4 need no
-further migration; Phase 5 and 6 add their own, each owned by one named slice). Conventions:
+(PG 17 WASM) in designer mode (`spec/architecture.md` §11). All tables are created by the single
+migration `0000_init` (Phase 4 needs no further migration; Phases 5 and 6 add their own, each
+owned by one named slice). Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
 (except `site` itself) and every query filters by it. Foreign keys `on delete cascade` from child
 to article unless stated.
 
-> **Assumed:** creating the whole v0.1 schema in the scaffold (tables unused until their phase) avoids parallel slices racing on migration files; unused tables are inert.
+The whole v0.1 schema was created up front so parallel slices never race on migration files;
+columns for Phase 4 features (sign-off, corrections, restore) exist and stay unused until then.
 
 ## Entities
 
@@ -78,7 +80,7 @@ The stable identity of a piece; content lives in revisions.
 | first_published_at | timestamptz null | public "Published" date |
 | last_published_at | timestamptz null | |
 | content_updated_at | timestamptz null | set when a publish changes the published body fingerprint after first publish — public "Updated" date (Phase 4) |
-| submitted_at, approved_at | timestamptz null | sign-off (modelled Phase 1, UI Phase 4) |
+| submitted_at, approved_at | timestamptz null | sign-off (modelled; UI in Phase 4, on hold) |
 | submitted_by, approved_by | uuid null fk → app_user | |
 | corrections_note_md | text null | Phase 4 |
 | corrections_updated_at | timestamptz null | Phase 4 |
@@ -104,7 +106,7 @@ Every save that changes title, dek or body creates one (immutable).
 | word_count | integer not null | |
 | eligible_sentence_count | integer not null | |
 | created_by | uuid fk → app_user | |
-| restored_from_revision_id | uuid null fk → article_revision | Phase 4 restore |
+| restored_from_revision_id | uuid null fk → article_revision | set by restore — revision history (deferred); always null today |
 | created_at | timestamptz | |
 
 ### article_format
@@ -119,7 +121,7 @@ text validated against `src/lib/formats/registry.ts` (extensible without migrati
 | kind | text not null | `tldr`, `listen` (Read is implied by the revision; no row needed) |
 | draft_payload | jsonb null | writer's working copy |
 | draft_revision_id | uuid null fk → article_revision | revision the draft was built against |
-| draft_fingerprint | text null | sentences fp (tldr) at draft time / for listen (Phase 3 fix) the **baseline** paragraphs fp = `draft_payload.uploadFingerprint ?? draft_payload.syncFingerprint` (null for legacy rows that had neither) so the generic chip query reads one column; `PUT …/listen` never changes it |
+| draft_fingerprint | text null | sentences fp (tldr) at draft time / for listen the **baseline** paragraphs fp = `draft_payload.uploadFingerprint ?? draft_payload.syncFingerprint` (null for legacy rows that had neither) so the generic chip query reads one column; `PUT …/listen` never changes it |
 | draft_updated_by | uuid null fk → app_user | |
 | draft_updated_at | timestamptz null | |
 | published_payload | jsonb null | what readers get |
@@ -138,7 +140,7 @@ interface TldrPayload {
   slides: Array<{ sid: string; text: string; source: 'jev' | 'writer'; reason: string | null }>; // 1..12, text verbatim from the revision's sentence
   generationId: string | null;   // ai_generation that produced the Jev picks this deck started from
 }
-// kind = 'listen' (Phase 3) — src/server/formats/payload.ts `listenPayloadSchema`
+// kind = 'listen' — src/server/formats/payload.ts `listenPayloadSchema`
 interface ListenPayload {
   audio: {
     assetId: string;                 // media_asset.id (kind 'audio')
@@ -147,12 +149,12 @@ interface ListenPayload {
     bytes: number;
     durationMs: number;              // integer, from the probe
   };
-  marks: Array<{ pid: string; tMs: number }>;   // STORED marks — written only by PUT …/listen (Phase 6 aligner; legacy Phase 3 taps);
+  marks: Array<{ pid: string; tMs: number }>;   // STORED marks — written only by PUT …/listen (Phase 6 aligner; legacy data);
                                                 // [] normally (cleared on every upload); when set: exactly one per paragraph of the
                                                 // revision they were saved against, document order, integer ≥ 0, strictly increasing, < audio.durationMs
   syncFingerprint: string | null;  // paragraphs fingerprint of the revision the stored marks were saved against; null while marks = []
-  uploadFingerprint: string | null; // Phase 3 fix: paragraphs fingerprint of the current revision at upload time — the text the
-                                    // recording is assumed to read; drives the `text_changed` warning. zod: optional, default null
+  uploadFingerprint: string | null; // paragraphs fingerprint of the current revision at upload time — the text the recording is
+                                    // assumed to read; drives the `text_changed` warning. zod: optional, default null
                                     // (legacy rows read as null → baseline falls back to syncFingerprint)
 }
 ```
@@ -165,7 +167,7 @@ so the payload needs no change when the text changes. `published_payload` has th
 is a copy of the draft at publish time (any status). `published_fingerprint` mirrors the
 published payload's baseline (`uploadFingerprint ?? syncFingerprint`). Phase 6 writes aligned
 paragraph marks into `marks` via the existing PUT and may add optional `sentenceMarks` beside
-them without a migration. No migration in the Phase 3 fix (jsonb payload; zod default).
+them without a migration (jsonb payload; zod defaults).
 
 ### ai_generation
 The AI cost ledger and audit trail (one row per explicit Generate click that reaches the model
@@ -199,7 +201,7 @@ step; guard failures that make no call create no row).
 
 Index (site_id, started_at desc); (article_id, started_at desc).
 
-### newsletter_subscriber (used from Phase 2)
+### newsletter_subscriber
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid pk | |
@@ -210,7 +212,7 @@ Index (site_id, started_at desc); (article_id, started_at desc).
 | source | text not null default `footer` | |
 | created_at, updated_at | timestamptz | |
 
-### media_asset (used from Phase 3)
+### media_asset
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid pk | |
@@ -221,7 +223,7 @@ Index (site_id, started_at desc); (article_id, started_at desc).
 | mime_type | text not null | image/png, image/jpeg, image/webp, image/gif, audio/mpeg, audio/mp4 — detected from bytes, served verbatim |
 | byte_size | bigint not null | |
 | sha256 | text not null | hex; doubles as the `ETag` |
-| duration_sec | numeric(10,3) null | audio only; **stored as whole milliseconds / 1000** (the API and payload use integer `durationMs = round(duration_sec × 1000)`). Column name kept from the scaffold migration — no Phase 3 migration. |
+| duration_sec | numeric(10,3) null | audio only; seconds with millisecond precision, written as `round(durationMs) / 1000`. There is **no** `duration_ms` column: APIs, payloads and tests use integer `durationMs = round(duration_sec × 1000)`. |
 | width, height | integer null | images only |
 | article_id | uuid null fk → article on delete set null | the article the file was uploaded for (images: optional; audio: always) |
 | created_by | uuid fk → app_user | |
@@ -258,14 +260,13 @@ deferred) would create a new revision copying an old one.
   revision's sentences fingerprint differs from the draft's; `stale` → `ready` after Regenerate
   or a deck save against the current revision. Publishing copies draft → published; the published
   deck is served until the next publish.
-- listen (Phase 3, revised by the Phase 3 fix): `missing` (no draft audio) → `ready` on upload
+- listen: `missing` (no draft audio) → `ready` on upload
   (`uploadFingerprint` = current paragraphs fingerprint) ⇄ `text_changed` while the current
   revision's paragraphs fingerprint ≠ the baseline (`uploadFingerprint ?? syncFingerprint`; a null
   baseline is always `ready`) — back to `ready` when the text is reverted or a new recording is
   uploaded; → `missing` after Remove audio. `text_changed` is a warning only. A PUT of stored
   marks never changes the status. Publishing copies the draft (any status) → published; no draft
-  clears the published copy. Listen never blocks publish. `needs_sync` and Listen `stale` no
-  longer exist.
+  clears the published copy. Listen never blocks publish.
 
 **ai_generation:** `running` → `succeeded` | `failed`; a `running` row older than 3 minutes is
 reported as abandoned/failed and no longer blocks a new Generate.
@@ -275,17 +276,17 @@ lazily at login).
 
 ## Seed data
 
-- `pnpm db:seed` (Phase 1): upsert `site` with the values above; upsert the admin from
+- `pnpm db:seed`: upsert `site` with the values above; upsert the admin from
   `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` (password is set only on
   create unless `--reset-admin-password` is passed).
-- `pnpm db:seed:posts` (Phase 2): the 5 design articles from `src/server/seed/posts/` as
+- `pnpm db:seed:posts`: the 5 design articles from `src/server/seed/posts/` as
   `published` articles (slug = design id; topic = design tag; byline `Sai Krishna V`; dek =
   design excerpt; `first_published_at` = design date 09:00 site timezone; `in_progress` for
   `ai-is-expensive`; featured ranks 1–3 for `ai-will-destroy-the-world`, `tech-company-first`,
   `humans-are-software`); `created_by` = the first admin of the site (seed order: `db:seed`
   first); one revision each; no TLDR, no audio. Idempotent by slug (existing slugs are left
   untouched). Prints `5 posts: N created`.
-- `pnpm seed:tldr` (Phase 2): for every seeded slug whose `article_format(kind='tldr')` has no
+- `pnpm seed:tldr`: for every seeded slug whose `article_format(kind='tldr')` has no
   `published_payload`: with a real OpenRouter key, run the normal Generate path once (an
   `ai_generation` row with `requested_by` = the seeding admin, cost recorded) and publish the
   draft deck (`published_payload` = draft, `published_revision_id` = the article's published
@@ -297,10 +298,12 @@ lazily at login).
   required) rewrites each `<slug>.json` from the deck just generated (or already published).
   Fixture shape: `{ "slug": string, "model": string, "promptVersion": string, "capturedAt": ISO,
   "lines": Array<{ "text": string, "reason": string }> }`.
-- Designer mode (`pglite://`, Phase 2): `pnpm dev:design` runs `db:seed`, which ALWAYS creates
-  the generated designer admin `designer@blog0.local` (display name `Designer`) and, when
-  `BLOG0_ADMIN_*` are set, also seeds that admin in addition; then `db:seed:posts`, then
-  `seed:tldr` (fixture path when no key). Designer credentials go to `var/designer-admin.txt` for
-  the default dir, or `<dir>.designer-admin.txt` for a non-default PGlite dir.
+- Designer mode (`pglite://`): `pnpm dev:design` seeds **in-process** through
+  `runDesignerSetup()` (`src/server/designer/setup.ts`, one PGlite handle — no child scripts):
+  site → the generated designer admin `designer@blog0.local` (display name `Designer`), always,
+  plus the `BLOG0_ADMIN_*` admin when set → the same `seedPosts` as `db:seed:posts` (author = the
+  site's first admin) → the same `seedTldr` as `seed:tldr` with `source: 'auto'` (fixture path
+  when no real key). Designer credentials go to `var/designer-admin.txt` for the default dir, or
+  `<dir>.designer-admin.txt` for a non-default PGlite dir.
 - Seed slug collision: `db:seed:posts` never overwrites an existing article on a seed slug (e.g.
   a writer's own article); it skips it, so that slug keeps its own featured state (divergence 27).

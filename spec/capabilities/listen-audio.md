@@ -1,11 +1,10 @@
 # Capability: Listen — audio upload, storage, streaming, player
 
-Phase 3 (revised by the Phase 3 fix: upload ⇒ `ready`; no tap-along). Paragraph timing (estimated
-by default) and the reader highlight/follow are `listen-sync`; inline images share the
-storage and the `/media/` route (`media-images`). HOW (storage interface, `/media/[...key]`
-route, probe libraries, limits): `spec/architecture.md` §9. Screens: `spec/ui.md` §3 *Listen*
-and §4 *Listen tab*. Data: `spec/data.md` → `article_format` (`listen` payload) and
-`media_asset`. HTTP: `spec/api.md` → Phase 3.
+Phase 3. Paragraph timing (estimated by default) and the reader highlight/follow are
+`listen-sync`; inline images share the storage and the `/media/` route (`media-images`). HOW
+(storage interface, `/media/[...key]` route, probe libraries, limits): `spec/architecture.md` §9.
+Screens: `spec/ui.md` §3 *Listen* and §4 *Listen tab*. Data: `spec/data.md` → `article_format`
+(`listen` payload) and `media_asset`. HTTP: `spec/api.md` → Listen + media.
 
 ## What It Does
 Lets a writer attach a word-for-word reading (mp3 or m4a) to an article, stores it on local disk
@@ -25,7 +24,7 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
 | Output | Type | Destination |
 |---|---|---|
 | Stored audio | file under `BLOG0_STORAGE_DIR` at key `<siteSlug>/audio/<yyyy>/<mm>/<uuid>.<mp3\|m4a>` | storage |
-| Media record | `media_asset` row: kind `audio`, mime, bytes, sha256, `duration_ms`, original filename, uploader | database |
+| Media record | `media_asset` row: kind `audio`, mime, bytes, sha256, `duration_sec` (= `durationMs / 1000`), original filename, uploader | database |
 | Listen draft | `article_format(kind='listen').draft_payload` = `{ audio, marks: [], syncFingerprint: null, uploadFingerprint: <current revision's paragraphs fingerprint> }` | database |
 | Listen status | `ready` right after upload; later `text_changed` (non-blocking warning) if the paragraph text changes (`spec/architecture.md` §5) | desk chip, editor tab chip |
 | Stream | 200 / 206 / 304 / 416 responses with `Content-Type`, `Accept-Ranges`, `Content-Range`, `ETag`, `Cache-Control` | every player |
@@ -84,20 +83,21 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
   uses `audio.url` from `ListenStateDto`).
 - The reader's player is the design `AudioPanel` markup bound to a real `<audio
   preload="metadata">` (`spec/ui.md` §3 *Listen*): play/pause, seek range, `m:ss` clocks via
-  the design's `fmtClock`, keyboard Space (play/pause) and ←/→ (±5 s). The times line
+  the design's `fmtClock`, keyboard Space (play/pause) and ←/→ (±5 s) per `listen-sync`. The
   `.audio__note` reads "Read by <byline> · N min" instead of the design's placeholder text.
 - Listen is offered to readers (capsule enabled, card button shown, deck's Listen enabled,
   `/p/<slug>/listen` served) **only** when the article is published and its published Listen
   payload exists; otherwise the capsule's Listen — and the TLDR deck's mode-switcher Listen,
   with identical copy — is disabled with `title="No recording yet"` and
-  `aria-label="Listen — no recording yet"` (divergence 9 resolved) and `/p/<slug>/listen` renders the article in Read mode at `/p/<slug>`.
+  `aria-label="Listen — no recording yet"` (divergence 9, decided) and `/p/<slug>/listen` renders
+  the article in Read mode at `/p/<slug>`.
 - `times.listen` everywhere (capsule, cards, deck capsule, public DTOs) is the published
   recording's minutes — never the draft's.
 - Designer mode needs nothing new: the default storage dir `./var/storage` is created on first
   write; uploads and streaming work on PGlite exactly as on Postgres.
 
 ## Success Criteria
-- [ ] Integration (`tests/integration/audio-ingest.test.ts`): uploading `tests/fixtures/audio/sample.m4a` as admin returns 200 with `listen.status === 'ready'`, `listen.uploadFingerprint` equal to the current revision's `paragraphs_fingerprint`, `listen.timing === 'estimated'`, `listen.audio.mimeType === 'audio/mp4'`, `listen.audio.durationMs` within ±500 ms of `sample.json`'s recorded value, `listen.audio.bytes` equal to the file size; a file exists at `BLOG0_STORAGE_DIR/<audio.key>` with the same sha256 as the fixture; one `media_asset` row exists with `kind='audio'` and `duration_ms` equal to the DTO; uploading `sample.mp3` yields `mimeType 'audio/mpeg'` and a key ending `.mp3`.
+- [ ] Integration (`tests/integration/audio-ingest.test.ts`): uploading `tests/fixtures/audio/sample.m4a` as admin returns 200 with `listen.status === 'ready'`, `listen.uploadFingerprint` equal to the current revision's `paragraphs_fingerprint`, `listen.timing === 'estimated'`, `listen.audio.mimeType === 'audio/mp4'`, `listen.audio.durationMs` within ±500 ms of `sample.json`'s recorded value, `listen.audio.bytes` equal to the file size; a file exists at `BLOG0_STORAGE_DIR/<audio.key>` with the same sha256 as the fixture; one `media_asset` row exists with `kind='audio'` and `round(duration_sec × 1000)` equal to the DTO's `durationMs`; uploading `sample.mp3` yields `mimeType 'audio/mpeg'` and a key ending `.mp3`.
 - [ ] A 1-byte text file named `song.mp3` with `Content-Type: audio/mpeg` → 415 `UNSUPPORTED_MEDIA`; `not-audio.wav` → 415; with the size limit set to 1 MB (`BLOG0_MAX_AUDIO_MB=1` through the config reset helper) a 1.1 MB random buffer → 413 `PAYLOAD_TOO_LARGE` with no `media_asset` row and no file under the storage dir; with the duration limit injected as 10 000 ms (`uploadAudio(…, { limits: { maxBytes, maxDurationMs: 10_000 } })` — the route passes the config values, the test passes its own) `sample.m4a` (~20 s) → 422 `AUDIO_TOO_LONG`, no row, no file.
 - [ ] Uploading a second file for the same article replaces `audio.assetId`, clears `marks` (`[]`), and the first file is deleted from disk (it was unpublished); the first `media_asset` row is deleted. `DELETE …/audio` → `status 'missing'`, `audio: null`, file deleted, row deleted.
 - [ ] Text-changed warning (`tests/integration/listen-sync.test.ts`): after upload, editing one paragraph's text and saving → `status 'text_changed'`, `textChangedSinceUpload true`, the desk `listen` chip status `text_changed`; publish → **200** (no `PUBLISH_BLOCKED`, no Listen reason) and the public Listen serves the new audio with estimated marks over the new text; editing only a heading → `status` stays `ready`; reverting the paragraph → `ready`; uploading again after the edit → `ready` with the new `uploadFingerprint`.
@@ -106,4 +106,4 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
 - [ ] `/media/..%2F..%2Fetc%2Fpasswd`, `/media/%2Fetc/passwd`, `/media/blog0/audio/2026/10/x.exe`, and a well-formed key with no `media_asset` row → 404 `NOT_FOUND` (JSON envelope) and no `error` log line.
 - [ ] Public queries: a published article with a published Listen has `times.listen === max(1, round(durationMs/60000))` on the article page, in `PostCardViewModel`, in `GET /api/public/articles/:slug/tldr` and in `GET /api/public/articles/:slug/listen`; a published article with only a draft Listen has `times.listen === null` everywhere.
 - [ ] E2E (`tests/e2e/listen.spec.ts`, Chromium): on a published article with Listen, the capsule reads `Listen` + `N min`; clicking it shows `section.listenview` with a `.audio` player whose `<audio>` has `src` ending in `.mp3`, pressing the play button advances `audio.currentTime` past 1 s within 3 s; `/media/<that key>` answers 206 to `Range: bytes=0-1`. On a card, **Listen** opens the `.sheetfull` overlay with the same player and the address bar is unchanged.
-- [ ] Designer-mode E2E (`tests/e2e/designer-mode.spec.ts`, taken over): the same upload → stream round trip succeeds on PGlite with no `BLOG0_STORAGE_DIR` set (files land in `./var/storage`).
+- [ ] Designer-mode E2E (`tests/e2e/designer-mode.spec.ts`): the same upload → stream round trip succeeds on PGlite with no `BLOG0_STORAGE_DIR` set (files land in `./var/storage`).

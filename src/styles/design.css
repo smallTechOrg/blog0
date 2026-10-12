@@ -136,7 +136,7 @@ img, svg { max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
-  .split .sw, .dekin, .sb__frag, .sb__fig {
+  .split .sw, .dekin {
     opacity: 1 !important; transform: none !important;
     filter: none !important; animation: none !important;
   }
@@ -568,17 +568,8 @@ table.data td.neg { color: var(--accent-ink); }
 .popover textarea:focus { outline: none; border-color: var(--accent); }
 
 /* ============================================================
-   Sentence highlighting (op-ed body) — v1, highlight only
+   Paragraph highlight + share menu (op-ed body)
    ============================================================ */
-.sent {
-  cursor: pointer; border-radius: 2px;
-  text-decoration: underline dotted; text-decoration-color: var(--border-strong);
-  text-decoration-thickness: 1px; text-underline-offset: 5px;
-  -webkit-box-decoration-break: clone; box-decoration-break: clone;
-  transition: background .15s ease, text-decoration-color .15s ease;
-}
-.sent:hover { text-decoration-color: var(--accent); }
-.sent.is-hl { background: var(--accent-soft); text-decoration: underline solid; text-decoration-color: var(--accent); }
 .hlmenu {
   position: fixed; z-index: 90; width: 272px; background: var(--surface); color: var(--text);
   border: 1px solid var(--border-strong); border-radius: 5px; box-shadow: var(--shadow); padding: 10px;

@@ -1,6 +1,6 @@
 # Capability: Publication record (dates, corrections, sign-off)
 
-Phase 4.
+Phase 4 (**on hold**). Until then readers see no "Updated" date and no corrections note.
 
 ## What It Does
 Shows readers when a piece was first published and last substantively updated, carries an

@@ -16,7 +16,7 @@ export interface UserDto { id: string; email: string; displayName: string }
 /** GET /api/health → data. DB down → 503 DB_UNAVAILABLE. */
 export interface HealthDto {
   status: 'ok'; db: 'ok'; dbLatencyMs: number; version: string; uptimeSec: number;
-  dbEngine?: 'postgres' | 'pglite';
+  dbEngine: 'postgres' | 'pglite';
 }
 
 /** POST /api/auth/login */

@@ -1,6 +1,6 @@
 # Capability: Reader site (home, archive, about, theme, metadata, seed)
 
-Phase 2. Turns Phase 1's labelled stubs into the full design.
+Phase 2. Boot-strip lines, brand and seeding rules here are the reference the other files cite.
 
 ## What It Does
 Gives readers the complete public site from the design — home with About, Featured and Latest,
@@ -47,7 +47,7 @@ link previews — pre-filled with the five smallTech articles.
   immediately.
 - Theme follows the OS until the reader toggles; the choice persists across visits.
 - Card quick buttons: TLDR only when a published deck exists (opens the deck over the list);
-  Listen only when published audio exists (Phase 3).
+  Listen only when published audio exists (opens the compact player over the list).
 - Old design links (`/#<id>`, `/#<id>/tldr`, `/#hl=…`, `/#archive`, `/#about`) land on the
   matching real page.
 - The brand everywhere is **blog0** (wordmark with the spinning nought, boot and footer lines,

@@ -9,7 +9,7 @@ to the public Read view, save versions, and publish or unpublish it.
 ## Inputs
 | Input | Type | Source | Required |
 |---|---|---|---|
-| Title | text 1–200 chars | editor | yes (to create) |
+| Title | text 1–200 chars (all field limits: `spec/api.md` → article field limits) | editor | yes (to create) |
 | Dek (standfirst/excerpt) | text ≤ 400 chars | editor | no (recommended) |
 | Topic | text ≤ 40 chars (existing topics suggested) | editor | yes to publish |
 | Body | Markdown ≤ 200 000 chars | editor (paste/type) | yes to publish |
@@ -52,13 +52,13 @@ to the public Read view, save versions, and publish or unpublish it.
 - Publishing requires title, topic and non-empty body; it publishes the latest saved revision and
   the TLDR draft deck if one exists and every line still occurs in that revision; a deck with
   vanished lines blocks publishing with the list of those lines. No deck → the article publishes
-  with TLDR unavailable.
+  and TLDR is not offered to readers (its capsule mode is disabled).
 - After publishing, further saves do not change what readers see until **Publish changes**.
 - Unpublish hides the article from readers (404) and keeps everything for republishing.
 - Only never-published articles can be deleted (with confirmation).
 - Publishing never calls the AI.
 
-## Hard-case fixture (`tests/fixtures/articles/hard-cases.md`, written by the scaffold)
+## Hard-case fixture (`tests/fixtures/articles/hard-cases.md`)
 Must contain, each at least once: `#`, `##`, `###` headings; a bold run ending in a full stop
 followed by another sentence (`**Humans are creatures of convenience.** Even …`); a link whose
 URL contains full stops; abbreviations "e.g.", "U.S.", "Dr."; a decimal "3.5%"; a sentence ending

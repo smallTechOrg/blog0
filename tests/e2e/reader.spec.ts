@@ -520,6 +520,64 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 
+  test('prefers-reduced-motion: the wordmark is complete at first paint and still; deck slides change without transition', async ({ browser, page }) => {
+    // First paint = the server HTML before any script: with JS off, every wordmark letter is
+    // already opaque (no typing) and the nought has no animation.
+    const noJs = await browser.newContext({ javaScriptEnabled: false, reducedMotion: 'reduce' });
+    try {
+      const raw = await noJs.newPage();
+      await raw.goto('/');
+      const chars = raw.locator('.sitehead .wordmark .typed__c');
+      await expect(chars).toHaveCount(5);
+      expect(await chars.evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity))).toEqual(['1', '1', '1', '1', '1']);
+      expect(await raw.locator('.sitehead .wordmark__o').evaluate((el) => getComputedStyle(el).animationName)).toBe('none');
+    } finally {
+      await noJs.close();
+    }
+
+    // Hydrated: still complete, and the nought never runs an animation.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    await expect(page.locator('.sitehead .wordmark .typed__c.is-in')).toHaveCount(5);
+    const nought = page.locator('.sitehead .wordmark__o');
+    await expect(nought).toHaveClass(/\bis-spin\b/);
+    expect(await nought.evaluate((el) => getComputedStyle(el).animationName)).toBe('none');
+    expect(await nought.evaluate((el) => el.getAnimations().length)).toBe(0);
+
+    // Deck: the track carries no transition, and its transform jumps straight from slide 0 to
+    // slide 1 — every frame sampled across the change is one of the two end positions.
+    await page.goto(`/p/${SEEDED.humans.slug}/tldr`);
+    const deck = page.locator('.tdeck');
+    await expect(deck).toBeVisible();
+    const track = deck.locator('.tdeck__track');
+    expect(await track.evaluate((el) => getComputedStyle(el).transitionProperty)).toBe('none');
+    const before = await track.evaluate((el) => getComputedStyle(el).transform);
+    await track.evaluate((el) => {
+      const w = window as unknown as { __trackFrames: string[]; __trackStop: boolean };
+      w.__trackFrames = [];
+      w.__trackStop = false;
+      const sample = () => {
+        w.__trackFrames.push(getComputedStyle(el).transform);
+        if (!w.__trackStop) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    await page.keyboard.press('ArrowRight');
+    await expect(deck.locator('.tdeck__seg').nth(1)).toHaveClass(/\bis-live\b/);
+    await page.waitForTimeout(300);
+    const frames = await page.evaluate(() => {
+      const w = window as unknown as { __trackFrames: string[]; __trackStop: boolean };
+      w.__trackStop = true;
+      return w.__trackFrames;
+    });
+    const after = await track.evaluate((el) => getComputedStyle(el).transform);
+    expect(after).not.toBe(before);
+    expect(frames.length).toBeGreaterThan(2);
+    expect([...new Set(frames)].filter((t) => t !== before && t !== after)).toEqual([]);
+    expect(await track.evaluate((el) => getComputedStyle(el).transitionProperty)).toBe('none');
+    expect(await track.evaluate((el) => el.getAnimations().length)).toBe(0);
+  });
+
   test('legacy /#<slug>/tldr lands on /p/<slug>/tldr with the deck open', async ({ page }) => {
     await page.goto(`/#${SEEDED.techFirst.slug}/tldr`);
 

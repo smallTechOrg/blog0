@@ -1,8 +1,7 @@
 # Capability: Share — paragraph, article, deck
 
 Phase 2. Unit = paragraph (design divergence 2); targets and surfaces per divergence 3 (user
-decision at the Phase 1 gate: all options, native sheet on touch). Screen behaviour:
-`spec/ui.md` §3 *Share*.
+decision: all options, native sheet on touch). Screen markup: `spec/ui.md` §3 *Share*.
 
 ## What It Does
 Lets a reader share a paragraph (or a selection inside it), the whole article, or the TLDR deck to

@@ -1,7 +1,7 @@
 # Capability: Designer mode (zero-install local run)
 
-Phase 2 (binding user decision 6). HOW (embedded engine, DB abstraction, spike, fallback) lives in
-`spec/architecture.md` → §11 *Designer mode*. Postgres stays the production engine; this mode
+Phase 2 (binding user decision). HOW (embedded engine, DB abstraction, in-process setup) lives in
+`spec/architecture.md` → §11 *Designer mode*; its E2E wiring in → Test wiring. Postgres stays the production engine; this mode
 exists so a designer can run and restyle the real site without installing a database.
 
 ## What It Does
@@ -60,9 +60,7 @@ machine that has only Node and pnpm, from one command, with nothing to configure
   seeding rule in `reader-site.md`); the TLDR tab shows the "No OpenRouter key configured" notice
   and **Generate** is disabled; the cost ledger stays empty. With a real key: Jev works exactly as
   in Postgres mode.
-- Admin works fully in designer mode (sign in as the designer admin, edit, publish) — unless the
-  spike fails and the documented fallback is in force, in which case the README says admin is
-  disabled in designer mode and `/admin` shows a labelled notice.
+- Admin works fully in designer mode (sign in as the designer admin, edit, publish, upload).
 - Designer mode is never used by the integration gate or the production deploy; the production
   engine remains Postgres.
 - `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret` is the documented

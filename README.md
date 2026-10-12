@@ -22,8 +22,8 @@ pnpm install && pnpm dev:design      # → http://localhost:3410
 2. applies the same migrations as Postgres;
 3. seeds the site, the **designer admin** `designer@blog0.local` with a generated password —
    printed **once** on the first run and kept in `var/designer-admin.txt` (mode 0600) — and the
-   5 design articles; then the TLDR decks (committed fixture when there is no OpenRouter key)
-   when the deck seeder (`pnpm seed:tldr`) is present in the checkout;
+   5 design articles; then their TLDR decks (`pnpm seed:tldr`: the committed fixture when there
+   is no OpenRouter key, 0 calls);
 4. closes PGlite and starts the hot-reload dev server (`scripts/serve.mjs dev`, Turbopack) on
    `BLOG0_PORT` (default 3410).
 
@@ -38,7 +38,8 @@ Then open <http://localhost:3410/> (home, archive, about, the 5 articles) and si
 <http://localhost:3410/admin/login> with the printed credentials (`cat var/designer-admin.txt`).
 Edit any component under `src/` and the browser updates in place.
 
-- **Re-running is safe:** the second run prints `5 posts: 0 created` and no new password.
+- **Re-running is safe:** the second run prints `5 posts: 0 created`, `decks: 0 seeded (0 calls)`
+  and no new password.
 - **Jev without a key:** the TLDR tab shows "No OpenRouter key configured" and **Generate** is
   disabled (the API answers `503 LLM_NOT_CONFIGURED`). Add `BLOG0_OPENROUTER_API_KEY=<key>` to
   `.env` and restart `pnpm dev:design` to use Jev for real.
@@ -57,11 +58,12 @@ PostgreSQL. In designer mode a Generate holds the single PGlite connection for i
 transaction, so concurrent requests queue behind it (the double-click guard still refuses a second
 run via the `running` generation row).
 
-Status: **Phase 2 — reader site + designer mode** (in progress). An admin signs in at
-`/admin/login`, writes a Markdown article, generates a TLDR deck with Jev (one real OpenRouter
-call, only on an explicit click), edits it, and publishes; readers open the article in Read or
-TLDR mode at `/p/<slug>`. Listen and the other later-phase features show as clearly labelled
-"Coming in a later phase" stubs (see the roadmap).
+Status: **Phases 0–3 done** (incl. estimated Listen timing); **Phase 4 on hold**; next:
+**Phase 5 production hardening** (see [`spec/roadmap.md`](spec/roadmap.md)). An admin signs in at
+`/admin/login`, writes a Markdown article with images, generates a TLDR deck with Jev (one real
+OpenRouter call, only on an explicit click), edits it, uploads a Listen recording, and publishes;
+readers open the article in Read, TLDR or Listen mode at `/p/<slug>`. Listen and images are real;
+the only stub is the editor's **History** tab, clearly labelled as not built yet.
 
 ## Prerequisites
 
@@ -171,6 +173,20 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
    More admins: `pnpm admin:create --email <address> --name "<Display Name>"` (password from
    `BLOG0_NEW_ADMIN_PASSWORD`, or a hidden prompt).
 
+8. **Seed the 5 design articles and their TLDR decks** (both idempotent):
+
+   ```bash
+   pnpm db:seed:posts
+   # 5 posts: N created
+   pnpm seed:tldr
+   # decks: N seeded (N calls, $…)
+   ```
+
+   With a real OpenRouter key `pnpm seed:tldr` makes one real Jev call per post that has no
+   deck; without one it publishes the committed fixture decks (0 calls).
+   `pnpm seed:tldr -- --write-fixture` (real key) also refreshes the committed fixture
+   (`src/server/seed/decks/<slug>.json`) from the published Jev decks.
+
 ## Run
 
 Production build + server (port **3410**, override with `BLOG0_PORT`):
@@ -184,7 +200,7 @@ Verify (in another terminal):
 
 ```bash
 curl -fsS http://localhost:3410/api/health
-# {"ok":true,"data":{"status":"ok","db":"ok","dbLatencyMs":<n>,"version":"0.1.0","uptimeSec":<n>}}
+# {"ok":true,"data":{"status":"ok","db":"ok","dbLatencyMs":<n>,"version":"0.1.0","uptimeSec":<n>,"dbEngine":"postgres"}}
 ```
 
 Then open:
@@ -196,7 +212,11 @@ Then open:
 | <http://localhost:3410/admin> | the desk: article list, **New article**, editor with the TLDR panel |
 | `http://localhost:3410/p/<slug>` | a published article in Read mode |
 | `http://localhost:3410/p/<slug>/tldr` | the same article with the TLDR deck open |
+| `http://localhost:3410/p/<slug>/listen` | the same article in Listen mode (falls back to Read without a recording) |
 | <http://localhost:3410/archive>, <http://localhost:3410/about> | archive and about |
+| <http://localhost:3410/admin/site> | admin: site settings (About texts) |
+| <http://localhost:3410/admin/subscribers> | admin: newsletter subscribers (+ CSV) |
+| `http://localhost:3410/media/<key>` | uploaded audio and images |
 
 The server logs one JSON line per API request (`"event":"api.request"`) to stdout, and also to
 `BLOG0_LOG_FILE` when set.
@@ -210,15 +230,11 @@ pnpm dev        # Next 16.4 + Turbopack on BLOG0_PORT (3410), same .env as pnpm 
 Edit a component and the open page updates in place (Fast Refresh), no reload. Open it as
 `http://localhost:3410` — `127.0.0.1` and this machine's LAN addresses also work.
 
-*The Phase 1 "reload loop", fixed:* Next 16 refuses its HMR websocket (`/_next/hmr`) to any host
-other than `localhost` unless it is listed in `allowedDevOrigins`. Opening the dev server as
-`http://127.0.0.1:3410` or via the `Network:` address it prints made the socket fail
-(`⚠ Blocked cross-origin request to Next.js dev resource /_next/hmr from "127.0.0.1"` in the
-server log); the client then did a full page reload every ~40 s and edits never hot-updated.
-`next.config.ts` now allows the loopback addresses, the machine's own IPv4 addresses and the
-`BLOG0_PUBLIC_BASE_URL` host. If a page ever keeps reloading in a tight loop anyway (the browser
-console shows `HMR hash mismatch`), stop the server, `rm -rf .next/dev` (Turbopack's dev cache)
-and start it again. The phase gates still use `pnpm build && pnpm start`.
+HMR rule: the HMR websocket (`/_next/hmr`) only accepts the allowed dev origins — `next.config.ts`
+`allowedDevOrigins` lists the loopback addresses, this machine's IPv4 addresses and the
+`BLOG0_PUBLIC_BASE_URL` host. If a page keeps reloading (the browser console shows
+`HMR hash mismatch`), stop the server, `rm -rf .next/dev` (Turbopack's dev cache) and start it
+again. The phase gates still use `pnpm build && pnpm start`.
 
 ### Jev evaluation
 
@@ -257,7 +273,16 @@ With a real key present, a rejected key (401/403) or any provider error is alway
 | `pnpm test:integration` | Vitest `integration` project — real `blog0_test`, serial (`tests/integration/**`) |
 | `pnpm test` | both Vitest projects |
 | `pnpm test:e2e` | Playwright (Chromium) against `pnpm start` on port **3411** using `blog0_test`; run `pnpm build` first |
+| `pnpm test:e2e:design` | Playwright against designer mode (`pnpm dev:design`) on port **3413** with its own PGlite dir `var/pglite-e2e` |
 | `pnpm eval:jev` | Jev evaluation table (real key; non-gating) |
+
+`pnpm test:e2e` runs 4 Playwright projects in a fixed order — `tldr` → `reader` → `listen` →
+`smoke` — because they share `blog0_test` and each needs the state the previous one leaves.
+Gate run, without touching a dev/prod server's `.next` build:
+
+```bash
+BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_DIST_DIR=.next-gate pnpm test:e2e
+```
 
 E2E server logs go to `test-results/e2e-server.log`; the HTML report to `playwright-report/`
 (`pnpm exec playwright show-report`).
@@ -272,6 +297,9 @@ E2E server logs go to `test-results/e2e-server.log`; the HTML report to `playwri
 | `pnpm dev:design [--reset-designer-password]` | designer mode: PGlite + migrate + seed + hot-reload dev server (see [Designer mode](#designer-mode--run-it-with-only-node--pnpm)) |
 | `pnpm db:generate --name <name>` | generate a new SQL migration from `src/server/db/schema.ts` into `src/server/db/migrations/` |
 | `pnpm db:seed [--reset-admin-password]` | upsert the site row and the first admin (`BLOG0_ADMIN_*`) |
+| `pnpm db:seed:posts` | seed the 5 design articles (idempotent by slug; prints `5 posts: N created`) |
+| `pnpm seed:tldr [-- --write-fixture]` | publish a TLDR deck for each seeded post without one (real Jev call with a key, committed fixture without; `--write-fixture` refreshes the fixture with a real key) |
+| `pnpm spike:pglite` | PGlite feasibility spike (embedded-engine smoke check) |
 | `pnpm admin:create --email <address> --name "<Display Name>"` | add another admin to the site |
 
 Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g.:
@@ -291,13 +319,13 @@ refuses to start and lists every problem when a required value is missing or inv
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `BLOG0_DATABASE_URL` | no | `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (production engine; tests + deploy), or `pglite://<dir>` for the embedded engine; unset → embedded at `./var/pglite` with a boot notice (dev only: `pnpm start` refuses to boot without it — set `postgres://…`, or `pglite://<dir>` to opt in explicitly) |
+| `BLOG0_DATABASE_URL` | yes for `pnpm start` (production); no otherwise | `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (production engine; tests + deploy), or `pglite://<dir>` for the embedded engine; unset → embedded at `./var/pglite` with a boot notice (dev only: `pnpm start` refuses to boot without it — set `postgres://…`, or `pglite://<dir>` to opt in explicitly) |
 | `BLOG0_TEST_DATABASE_URL` | tests | — | `postgres://sai@localhost:5432/blog0_test`; must differ from the dev URL (tests refuse otherwise) |
 | `BLOG0_PORT` | no | `3410` | read by `scripts/serve.mjs` (after loading `.env`) |
 | `BLOG0_DIST_DIR` | no | `.next` | Next.js build dir (`next.config.ts` `distDir`): a separate build dir so gate builds don't overwrite a running server's build — e.g. `BLOG0_DIST_DIR=.next-gate pnpm build` then `BLOG0_DIST_DIR=.next-gate BLOG0_PORT=3447 pnpm start` (build and start with the same value; `.next-*/` is gitignored) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
-| `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (login throttling keys on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored |
+| `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (login throttling and the newsletter per-IP cap key on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored and the newsletter per-IP cap skipped |
 | `BLOG0_SESSION_SECRET` | yes on postgres | pglite: generated | ≥ 32 chars (`openssl rand -base64 48`); on `pglite://` an absent value is generated once into `var/pglite-session-secret` (0600) |
 | `BLOG0_OPENROUTER_API_KEY` | yes on postgres | pglite: none | validated at boot for presence (`replace-with-…` rejected); `pending-placeholder` boots but real-key tests report PENDING KEY; liveness by `pnpm check:openrouter`. On `pglite://` absent/placeholder = Jev disabled (`LLM_NOT_CONFIGURED`) |
 | `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | |
@@ -308,9 +336,9 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | seed + E2E | name `Sai Krishna V` | first admin for `pnpm db:seed`; password ≥ 12; local dev may export them from gitignored `var/dev-admin.env` |
 | `CI` | no | — | `true` turns PENDING KEY skips into failures |
 | `BLOG0_NEW_ADMIN_PASSWORD` | no | — | non-interactive `pnpm admin:create` |
-| `BLOG0_STORAGE_DIR` | no | `./var/storage` | Phase 3 |
-| `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | Phase 3 |
-| `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server (Phase 5) |
+| `BLOG0_STORAGE_DIR` | no | `./var/storage` | audio/image storage + upload limits |
+| `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | audio/image storage + upload limits |
+| `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server |
 
 ## Layout
 

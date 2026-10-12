@@ -1,8 +1,8 @@
 # Capability: Article reading (Read + TLDR deck)
 
-Phase 1 (Read view, TLDR deck, deep link, mode capsule, chrome, Latest list, labelled stubs).
-Listen arrives in `listen-audio` / `listen-sync` (Phase 3); paragraph sharing in
-`paragraph-share` (Phase 2).
+Phase 1 (Read view, TLDR deck, deep link, mode capsule, chrome). The Listen mode is
+`listen-audio` / `listen-sync`; paragraph sharing is `paragraph-share`; the full home, Archive
+and About are `reader-site`.
 
 ## What It Does
 Serves each published article to readers as a fast server-rendered Read view and a full-viewport
@@ -34,13 +34,14 @@ TLDR deck, switchable through the design's mode capsule, with a shareable deck l
   slugs answer 404 with the site's not-found page.
 - Readers always see the **published** revision and deck, never in-progress edits.
 - The capsule shows Read, TLDR and Listen with durations: read = words ÷ 230 rounded up (min 1);
-  TLDR = the design's deck-minutes formula; Listen = "—" and a labelled "coming in a later phase"
-  panel until Phase 3. TLDR is disabled ("No summary yet") when no deck is published.
+  TLDR = the design's deck-minutes formula; Listen = the published recording's minutes. TLDR is
+  disabled ("No summary yet") when no deck is published; Listen is disabled with "No recording
+  yet" when no recording is published (rule and exact copy: `listen-audio.md`).
 - Opening the deck changes the address to `/p/<slug>/tldr` without reloading; closing returns to
   `/p/<slug>`; loading the `/tldr` address opens the deck directly.
 - Deck behaviour, timings and gestures match the design exactly (`spec/ui.md` §3).
 - The intro slide carries the AI disclosure. The end slide offers "Read the full article" and a
-  Share button that copies the deck link.
+  Share button (copies the deck link and opens the share menu — `paragraph-share.md`).
 - Reading never calls the AI.
 - Dates use the site timezone and the design's format ("8 Sep 2026").
 - "Next: <title> →" links to the next newer published article, wrapping to the oldest.
@@ -54,8 +55,8 @@ TLDR deck, switchable through the design's mode capsule, with a shareable deck l
 - [ ] Direct load of `/p/<slug>/tldr` renders the page with the deck open.
 - [ ] Without user input the deck advances from the intro after 3.8 s (design dwell) — asserted with a controlled browser clock in the E2E test.
 - [ ] Clicking a progress segment jumps to that slide; Pause stops auto-advance.
-- [ ] Listen in the capsule opens a panel whose text includes "Coming in a later phase".
-- [ ] The home page lists the published article in "Latest" with its TLDR quick button (when a deck exists) linking to `/p/<slug>/tldr`; Featured/About show labelled stubs.
+- [ ] On an article without a published recording, the capsule's Listen button is disabled with `title="No recording yet"`.
+- [ ] The home page lists a published non-featured article in "Latest" with its TLDR quick button when a deck exists.
 - [ ] The page's linked stylesheets return 200, are non-empty and contain `.tdeck__track` and `.modedock`.
 - [ ] Light/dark toggle switches `data-theme` and the deck/background colours change accordingly.
 - [ ] With `prefers-reduced-motion: reduce` the wordmark shows fully without spinning and the deck changes slides without transition.

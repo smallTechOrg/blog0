@@ -40,13 +40,13 @@ export interface ArticleViewModel {
   topic: string;
   bylineName: string;
   publishedLabel: string; // fmtDate(first_published_at, site tz) e.g. "8 Sep 2026"
-  updatedLabel: string | null; // revision history (deferred): always null
+  updatedLabel: string | null; // publication-record (Phase 4, on hold): always null
   inProgress: boolean;
   blocks: Block[]; // from RenderedArticle
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null; // published deck only
   listen: ListenViewModel | null; // published Listen only; null without one
-  correctionsHtml: string | null; // revision history (deferred): always null
+  correctionsHtml: string | null; // publication-record (Phase 4, on hold): always null
   next: { slug: string; title: string } | null;
   articleUrl: string; // absolute
 }

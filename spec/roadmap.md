@@ -3,9 +3,9 @@
 ## What
 
 blog0 is smallTech's official blog (brand and wordmark **blog0** — the design's `log0` is
-replaced everywhere, the spinning final "0" stays; user decision at the Phase 1 gate) — an
-AI-native, multi-format publishing platform. Writers author articles in Markdown; every article
-is consumed by readers in three formats through one mode capsule:
+replaced everywhere, the spinning final "0" stays; user decision) — an AI-native, multi-format
+publishing platform. Writers author articles in Markdown; every article is consumed by readers in
+three formats through one mode capsule:
 
 - **Read** — the Markdown rendered faithfully (headings, emphasis, lists, links, blockquotes,
   rules, syntax-highlighted code, tables, images, footnotes/Notes, interactive figures).
@@ -26,7 +26,7 @@ The visual bar is the design reference in `spec/design/` (`design-app.js`, `desi
 
 | Persona | Count | Needs |
 |---|---|---|
-| Writer / admin (smallTech team) | a handful | Paste/edit Markdown with an immediate Read preview, get a TLDR deck with one click, hand-edit it, publish; later upload audio (no manual syncing); see AI cost. |
+| Writer / admin (smallTech team) | a handful | Paste/edit Markdown with an immediate Read preview, get a TLDR deck with one click, hand-edit it, publish; upload audio (no manual syncing); see AI cost. |
 | Reader (public) | open web | Fast server-rendered pages, three ways to take an article in, share a paragraph, good link previews. |
 
 Scale: fewer than 100 articles, a handful of writers. Cost sensitivity: high (AI only on an
@@ -48,9 +48,9 @@ explicit click, cached forever, never per reader view).
    published deck keeps serving until the writer acts.
 6. Every gate runs against real Postgres and the real OpenRouter key from `.env`. Without a key,
    real-key tests skip as `PENDING KEY` (never a pass); in CI or with a real key present a key
-   problem fails — see `spec/architecture.md` → `## Conventions` → Real-key tests. From Phase 2
-   an additional designer-mode gate boots the app from a clean state with no Postgres and no
-   `.env` values (embedded engine) and smokes home, one article and its deck.
+   problem fails — see `spec/architecture.md` → `## Conventions` → Real-key tests. A separate
+   designer-mode gate boots the app from a clean state with no Postgres and no `.env` values
+   (embedded engine) and smokes home, one article and its deck.
 7. A designer with only Node + pnpm runs `pnpm install && pnpm dev:design` and sees the full site
    (5 articles with decks) at `http://localhost:3410` with hot reload, nothing else installed or
    configured (`spec/capabilities/designer-mode.md`).
@@ -78,99 +78,41 @@ rotator, sentence builder, in-deck poll).
 > **Assumed:** Read time uses 230 words/minute.
 > **Assumed:** If Jev fails, the writer hand-picks lines; there is no heuristic fallback (user has not chosen one).
 > **Decided (user):** seeded posts get their decks from the explicit `pnpm seed:tldr` (Jev once per post with a real key; the committed fixture `src/server/seed/decks/*.json` without one); the design's paraphrased TLDR arrays are never seeded.
-> **Assumed:** `pnpm seed:tldr -- --write-fixture` is the mechanism that keeps the committed fixture equal to real Jev output (run by the orchestrator once with a real key before the Phase 2 gate and committed); the fixture is validated by a unit test against the seed articles.
-> **Assumed:** designer mode uses embedded PGlite behind the same Drizzle API (spike S2.0 decides GO/NO-GO; the NO-GO fallback is a read-only file-backed reader site — `spec/architecture.md` §11.5).
-> **Assumed:** the boot strip's height is 28 px (`--booth`), adjusted to the measured height once rendered.
-> **Assumed:** Phase 1 login throttling is in-memory per process (single instance); Phase 5 moves it to Postgres.
+> **Assumed:** `pnpm seed:tldr -- --write-fixture` (real key) keeps the committed fixture equal to real Jev output; a unit test validates the fixture against the seed articles.
+> **Assumed:** Login and newsletter throttling are in-memory per process (single instance); Phase 5 moves them to Postgres.
 > **Assumed:** Hand-edited decks allow 1–12 lines and reordering (Jev itself picks 4–8 in document order).
 > **Assumed:** A published deck whose lines vanished from the text blocks publishing of new changes until fixed (the old deck keeps serving meanwhile); publishing without any deck is allowed.
 > **Assumed:** Admins are all equal (no roles); approve-your-own-article is allowed in v0.1.
-> **Decided (user, 2026-10-13, Phase 3 feedback):** manual tap-along sync is removed (too cumbersome); Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred.
-> **Assumed:** Listen estimate constants — 150 words/minute reading pace and a 0.6 s pause per paragraph (1.5 word-equivalents); the first paragraph starts at 0 (`spec/capabilities/listen-sync.md`).
+> **Decided (user, 2026-10-13):** manual tap-along sync is removed; Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred.
+> **Assumed:** Listen estimate constants — 150 words/minute and a 0.6 s pause per paragraph (1.5 word-equivalents); the first paragraph starts at 0 (`spec/capabilities/listen-sync.md`).
 > **Assumed:** Phases 5–6 are planned at lower fidelity; their capability files are written spec-first at the start of each phase.
-> Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model slug (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and every design divergence (`spec/architecture.md` → `## Design divergences (ask user)`).
+> Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model slug (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and the open design divergences (`spec/architecture.md` → `## Design divergences (ask user)`).
 
 ## Phases of Development
 
-Conventions for every phase below:
+Scaffold and Phases 1–3 (with the Phase 3 fix) are **done**; Phase 4 is **on hold**; Phases 5–6
+are planned.
 
-- All commands run from the repo root `/Users/sai/Workspace/Code/blog0` (written as `.` below).
-- `.env` must contain real values for every key in `.env.example` (OpenRouter key, admin
-  credentials, session secret, both DB URLs) for the Postgres gates; gates load it
-  programmatically. Designer mode (Phase 2+) is the one exception: with no `.env` the app runs on
-  embedded PGlite with generated secrets (`spec/architecture.md` §11).
-- Integration + E2E tests use the dedicated Postgres database `blog0_test` (created and migrated
-  automatically by the test harness); the dev server uses `blog0_dev`.
+### Planning rules (Phase 4 onward)
+
+- All commands run from the repo root `/Users/sai/Workspace/Code/blog0`.
+- `.env` holds real values for every key in `.env.example` for the Postgres gates; designer mode
+  is the one exception (no `.env`, `spec/architecture.md` §11).
+- Integration + E2E tests use the Postgres database `blog0_test` (created and migrated by the test
+  harness); the dev server uses `blog0_dev`. Gate builds may use `BLOG0_DIST_DIR=.next-gate` for
+  both `pnpm build` and `pnpm test:e2e` so a running dev/start server is never disturbed.
 - "Boot check" = start `pnpm start` with the terminal tool's **background mechanism** (never `&`,
   `nohup`, `setsid`, `disown`), then in a separate call run
   `curl -fsS http://localhost:3410/api/health` and expect `"db":"ok"`.
-- Slices inside a phase own **disjoint files** (paths per `spec/architecture.md` → `## Layout`).
-  "Wave" = slices that can start together; a later wave depends on the named earlier slices.
-- A slice that edits a file owned by an earlier phase takes ownership of that file for this phase
-  (listed explicitly as "takes over").
-- `package.json` and `pnpm-lock.yaml` are never edited by parallel slices. The scaffold installs
-  every Phase 1 dependency (`spec/architecture.md` → `## Stack`) and declares every Phase 1
-  script (including `db:seed`, `admin:create`, `eval:jev`, whose target files Phase 1 slices
-  create). Before fanning out Phase N ≥ 2, the orchestrator adds that phase's new dependencies and
-  scripts in one commit (Phase 2: the block in the Phase 2 section; Phase 3: `music-metadata`,
-  `image-size`). A slice that discovers it needs another dependency reports it instead of
-  installing it.
+- Slices inside a phase own **disjoint files** (paths per `spec/architecture.md` → `## Layout`);
+  a true dependency is named explicitly. A slice that edits a file it does not create says
+  "takes over".
+- `package.json`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` are edited only by the orchestrator,
+  in one commit before the phase fans out; a slice that needs a new dependency reports it.
+- A new E2E walk is a new Playwright project appended to the `tldr → reader → listen → smoke`
+  dependency chain (`spec/architecture.md` → Test wiring).
 
-### Scaffold — minimal runnable skeleton + shared contracts
-
-**Goal:** the Next.js app boots on port 3410 from the documented command, `/api/health` proves
-the DB is reachable, the full v0.1 schema is migrated with a working verify command, the test
-harness (unit, integration, E2E) runs green with smoke tests, the OpenRouter key + Jev model slug
-are proven alive by one real call, and the shared type contracts every Phase 1 slice codes
-against exist.
-
-**Single slice (S0)** — owns everything it creates; later phases extend in place.
-
-Key files (see `## Layout` for the full tree):
-- Root config: `package.json` (scripts below; `packageManager` pinned to the installed pnpm 11.x;
-  `engines.node` `>=22 <23`), `pnpm-lock.yaml`, `pnpm-workspace.yaml` (allowed build scripts),
-  `.nvmrc` (`22`), `tsconfig.json` (`@/*` → `src/*`), `next.config.ts`, `drizzle.config.ts`,
-  `vitest.config.ts`, `playwright.config.ts`, `eslint.config.mjs`, `.gitignore`, `.env.example`,
-  `README.md`.
-- `scripts/serve.mjs`, `scripts/db-create.ts`, `scripts/db-migrate.ts`, `scripts/db-verify.ts`,
-  `scripts/check-openrouter.ts`.
-- `src/instrumentation.ts` (validates config at boot), `src/server/config.ts`,
-  `src/server/log.ts`, `src/server/db/{client,schema,migrate}.ts`,
-  `src/server/db/migrations/0000_init.sql` (+ drizzle `meta/`), `src/server/http/api.ts`,
-  `src/server/auth/{session,guard}.ts`, `src/server/site/{current,defaults}.ts` (`SITE_DEFAULTS`
-  = the seed values in `spec/data.md`, shared by the test helper and S1.1's seed).
-- Contracts: `src/lib/content/types.ts`, `src/lib/formats/registry.ts`, `src/lib/api/envelope.ts`,
-  `src/lib/api/dto.ts` (all Phase 1 DTOs transcribed from `spec/api.md`).
-- `src/app/layout.tsx` (minimal), `src/app/(site)/page.tsx` (placeholder "blog0 is running"),
-  `src/app/api/health/route.ts`, `src/styles/index.css` (placeholder).
-- Seed content (used by tests now, seeding in Phase 2): `src/server/seed/posts/*.md` + `index.ts`
-  (the 5 design articles, verbatim from `POSTS` in `spec/design/design-app.js`) and
-  `tests/fixtures/articles/hard-cases.md` (see `spec/capabilities/article-authoring.md`).
-- Tests: `tests/setup/{global-setup,integration-env}.ts`, `tests/helpers/{db,session,env,logs}.ts`,
-  `tests/unit/config.test.ts`, `tests/integration/health.test.ts`, `tests/e2e/smoke.spec.ts`,
-  `tests/e2e/global-setup.ts` (reset + migrate `blog0_test`, seed the site row).
-- `.gitignore`: `node_modules/ .next/ .env .env.*.local var/ test-results/ playwright-report/ .DS_Store`
-  (`.env.example` is committed).
-- `README.md` (all commands from the repo root, runner-prefixed, each setup command followed by
-  its verify command): prerequisites (Node 22, pnpm 11, Postgres 18 running on `/tmp:5432` as
-  `sai`), `cp .env.example .env` + which values to fill, install, `db:create`, `db:migrate` →
-  `db:verify`, `check:openrouter`, `build` + `start` → `curl …/api/health`, test commands,
-  env-var table (from `spec/architecture.md` §10).
-
-`scripts/check-openrouter.ts` (self-contained; uses `fetch`, not the S1.3 adapter), prints only
-booleans/numbers, never the key:
-1. `key present: true|false` (exit 1 if false, message points at `.env`).
-2. `GET {base}/key` with the bearer key → `key valid: true` on 200 (exit 1 on 401/403).
-3. `GET {base}/models` → `model <slug> listed: true|false`, then `fallback availability:` one line
-   per slug of the fallback list in `spec/agent.md` §3 (exit 1 if the configured slug is unlisted).
-4. `POST {base}/chat/completions` with the configured model, `max_tokens: 20`, `temperature: 0`,
-   `provider.require_parameters: true`, `usage.include: true`, `response_format` json_schema
-   `{ ok: boolean }` (strict) and the user message "Reply with ok=true." → parse
-   `choices[0].message.content` as JSON with `ok === true` → `structured call: ok · tokens <n> ·
-   cost $<x|n/a> · <ms> ms` (exit 1 otherwise, printing the HTTP status and OpenRouter error
-   message).
-
-package.json scripts (exact names — every later phase and the README use these):
+### package.json scripts (exact names — the README and every gate use these)
 
 | Script | Command |
 |---|---|
@@ -183,37 +125,48 @@ package.json scripts (exact names — every later phase and the README use these
 | `db:generate` | `drizzle-kit generate` |
 | `db:migrate` | `tsx scripts/db-migrate.ts` |
 | `db:verify` | `tsx scripts/db-verify.ts` |
+| `db:seed` | `tsx scripts/db-seed.ts` |
+| `db:seed:posts` | `tsx scripts/db-seed-posts.ts` |
+| `seed:tldr` | `tsx scripts/seed-tldr.ts` (`pnpm seed:tldr -- --write-fixture`) |
+| `admin:create` | `tsx scripts/create-admin.ts` |
 | `check:openrouter` | `tsx scripts/check-openrouter.ts` |
+| `eval:jev` | `tsx scripts/eval-jev.ts` |
+| `spike:pglite` | `tsx scripts/spike-pglite.ts` |
+| `dev:design` | `node scripts/dev-design.mjs` |
 | `test:unit` | `vitest run --project unit` |
 | `test:integration` | `vitest run --project integration` |
 | `test` | `vitest run` |
 | `test:e2e` | `playwright test` |
-| `db:seed` | `tsx scripts/db-seed.ts` (file created by S1.1) |
-| `admin:create` | `tsx scripts/create-admin.ts` (file created by S1.1) |
-| `eval:jev` | `tsx scripts/eval-jev.ts` (file created by S1.3) |
+| `test:e2e:design` | `playwright test -c playwright.design.config.ts` |
 
-**Gate (exact commands, in order, all must pass):**
+`check:openrouter` prints only booleans/numbers, never the key: key present, `GET {base}/key`
+valid, configured model (and the `spec/agent.md` §3 fallback list) listed on `GET {base}/models`,
+and one real structured call (`response_format` json_schema `{ ok: boolean }`) → `structured
+call: ok · tokens <n> · cost $<x|n/a> · <ms> ms`; exit 1 on any failure.
+
+---
+
+### Scaffold — minimal runnable skeleton + shared contracts
+
+**Goal:** the Next.js app boots on port 3410, `/api/health` proves the DB is reachable, the full
+v0.1 schema is migrated with a verify command, the test harness (unit, integration, E2E) runs,
+and the OpenRouter key + Jev model slug are proven alive by one real call.
+
+**Done** (commit `5b94402`).
+
+**Final gate:**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
-pnpm install
-pnpm exec playwright install chromium
-pnpm db:create            # creates blog0_dev and blog0_test if missing; prints "exists"/"created" per DB
-pnpm db:migrate           # applies 0000_init to blog0_dev
-pnpm db:verify            # prints "blog0_dev @ PostgreSQL 18.x — 1 applied (latest 0000_init), 0 pending: OK"; exit 1 if pending
-pnpm check:openrouter     # prints key present/valid, model listed, structured-output call ok + tokens + cost; exit 1 on any failure
-pnpm typecheck && pnpm lint
-pnpm test:unit && pnpm test:integration   # config unit test + health integration test (real blog0_test)
-pnpm build
-pnpm test:e2e             # smoke: starts `pnpm start` on 3411 against blog0_test; GET / 200 + "blog0 is running"; /api/health db ok; linked CSS 200 non-empty
+pnpm install && pnpm exec playwright install chromium
+pnpm db:create && pnpm db:migrate && pnpm db:verify     # "blog0_dev @ PostgreSQL 18.x — 1 applied (latest 0000_init), 0 pending: OK"
+pnpm check:openrouter
+pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration
+pnpm build && pnpm test:e2e
 # Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
 ```
-Expected health body: `{"ok":true,"data":{"status":"ok","db":"ok","dbLatencyMs":<n>,"version":"0.1.0","uptimeSec":<n>}}`.
-If `check:openrouter` reports the default model slug unlisted, it prints the availability of the
-fallback list (see `spec/agent.md` → Model) — set `BLOG0_JEV_MODEL` in `.env` and `.env.example`
-to the first available one and record the change in `spec/agent.md`.
+Health body: `{"ok":true,"data":{"status":"ok","db":"ok","dbLatencyMs":<n>,"version":"0.1.0","uptimeSec":<n>,"dbEngine":"postgres"}}`.
 
-**How the user tests it:** run the commands above; open `http://localhost:3410/` (placeholder
-page) and `http://localhost:3410/api/health` (JSON with `"db":"ok"`).
+**How the user tests it:** follow the README setup; open `http://localhost:3410/api/health`
+(JSON with `"db":"ok"`).
 
 ---
 
@@ -221,388 +174,182 @@ page) and `http://localhost:3410/api/health` (JSON with `"db":"ok"`).
 
 **Goal:** a writer signs in, pastes Markdown, sees the live Read preview, clicks **Generate** →
 Jev picks lines (real OpenRouter call) with reasons, hand-edits the deck, publishes; the public
-article page shows the Read view and the TLDR deck playing exactly like the design.
+article page shows the Read view and the TLDR deck playing exactly like the design. Capabilities:
+`admin-auth`, `article-authoring`, `jev-tldr`, `article-reading` (+ the computed-status part of
+`format-lifecycle` and the recording part of `ai-cost-ledger`). Jev's full composition is a single
+bounded call (`spec/agent.md`) — no agentic-upgrade phase is planned.
 
-Capabilities: `admin-auth`, `article-authoring`, `jev-tldr`, `article-reading`
-(see `spec/capabilities/`).
+**Done** (commits `9f2b481`, `dd9c81c`).
 
-Real vs stubbed in Phase 1:
-- **Real:** login/logout, dashboard with format chips, editor + live preview, save (every save a
-  revision), Generate (Jev), deck hand-editing + deck preview, publish/unpublish, delete
-  never-published draft, public article page (Read + TLDR deck + deep link), home "Latest" list of
-  published articles, theme toggle, masthead + footer chrome, structured logging, per-generation
-  cost line in the TLDR panel.
-- **Labelled stubs** (`StubNotice` component, text "Coming in a later phase — …"): home Featured +
-  About sections, Archive page, About page, footer newsletter form (disabled), Listen mode
-  (capsule Listen opens a stub panel), editor Listen + History tabs, paragraph share.
-
-**Independent slices**
-
-| Wave | Slice | Owns (files) | Depends on |
-|---|---|---|---|
-| A | **S1.1 Admin auth** | `src/server/auth/{password,login,rate-limit}.ts`, `src/server/users/repo.ts`, `src/server/seed/{site,admin}.ts`, `scripts/db-seed.ts`, `scripts/create-admin.ts`, `src/app/api/auth/{login,logout,me}/route.ts`, `src/app/admin/login/page.tsx`, `src/components/admin/LoginForm.tsx`, `tests/integration/auth.test.ts`, `tests/unit/auth/*.test.ts` | scaffold |
-| A | **S1.2 Content pipeline** | `src/server/content/**` (`markdown.ts`, `render.ts`, `plugins/*.ts`, `sentences.ts`, `paragraph-ids.ts`, `fingerprint.ts`, `stats.ts`, `highlight.ts`, `cache.ts`), `tests/unit/content/**` | scaffold |
-| A | **S1.3 LLM adapter + Jev agent** | `src/server/llm/**`, `src/server/jev/**` (incl. `prompts/select-v1.md`), `scripts/eval-jev.ts` (+ `eval:jev` script), `tests/unit/jev/**`, `tests/unit/llm/**`, `tests/integration/jev-openrouter.test.ts` | builds on scaffold only (Jev takes `Sentence[]` from the scaffold contract); its integration test calls S1.2's `renderArticle`, so **gate S1.3 after S1.2 lands** |
-| A | **S1.4 Reader design port** | `src/styles/{design,additions,index}.css`, `src/app/layout.tsx` (takes over: fonts, theme script, CSS), `src/app/(site)/layout.tsx`, `src/components/design/**`, `src/components/site/**`, `src/components/reader/**`, `src/components/figures/**`, `src/components/StubNotice.tsx`, `src/lib/deck/timing.ts`, `src/lib/view-models.ts`, `src/lib/format-date.ts`, `tests/unit/deck/*.test.ts`, `tests/unit/format-date.test.ts` | scaffold |
-| B | **S1.5 Admin UI** | `src/app/admin/layout.tsx` (imports `admin.css` for all admin pages incl. sign-in), `src/app/admin/(authed)/**`, `src/components/admin/**` (except `LoginForm.tsx`), `src/styles/admin.css` (incl. `.admin-login` styles used by S1.1's page) | S1.4 (`ArticleBody`, `ReadHead`, `TldrDeck`, `StubNotice`); codes against `src/lib/api/dto.ts` |
-| B | **S1.6 Articles API + format adapters** | `src/server/articles/**`, `src/server/formats/**`, `src/app/api/admin/**`, `tests/integration/articles-api.test.ts`, `tests/integration/tldr-flow.test.ts`, `tests/integration/logging.test.ts` | S1.2, S1.3 |
-| B | **S1.7 Public pages** | `src/app/(site)/page.tsx` (takes over), `src/app/(site)/p/[slug]/page.tsx`, `src/app/(site)/p/[slug]/tldr/page.tsx`, `src/app/(site)/archive/page.tsx`, `src/app/(site)/about/page.tsx`, `src/app/(site)/not-found.tsx`, `src/server/public/**`, `tests/integration/public-queries.test.ts` | S1.2, S1.4 |
-| C | **S1.8 Golden-path E2E** | `tests/e2e/tldr.spec.ts`, `tests/e2e/helpers/*.ts`, `tests/e2e/global-setup.ts` (takes over: also seeds the admin via `src/server/seed/admin.ts`), `tests/fixtures/articles/e2e-article.md` (= `tech-company-first.md` body + a GFM table + a `ts` code block + one footnote) | all of S1.1–S1.7 |
-
-No "Agentic Stack Upgrade" phase is planned: `spec/agent.md` concludes a single bounded call meets
-the requirement; Jev's full composition (state, steps, repair, error mapping, logging) is wired in
-Phase 1 by S1.3.
-
-**Gate (exact):**
+**Final gate:**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
-pnpm db:migrate && pnpm db:verify        # schema unchanged from scaffold unless a slice added a migration; verify prints 0 pending
-pnpm db:seed                             # upserts site + admin from .env into blog0_dev; prints "site blog0 ok, admin <masked> ok"
-pnpm typecheck && pnpm lint
-pnpm test:unit
-pnpm test:integration                    # real blog0_test + real OpenRouter (jev-openrouter, tldr-flow)
-pnpm build
-pnpm test:e2e                            # smoke + tldr against `pnpm start` on 3411, real OpenRouter
+pnpm db:migrate && pnpm db:verify && pnpm db:seed      # "site blog0 ok, admin <masked> ok"
+pnpm typecheck && pnpm lint && pnpm test:unit
+pnpm test:integration                                   # real blog0_test + real OpenRouter (jev-openrouter, tldr-flow)
+pnpm build && pnpm test:e2e                             # tldr walk: one real Generate; asserts api.request + llm.call log lines and the linked CSS
 # Boot check (background tool): pnpm start   then:
-curl -fsS http://localhost:3410/api/health
 curl -fsS -o /dev/null -w "%{http_code}\n" http://localhost:3410/admin/login   # 200
 ```
-Gate assertions inside the suites (summary — details in the capability files):
-`tldr-flow` drives create → save → generate (real call) → edit deck → publish → public view model
-and asserts verbatim lines, bounds, reasons, generation record fields (model, prompt_version,
-tokens > 0, cost recorded or explicitly null with a warning log), and that a second save with
-changed text yields TLDR status `stale` without any new generation row. `tldr.spec.ts`
-walks the UI journey in Chromium (see "How the user tests it") and finally asserts the server log
-file (`BLOG0_LOG_FILE`) contains an `api.request` line for `POST /api/admin/articles/:id/tldr/generate`
-and an `llm.call` line with `model`, `prompt_version`, `latency_ms`, `outcome:"ok"`; it also
-fetches every `<link rel="stylesheet">` on `/p/<slug>` and asserts 200 + non-empty + contains
-`.tdeck__track`.
 
 **How the user tests it:**
-1. `pnpm db:seed`, then start the app (`pnpm build && pnpm start`), open
-   `http://localhost:3410/admin` → redirected to the sign-in page. Sign in with
-   `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD`.
-2. Dashboard (empty state) → **New article**. Enter a title, dek, topic; paste the Markdown of any
-   smallTech post (e.g. `src/server/seed/posts/tech-company-first.md`). The right-hand preview
-   renders it as readers will see it, including the two interactive figures.
-3. **Save** (or Cmd/Ctrl+S) → "Saved · rev 1". Open the **TLDR** tab → **Generate with Jev**.
-   Within ~5–20 s a deck of 4–8 lines appears, each with Jev's reason and a cost line
-   ("… tokens · $0.00xx").
-4. Remove a line, add another from the article list, move one up, **Preview deck** (the real deck
-   plays), **Save deck**.
-5. **Publish** → **View live**. The article page shows Read; click **TLDR** in the bottom capsule:
-   the deck plays (intro slide with "Lines selected by Jev (AI)…", auto-advance, arrows/scroll/
-   swipe, end slide with Read + Share). The address bar shows `/p/<slug>/tldr`; reload keeps the
-   deck open; Esc closes it.
-6. Go back to the editor, change a sentence that is in the deck, Save: the TLDR chip turns
-   **stale**; the live page still plays the old deck. Nothing regenerates by itself.
-7. Labelled stubs (not bugs): Listen in the capsule, Featured/About on the home page, Archive,
-   About page, newsletter form, editor Listen and History tabs.
+1. `pnpm db:seed`, then `pnpm build && pnpm start`, open `http://localhost:3410/admin` →
+   sign-in page; sign in with `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD`.
+2. **New article**: title, dek, topic; paste any smallTech post (e.g.
+   `src/server/seed/posts/tech-company-first.md`). The preview renders it as readers will see it,
+   including the two interactive figures.
+3. **Save** (or Cmd/Ctrl+S) → "Saved · rev 1". **TLDR** tab → **Generate with Jev**: within
+   ~5–20 s a deck of 4–8 lines appears, each with Jev's reason and a cost line.
+4. Remove a line, add another from the article list, move one up, **Preview deck**, **Save deck**.
+5. **Publish** → **View live**; click **TLDR** in the capsule: intro slide with "Lines selected by
+   Jev (AI)…", auto-advance, arrows/scroll/swipe, end slide with Read + Share; the address is
+   `/p/<slug>/tldr`; reload keeps the deck open; Esc closes it.
+6. Change a sentence that is in the deck and Save: the TLDR chip turns **stale**; the live page
+   still plays the old deck. Nothing regenerates by itself.
+7. The only labelled stub left is the editor **History** tab.
 
 ---
 
 ### Phase 2 — Reader site + designer mode
 
 **Goal:** the public site is complete and pixel-close to the design under the brand **blog0**:
-boot strip on (`> start of blog0`, per-route commands), home (typed spinning-nought wordmark,
-print-in, About, Featured stack, Latest feed with See More), Archive with topic filter, About page
-(admin-editable), newsletter signup stored server-side, share for paragraph / article / deck
-(LinkedIn, X, WhatsApp, Notes, Notion, Copy link; native sheet on touch), light/dark theme
-(persisted), OG tags, legacy hash-link redirects, TLDR deck straight from cards, the 5 design
-articles seeded as real published posts **with decks** (`seed:tldr`), and **designer mode**: the
-whole app runs on embedded PGlite with nothing installed beyond Node + pnpm
-(`pnpm install && pnpm dev:design`).
+boot strip, home (typed spinning-nought wordmark, print-in, About, Featured stack, Latest with See
+More), Archive with topic filter, admin-editable About, newsletter signup, share for paragraph /
+article / deck (LinkedIn, X, WhatsApp, Notes, Notion, Copy link; native sheet on touch), persisted
+theme, OG tags, legacy hash-link redirects, TLDR deck from cards, the 5 design articles seeded with
+decks, and **designer mode** (embedded PGlite; `pnpm install && pnpm dev:design`). Capabilities:
+`reader-site`, `newsletter-signup`, `paragraph-share`, `designer-mode`.
 
-Binding user decisions applied (Phase 1 gate): brand `blog0` (`spec/architecture.md` div. 25),
-boot strip on (div. 6), seeded decks via `seed:tldr` (div. 20), reordering allowed + `/p/<slug>`
-(div. 7), all share options + native sheet (div. 3), no RSS / contact mail / About copy /
-Thursday copy confirmed (div. 12–15), designer mode (`spec/architecture.md` §11,
-`spec/capabilities/designer-mode.md`).
+**Done** (commit `1cb95c2`; PGlite spike verdict GO — `spec/spikes/pglite.md`).
 
-Capabilities: `reader-site`, `newsletter-signup`, `paragraph-share`, `designer-mode`.
-
-Real vs stubbed after Phase 2: everything public is real; the only remaining labelled stubs are
-Listen (capsule, card button hidden, editor tab) and the editor History tab.
-
-**Orchestrator-only `package.json` / `pnpm-lock.yaml` edits — one commit before fanning out
-(the slices never touch these two files):**
-
-```jsonc
-// dependencies (deploy-time; main deps)
-"@electric-sql/pglite": "<latest 0.3.x>"          // embedded Postgres (WASM); drizzle-orm 0.45 already ships drizzle-orm/pglite + drizzle-orm/pglite/migrator
-// scripts (exact names; target files created by the named slices)
-"spike:pglite":    "tsx scripts/spike-pglite.ts",                 // S2.0
-"db:seed:posts":   "tsx scripts/db-seed-posts.ts",                // S2.6
-"seed:tldr":       "tsx scripts/seed-tldr.ts",                    // S2.7  (`pnpm seed:tldr -- --write-fixture`)
-"dev:design":      "node scripts/dev-design.mjs",                 // S2.8
-"test:e2e:design": "playwright test -c playwright.design.config.ts"   // S2.10
-```
-`next.config.ts` (`serverExternalPackages` + `@electric-sql/pglite`) is edited by S2.8, not by
-the orchestrator. If `pnpm install` reports an ignored build script for `@electric-sql/pglite`,
-the orchestrator runs `pnpm approve-builds` and commits `pnpm-workspace.yaml`.
-
-**Independent slices** (disjoint files; "takes over" = owns a Phase 1 file for this phase)
-
-| Wave | Slice | Owns (files) | Depends on |
-|---|---|---|---|
-| 0 | **S2.0 PGlite spike** | `scripts/spike-pglite.ts`, `spec/spikes/pglite.md` (verdict — the only spec file a slice writes) | the dependency commit. Runs alone first (≈ 1 h cap); its verdict picks the S2.8 path. |
-| A | **S2.1 Home + chrome + boot strip** | `src/app/(site)/page.tsx` (takes over), `src/app/(site)/layout.tsx` (takes over: `Boot` above `Masthead`), `src/components/site/home/**`, `src/components/site/Masthead.tsx` (takes over: no search, theme persistence), `src/components/site/Boot.tsx` (`SHOW_BOOT_STRIP = true`, `bootCommand` per div. 6), `src/components/site/PrintIn.tsx` (takes over), `src/styles/additions.css` (takes over: `--booth: 28px`, `.para` hover/`.is-hl`, `.stub`, `.hlmenu` in-deck z-index — every rule in `spec/ui.md` §5, so S2.4 adds no CSS), `src/server/public/home.ts` (takes over), `tests/unit/site/boot-command.test.ts` | S2.0 verdict only for scheduling; no code dependency |
-| A | **S2.2 Brand, Archive, About, site settings** | `src/server/site/defaults.ts` (takes over: `wordmark: 'blog0'`), `tests/unit/seed-content.test.ts` (takes over), `src/app/layout.tsx` (takes over: default `title: 'blog0'`), `src/app/admin/login/page.tsx` (takes over: fallback wordmark), `src/app/admin/(authed)/{page,articles/new/page,articles/[id]/page}.tsx` (take over: `· blog0` titles), `src/components/admin/DeskHeader.tsx` (takes over: "blog0 · desk", + Site / Subscribers links), `src/app/(site)/archive/page.tsx`, `src/app/(site)/about/page.tsx` (take over), `src/components/site/archive/**`, `src/components/site/about/**`, `src/server/site/service.ts`, `src/app/api/admin/site/route.ts`, `src/app/admin/(authed)/site/page.tsx`, `src/components/admin/site/**`, `src/lib/api/dto.ts` (takes over: Phase 2 DTOs from `spec/api.md` in their domain sections, incl. `jevAvailable` on `TldrStateDto` — S2.8 codes against it), `tests/integration/site-settings.test.ts` | — |
-| A | **S2.3 Newsletter + footer** | `src/server/newsletter/**`, `src/app/api/newsletter/route.ts`, `src/app/api/admin/subscribers/route.ts`, `src/app/admin/(authed)/subscribers/page.tsx`, `src/components/admin/subscribers/**`, `src/components/site/NewsletterForm.tsx` (takes over), `src/components/site/Footer.tsx` (takes over: real topics, X/LinkedIn only with URLs, **no RSS**, "> end of <wordmark>"), `src/components/site/AsciiHand.ts` (takes over if needed), `tests/integration/newsletter.test.ts` | — |
-| A | **S2.4 Share (paragraph, article, deck)** | `src/components/reader/ParagraphShare.tsx`, `src/components/reader/ShareMenu.tsx`, `src/components/reader/ShareLinkButton.tsx` (takes over: opens the menu), `src/components/reader/TldrDeck.tsx` (takes over: end-slide menu host), `src/components/reader/ArticleView.tsx` + `ArticleFoot.tsx` (take over: share provider, **Share article** button), `src/components/design/Icon.tsx` (takes over: `linkedin`, `chat`, `note`, `notion`, `copy`, `check`, `share` paths from the design), `src/lib/share-links.ts`, `src/lib/share-surface.ts` (native-sheet decision, pure), `tests/unit/reader/share-links.test.ts`, `tests/unit/reader/share-surface.test.ts` | — (CSS comes from S2.1's `additions.css`; S2.4 codes against the class names in `spec/ui.md` §3 *Share*) |
-| A | **S2.5 Cards → deck, metadata, redirects** | `src/components/site/PostCard.tsx` (takes over), `src/components/site/SummaryHost.tsx`, `src/components/site/LegacyHashRedirect.tsx`, `src/app/api/public/articles/[slug]/tldr/route.ts`, `src/app/(site)/p/[slug]/page.tsx` + `tldr/page.tsx` (take over: `generateMetadata`), `src/app/sitemap.ts`, `src/app/robots.ts`, `src/server/public/metadata.ts` (takes over: titles `<Title> — blog0`), `tests/integration/public-api.test.ts`, `tests/integration/public-queries.test.ts` (takes over: brand literals) | — |
-| A | **S2.6 Seed posts** | `scripts/db-seed-posts.ts`, `src/server/seed/seed-posts.ts` (`seedPosts(db, siteId, userId): Promise<{ created: string[]; skipped: string[] }>`), `tests/integration/seed-posts.test.ts` | codes the script against the §11.2 `createDbHandle` contract (`spec/architecture.md`); **gate S2.6 after S2.8 lands** |
-| A | **S2.8 Designer mode + dev server fix** | `src/server/db/{client,migrate}.ts` (take over), `src/server/db/{url,postgres,pglite}.ts`, `src/server/config.ts` (takes over: `dbEngine`, relaxed secret/key on pglite), `src/instrumentation.ts` (takes over: boot notice), `src/app/api/health/route.ts` (takes over: `ping()`, `dbEngine`), `src/server/designer/{secret,admin}.ts`, `src/server/llm/index.ts` (takes over: `LLM_NOT_CONFIGURED`), `src/server/articles/tldr.ts` (takes over: `jevAvailable`, refuse Generate before any row), `src/components/admin/editor/TldrTab.tsx` (takes over: no-key notice), `scripts/{serve.mjs,dev-design.mjs,db-create.ts,db-migrate.ts,db-verify.ts,db-seed.ts,create-admin.ts}` (take over), `next.config.ts` (takes over), `.env.example` (takes over: DB URL optional, pglite docs), `README.md` (takes over: designer one-liner, brand, dev command), `tests/unit/config.test.ts` (takes over), `tests/unit/db/url.test.ts`, `tests/integration/health.test.ts` (takes over), `tests/integration/designer-mode.test.ts` (pglite in-memory: migrate + seed + generated secret + admin file + `LLM_NOT_CONFIGURED`) | **S2.0 verdict** (GO → PGlite as specified; NO-GO → the §11.5 file-backed fallback with the same slice owning `src/server/public/file-source.ts` and `content/**`). Also owns the **`pnpm dev` hot-reload investigation**: reproduce the Next 16.4 reload loop, fix it (candidate causes to check in order: `BLOG0_LOG_FILE` / `var/` / `test-results/` writes inside the watched tree, `instrumentation.ts` re-running on each compile, `globalThis` DB cache being torn down by HMR, Turbopack vs `--webpack`), and document the working command in README; `dev:design` must use that working hot-reload server. If no fix is found in the slice's budget, README documents the exact symptom + workaround and `dev:design` falls back to `next dev --webpack` (> **Assumed:** acceptable interim) — never to `build && start`. |
-| B | **S2.7 Seed decks (`seed:tldr`) + fixture** | `scripts/seed-tldr.ts`, `src/server/seed/seed-tldr.ts` (`seedTldr(db, siteId, userId, { source: 'auto' \| 'fixture' \| 'jev', writeFixture?: boolean })`), `src/server/seed/decks/index.ts` + `src/server/seed/decks/<slug>.json` (5 files; initial content generated by the slice with the real key via `--write-fixture`, committed), `tests/unit/seed/decks-fixture.test.ts`, `tests/integration/seed-tldr.test.ts` (real key: 5 calls once, then 0; no key: fixture path with a mangled line) | S2.6 (`seedPosts`), S2.8 (`createDbHandle`), Phase 1 `generateTldr` + `publishArticle` |
-| B | **S2.9 Reader E2E** | `tests/e2e/reader.spec.ts`, `tests/e2e/global-setup.ts` (takes over: after the admin, `seedPosts` + `seedTldr(…, { source: 'fixture' })` so the reader walk needs 0 LLM calls), `tests/e2e/helpers/share.ts` | S2.1–S2.8 |
-| C | **S2.10 Designer-mode E2E** | `playwright.design.config.ts` (repo root), `tests/e2e/designer.global-setup.ts`, `tests/e2e/designer-mode.spec.ts` | S2.7, S2.8 |
-
-Contracts the Wave A slices code against without waiting: `spec/architecture.md` §11.2
-(`createDbHandle`, `getDbHandle`), `spec/api.md` Phase 2 DTOs (written into `dto.ts` by
-S2.2; others import the shapes from the spec until it lands), `spec/ui.md` §3 *Share* class
-names, and `SITE_DEFAULTS.wordmark === 'blog0'`.
-
-**Gate 1 — real Postgres (exact, in order):**
+**Final gate 1 — real Postgres:**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running; real OpenRouter key)
-pnpm install                              # picks up @electric-sql/pglite from the orchestrator commit
-pnpm spike:pglite                         # S2.0: prints PASS per step; writes spec/spikes/pglite.md with GO|NO-GO (run once, before Wave A)
-pnpm db:migrate && pnpm db:verify         # no new migration; prints "0 pending"
+pnpm install
+pnpm db:migrate && pnpm db:verify
 pnpm db:seed && pnpm db:seed:posts        # "5 posts: 5 created" first run; re-run "5 posts: 0 created"
 pnpm seed:tldr                            # real key: "decks: 5 seeded (5 calls, $0.0xxx)"; re-run: "decks: 0 seeded (0 calls)"
-pnpm typecheck && pnpm lint
-pnpm test:unit                            # incl. share-links, boot-command, decks-fixture (fixture lines verbatim in the seed articles), db url parsing
-pnpm test:integration                     # real blog0_test + real OpenRouter: site-settings, newsletter, public-api, seed-posts, seed-tldr (5 real calls once), designer-mode (pglite in-memory), health (both engines)
-pnpm build && pnpm test:e2e               # smoke + tldr + reader on port 3411 (blog0_test; decks from the fixture; tldr.spec still does one real Generate)
+pnpm typecheck && pnpm lint && pnpm test:unit
+pnpm test:integration                     # incl. site-settings, newsletter, public-api, seed-posts, seed-tldr, designer-mode (pglite://memory), health
+pnpm build && pnpm test:e2e               # tldr → reader → listen → smoke on 3411 (decks from the fixture)
 # Boot check (background tool): pnpm start   then:
-curl -fsS http://localhost:3410/api/health                                 # "db":"ok","dbEngine":"postgres"
-curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"             # >= 1
-curl -fsS http://localhost:3410/ | grep -ow "log0" | wc -l                  # 0  (whole-word: the brand is blog0 everywhere; "blog0" itself does not match -w)
+curl -fsS http://localhost:3410/api/health                                   # "dbEngine":"postgres"
+curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"              # >= 1
+curl -fsS http://localhost:3410/ | grep -ow "log0" | wc -l                   # 0
 curl -fsS http://localhost:3410/p/humans-are-software/tldr | grep -c "tdeck" # >= 1
 ```
 
-**Gate 2 — designer mode, clean state, no Postgres, no `.env` values (exact):**
+**Final gate 2 — designer mode, clean state, no Postgres, no `.env` values:**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
-rm -rf var/pglite var/pglite-e2e var/pglite-e2e.designer-admin.txt var/pglite-session-secret var/designer-admin.txt   # explicit names, no globs (zsh-safe)
-pnpm test:e2e:design                      # S2.10: webServer command = `rm -rf var/pglite-e2e var/pglite-e2e.designer-admin.txt && pnpm dev:design` on 3413 (wipe first — Playwright starts the web server BEFORE globalSetup), BLOG0_DATABASE_URL=pglite://./var/pglite-e2e, key + secret blanked; globalSetup only reads the generated credentials; smokes /, /p/humans-are-software, the deck (4–8 verbatim lines), admin sign-in with the generated designer admin, and the "No OpenRouter key configured" notice
-env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design   # background tool; prints the designer admin email + password ONCE, then the dev server on 3410
-curl -fsS http://localhost:3410/api/health                                  # "db":"ok","dbEngine":"pglite"
-curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"             # >= 1
-curl -fsS http://localhost:3410/p/humans-are-software | grep -c "readhead"  # >= 1
-# stop it; re-run the same dev:design command → "5 posts: 0 created", "decks: 0 seeded (0 calls)", no new password printed
-# hot reload proof: edit a string in src/components/site/home/HomeAbout.tsx while dev:design runs → the page updates without a restart (no reload loop in the server log for 60 s)
-BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify                     # "… @ PostgreSQL 17.x (PGlite) — 1 applied (latest 0000_init), 0 pending: OK"
+rm -rf var/pglite var/pglite-e2e var/pglite-e2e.designer-admin.txt var/pglite-session-secret var/designer-admin.txt
+pnpm test:e2e:design                      # playwright.design.config.ts (spec/architecture.md → Test wiring)
+env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design   # background tool; prints the designer admin ONCE, then the dev server on 3410
+curl -fsS http://localhost:3410/api/health                                   # "dbEngine":"pglite"
+curl -fsS http://localhost:3410/p/humans-are-software | grep -c "readhead"   # >= 1
+# re-run dev:design → "5 posts: 0 created", "decks: 0 seeded (0 calls)", no new password
+BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify                      # "… PostgreSQL 17.x (PGlite) … 0 pending: OK"
 ```
-If S2.0 returned NO-GO, Gate 2 runs the §11.5 fallback instead: the same commands minus the
-admin/health-engine assertions, and `/admin` must answer 200 with the "Admin needs a database"
-notice.
 
-**The designer one-liner (README, S2.8):**
-```bash
-pnpm install && pnpm dev:design      # → http://localhost:3410 with the 5 articles + decks; admin at /admin (email + password printed once, kept in var/designer-admin.txt)
-```
-It runs, in order: ensure `var/pglite` exists → migrate → seed site + designer admin
-(`designer@blog0.local`, generated password) → seed posts → seed decks (fixture when no key) →
-start the hot-reload dev server. Re-running is safe. Start over: `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret`.
+**The designer one-liner (README):** `pnpm install && pnpm dev:design` → `http://localhost:3410`
+with the 5 articles + decks; admin at `/admin` (credentials printed once, kept in
+`var/designer-admin.txt`). Start over: `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret`.
 
 **How the user tests it:**
-1. *Designer path* (any machine with Node + pnpm): `pnpm install && pnpm dev:design`, open
+1. *Designer path* (Node + pnpm only): `pnpm install && pnpm dev:design`, open
    `http://localhost:3410/`. The strip types `> start of blog0`, the wordmark **blog0** types in
-   and its nought spins, the page prints in. Click **Archive** → the strip types `> ls archive`;
-   open a card → `> open <slug>`. Every one of the 5 articles has a working TLDR deck. Sign in at
-   `/admin/login` with the printed credentials; open an article → TLDR tab shows "No OpenRouter
-   key configured" (add a key to `.env` and restart to see Jev work). Edit a component file → the
-   browser updates without restarting.
+   and its nought spins, the page prints in. **Archive** → `> ls archive`; open a card →
+   `> open <slug>`. Every article has a working TLDR deck. Sign in at `/admin/login` with the
+   printed credentials; the TLDR tab shows "No OpenRouter key configured" (add a key to `.env` and
+   restart to see Jev work). Edit a component file → the browser updates without a restart.
 2. *Full path* (Postgres + `.env`): `pnpm db:seed && pnpm db:seed:posts && pnpm seed:tldr`, then
-   `pnpm build && pnpm start`. Home: About, Featured stack (3 seeded featured posts pile as you
-   scroll; the pinned head returns to the top), Latest with See More / View all; on a card click
-   **TLDR** → the deck opens over the list. Archive groups by month and filters by topic (footer
-   topics land pre-filtered). Click any paragraph in an article → it highlights, the passage +
-   link is copied, and the menu offers LinkedIn, X, WhatsApp, Notes, Notion, Copy link; open the
-   copied link in a new tab → the page scrolls to and highlights that paragraph. On a phone (or
-   Chrome device emulation) tapping a paragraph opens the native share sheet instead. **Share
-   article** at the foot and **Share** on the deck's last slide open the same menu. Toggle dark
-   mode, reload → it persists. Subscribe in the footer → "You're in. First issue lands Thursday.";
-   the address appears in **Admin → Subscribers** (Export CSV). Edit the About text in **Admin →
-   Site** → home and `/about` change. View source of an article → `<title>… — blog0</title>` and
-   OG tags. Old links `/#<id>/tldr` land on `/p/<id>/tldr`. Footer: no RSS icon; X/LinkedIn only
-   once their URLs are set in Admin → Site. Stub still: Listen.
+   `pnpm build && pnpm start`. Home: About, Featured stack (3 featured posts pile as you scroll),
+   Latest with See More / View all; a card's **TLDR** opens the deck over the list. Archive groups
+   by month and filters by topic. Click a paragraph → it highlights, the passage + link is copied,
+   the menu offers LinkedIn, X, WhatsApp, Notes, Notion, Copy link; the copied link scrolls to
+   and highlights that paragraph. On a phone (or device emulation) the native share sheet opens
+   instead. **Share article** and the deck's last-slide **Share** open the same menu. Dark mode
+   persists across reloads. Subscribe in the footer → "You're in. First issue lands Thursday.";
+   the address appears in **Admin → Subscribers** (Export CSV). Edit About in **Admin → Site** →
+   home and `/about` change. View source → `<title>… — blog0</title>` and OG tags. `/#<id>/tldr`
+   lands on `/p/<id>/tldr`. Footer: no RSS; X/LinkedIn only once their URLs are set.
 
 ---
 
-### Phase 3 — Listen + media
+### Phase 3 — Listen + media (with the Phase 3 fix)
 
 **Goal:** writers upload a word-for-word reading (mp3/m4a ≤ 50 MB / ≤ 30 min) and inline images;
-files live on local disk behind a storage interface and stream with HTTP range requests; the
-writer syncs audio by tapping along at each paragraph start; readers get a Listen view with
-player + text side by side, the current paragraph highlighted and auto-scrolled.
-**Superseded in part by the Phase 3 fix below** (no tap-along; estimated timing; Listen never
-blocks publish) — where the two disagree, the fix wins.
+files live on local disk behind a storage interface and stream with HTTP range requests; readers
+get a Listen view with player + text side by side, the current paragraph softly highlighted on
+**estimated** timing, auto-follow with **Follow audio**, click-to-seek; upload ⇒ `ready`, a
+paragraph edit after upload shows a non-blocking `text_changed` warning, Listen never blocks
+publish. Capabilities: `listen-audio`, `listen-sync`, `media-images`.
 
-Capabilities: `listen-audio`, `listen-sync`, `media-images`. Contracts every slice codes
-against without waiting: `spec/architecture.md` §9 (storage interface, `/media/` route, probe
-table, `src/lib/listen/marks.ts` signatures), `spec/api.md` → Phase 3 DTOs (written into
-the listen/media sections of `src/lib/api/dto.ts` by S3.3; others import the shapes from the spec until it lands),
-`spec/data.md` → `ListenPayload`, and `spec/ui.md` §3 *Listen* / §4 *Listen tab* class names.
+**Done** (commits `69d9986` Phase 3; `31de614` fix — tap-along removed, estimated timing).
 
-Real vs stubbed after Phase 3: everything Listen and media is real; the only remaining labelled
-stub is the editor History tab. The `listen` kind needs **no registry change** —
-`src/lib/formats/registry.ts` already lists it (`availableFromPhase: 3`) and `FormatChips` /
-`labels.ts` already carry the Listen labels. (Refactor: the `unavailable` status and the
-"later phase" chip text are gone — every format kind is implemented.)
-
-Dependencies already in the orchestrator's Phase 3 commit: `music-metadata` 12.1, `image-size`
-2.0 (main deps). No new scripts. No migration (the scaffold schema already has `media_asset`
-and the free-text `article_format.kind`).
-
-| Wave | Slice | Owns | Depends on |
-|---|---|---|---|
-| A | **S3.1 Storage + media route + image upload** | `src/server/storage/{types,local-disk,index}.ts`, `src/server/media/{repo,ingest,image-probe,range,cleanup}.ts`, `src/app/media/[...key]/route.ts`, `src/app/api/admin/uploads/images/route.ts`, `src/server/http/api.ts` (takes over: `body: 'multipart'` + `Content-Length` pre-check), `tests/unit/media/{range,storage-key}.test.ts`, `tests/integration/media.test.ts`, `tests/helpers/storage.ts` (`resetStorage()` wipes `BLOG0_STORAGE_DIR`), `tests/setup/integration-env.ts` (takes over: `BLOG0_STORAGE_DIR=var/storage-test`), `tests/fixtures/images/**` (`sample.png` 320×200, `sample.jpg`, `sample.webp`, `tiny.gif` 1 frame, `sample.svg`, `sample.json` with the known dimensions — generated once by `scripts/make-image-fixtures.ts` with Node + `image-size` round-trip check and committed), `scripts/make-image-fixtures.ts` | Phase 2 |
-| A | **S3.2 Audio ingest** | `src/server/listen/{probe,ingest}.ts`, `src/app/api/admin/articles/[id]/audio/route.ts`, `tests/unit/listen/probe.test.ts`, `tests/integration/audio-ingest.test.ts`, `tests/fixtures/audio/**` (`sample.mp3` and `sample.m4a`, the same ~20 s spoken text, each ≤ 400 KB; `not-audio.wav` 1 s silence; `sample.json` = `{ "mp3": { "durationMs", "bytes", "sha256" }, "m4a": {…} }`; generated once on macOS by `scripts/make-audio-fixture.sh` — `say` → AIFF → `afconvert` → m4a (AAC), and `ffmpeg` (Homebrew) → mp3 — and committed), `scripts/make-audio-fixture.sh`, `next.config.ts` (takes over **only if** a probe library needs `serverExternalPackages`; reports it) | S3.1 for the gate (codes against §9.1/§9.3 contracts: `getStorage()`, `ingestUpload`, `deleteAssetIfUnreferenced`) |
-| A | **S3.3 Listen format + sync API + shared contracts** | `src/lib/api/dto.ts` (listen/media sections), `src/lib/listen/marks.ts`, `src/server/formats/listen.ts` (takes over: real adapter — status, stale, publish guard), `src/server/formats/payload.ts` (takes over: `listenPayloadSchema`), `src/server/formats/index.ts` (takes over: re-exports), `src/server/listen/sync.ts`, `src/app/api/admin/articles/[id]/listen/route.ts`, `src/lib/api/dto.ts` (takes over: `PublishBlockedDetails` reasons gain `missingPids?`/`orphanPids?`), `tests/unit/listen/marks.test.ts`, `tests/unit/formats/listen-status.test.ts`, `tests/integration/listen-sync.test.ts` | Phase 2; its integration test uploads through S3.2's route, so **gate S3.3 after S3.2 lands** (unit tests run alone) |
-| A | **S3.4 Admin Listen tab + image UI** | `src/components/admin/editor/ListenTab.tsx` (takes over), `src/components/admin/listen/**` (`AudioUploader.tsx`, `SyncPanel.tsx`, `MarkList.tsx`, `useTapSync.ts`, `listen-api.ts` — XHR upload with progress + the JSON calls), `src/components/admin/editor/ArticleEditor.tsx` (takes over: Listen tab chip, `ListenTab` props `article`/`editorDirty`/`saveFirst`/`onArticleChanged`/`onSelectTab`, unsaved-marks guard), `src/components/admin/editor/PublishBar.tsx` (takes over: `LISTEN_STALE` reason → **Go to Listen**), `src/components/admin/editor/ImageUploadButton.tsx`, `src/components/admin/editor/insert-image.ts` (pure: snippet + `insertAtCursor`), `src/components/admin/editor/MarkdownEditor.tsx` (takes over: `.mdedit__tools` slot, drop target, `insertAtCursor` ref API), `src/components/admin/editor/WriteTab.tsx` (takes over: passes the article id to the button), `src/styles/admin.css` (takes over: §5 Phase 3 admin rules), `tests/unit/admin/{insert-image,tap-sync}.test.ts` | Phase 2 (codes against the Phase 3 DTOs and `marks.ts` signatures from the spec) |
-| A | **S3.5 Reader Listen view + public listen data** | `src/components/reader/ListenView.tsx`, `src/components/reader/AudioPlayer.tsx`, `src/components/reader/ListenStub.tsx` (deleted), `src/components/reader/ArticleView.tsx` (takes over: `initialMode 'listen'`, `/listen` replaceState, Listen branch), `src/components/reader/ModeCapsule.tsx` (takes over: disabled "No recording yet"), `src/components/site/SummaryHost.tsx` (takes over: `mode: 'tldr' \| 'listen'`, deck ↔ listen switch), `src/components/site/ListenOverlay.tsx`, `src/components/site/PostCard.tsx` (takes over: Listen opens the overlay), `src/lib/view-models.ts` (takes over: `ListenViewModel`), `src/app/(site)/p/[slug]/listen/page.tsx`, `src/app/(site)/p/[slug]/page.tsx` + `tldr/page.tsx` (take over only if the shared page component needs the `initialMode` union widened), `src/app/api/public/articles/[slug]/listen/route.ts`, `src/server/public/articles.ts` (takes over: listen view model + `times.listen`), `src/server/public/home.ts` (takes over: card `times.listen`), `src/proxy.ts` (takes over: `/p/:slug/listen` in the matcher), `src/styles/additions.css` (takes over: §5 Phase 3 reader rules), `tests/unit/reader/listen-view.test.tsx` (highlight + autoscroll pause logic with a fake `<audio>`), `tests/integration/public-queries.test.ts` + `tests/integration/public-api.test.ts` (take over: listen cases) | Phase 2 (codes against `ListenViewModel` / `PublicListenDto` / `marks.ts` from the spec) |
-| B | **S3.6 Listen E2E** | `tests/e2e/listen.spec.ts`, `tests/e2e/helpers/upload.ts`, `playwright.config.ts` (takes over: `BLOG0_STORAGE_DIR: 'var/storage-e2e'`, wiped in `global-setup.ts`), `tests/e2e/global-setup.ts` (takes over: wipe the storage dir), `tests/e2e/designer-mode.spec.ts` (takes over: one upload → stream assertion on PGlite) | S3.1–S3.5 |
-
-Ownership notes (gaps closed): the `listen` kind in `src/lib/formats/registry.ts` — no change
-(already registered); stale detection — S3.3 (`src/server/formats/listen.ts` +
-`src/server/listen/sync.ts`); the desk Listen chip — no change (generic `FormatChips`); the
-editor Listen tab chip — S3.4 (`ArticleEditor.tsx`); capsule / card / deck minutes — S3.5
-(`src/server/public/{articles,home}.ts`, `ModeCapsule.tsx`); `/media/` and image upload — S3.1;
-the publish guard reason plumbing — S3.3 (server) + S3.4 (popover); `withApi` multipart — S3.1
-(S3.2 codes against `body: 'multipart'`).
-
-**Gate (exact):**
+**Final gate:**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running; real OpenRouter key)
-# HISTORICAL (Phase 3 as first built). The Listen lines below are superseded by the "Phase 3 fix" gate further down.
-pnpm install                              # picks up music-metadata + image-size from the orchestrator commit
-pnpm db:migrate && pnpm db:verify         # no new migration; prints "0 pending"
-pnpm typecheck && pnpm lint
-pnpm test:unit                            # incl. listen/marks, listen/probe (fixture durations), media/range, media/storage-key, admin/insert-image, admin/tap-sync, reader/listen-view, formats/listen-status
-pnpm test:integration                     # real blog0_test + real files under var/storage-test: media (200/206/304/416, traversal 404, images incl. SVG 415), audio-ingest (m4a + mp3 durations vs sample.json, 413/415/422, replace/remove cleanup), listen-sync (marks save, MARKS_INVALID cases, stale, LISTEN_STALE publish guard, re-sync), public-queries/public-api (times.listen, /listen 404 vs 200)
-pnpm build && pnpm test:e2e               # smoke + tldr + reader + listen on 3411: upload sample.mp3, Space-tap every paragraph, Save sync, Publish, Listen view highlight follows currentTime, paragraph click seeks, card overlay, /media/<key> 206, image upload → figure in preview and live page
-# Boot check (background tool): pnpm start   then:
-curl -fsS http://localhost:3410/api/health
-curl -fsS -o /dev/null -w "%{http_code}\n" -H "Range: bytes=0-1" "http://localhost:3410/media/$(ls var/storage/blog0/audio/*/*/ | head -1 | sed 's#.*/##; s#^#blog0/audio/#')"   # 206 after at least one upload (adjust the key by hand if the dir layout differs)
-curl -fsS -o /dev/null -w "%{http_code}\n" "http://localhost:3410/media/..%2F..%2Fetc%2Fpasswd"   # 404
-# Designer mode: env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design  (background tool); sign in with the printed admin, upload an mp3 in the Listen tab → it plays; ls var/storage/blog0/audio shows the file
-```
-
-**How the user tests it:** in the editor's **Listen** tab upload an mp3/m4a (drop it or choose a
-file; the limits are stated; a renamed text file is refused with the reason). Press **Start
-syncing**: the audio plays from the start and paragraph 1 is marked "next" — press **Space** (or
-tap the big button) as each paragraph begins; Backspace undoes the last tap; use **Redo from
-here** on any paragraph to re-tap from there; nudge any mark by ±250 ms; **Save sync** → the tab
-chip reads **Synced**; **Publish**. On the article page choose **Listen** in the capsule (it now
-reads "Listen · N min"): the player and the text sit side by side, the current paragraph
-highlights and scrolls into view; drag the seek bar → the highlight jumps; click a paragraph →
-the audio jumps there; Space / ← / → work. The address bar shows `/p/<slug>/listen`; reload
-keeps Listen open. On a home card, **Listen** opens the compact player overlay (no text), with
-the capsule switching to the deck or the article. Back in the editor, edit one paragraph's text
-and save → the Listen chip turns **stale**, the tab shows which paragraph lost its mark and warns
-that a changed wording needs a new recording; **Publish changes** is blocked with the reason
-until you re-sync or remove the audio; the live page keeps playing the old synced reading
-throughout. Nothing re-syncs by itself. In the Write tab, click **Image** (or drop a PNG on the
-textarea), type alt text → `![alt](/media/…)` is inserted at the cursor and renders in the
-preview; an SVG is refused. Remaining labelled stub: the History tab.
-
-#### Phase 3 fix — estimated Listen timing, no tap-along (user feedback 2026-10-13; binding)
-
-**Why:** the user found manual tap-along sync too cumbersome; accurate alignment is deferred
-(no paid tokens; Phase 6 is the local path). **What changes** (contracts):
-`spec/capabilities/listen-sync.md` (estimator, `resolveMarks`, reader follow),
-`spec/capabilities/listen-audio.md` (upload ⇒ `ready`, `text_changed` warning, publish never
-blocked), `spec/architecture.md` §5 / §9.4 / §9.5 / divergences 28–29, `spec/api.md` → Phase 3
-DTOs, `spec/data.md` → `ListenPayload`, `spec/ui.md` §3 *Listen*, §4 *Listen tab*, §5. No
-migration, no new dependency, no new script.
-
-Supersedes from Phase 3: the tap-along UI (Start syncing, tap button, undo/redo/nudge, mark
-list, Save sync), `needs_sync`, Listen `stale`, `LISTEN_STALE` and **Go to Listen**, the 4 s
-auto-scroll pause. Kept: upload/stream/player, `PUT …/listen` + marks storage (now
-aligner-facing), the card overlay, capsule minutes, images.
-
-Two code slices, **disjoint files**, started together. They share contracts that change
-types on both sides (`FormatStatus`, `ListenStateDto`, `marks.ts` exports), so **neither passes
-`pnpm typecheck` alone**: each runs only its own focused tests while building, and the fix gate
-below runs once after both land (merge F1 first, then F2).
-
-| Slice | Owns | Depends on |
-|---|---|---|
-| **F1 Backend + lib** | `src/lib/listen/estimate.ts` (new), `src/lib/formats/registry.ts` (takes over: `FormatStatus` drops `needs_sync`, adds `text_changed`), `src/components/admin/labels.ts` (takes over: `FORMAT_STATUS_LABEL` — `text_changed: 'text changed'`, no `needs_sync`), `src/lib/api/dto.ts` (listen section: ListenStatus, ListenTiming, ListenStateDto, PublicListenDto; `PublishBlockedReasonCode` drops `LISTEN_STALE`; reason drops `missingPids?`/`orphanPids?`), `src/lib/view-models.ts` (`ListenViewModel.timing`), `src/server/formats/listen.ts` (status, never-blocking `validateForPublish`, publish copies any draft), `src/server/formats/payload.ts` (`uploadFingerprint`), `src/server/formats/index.ts` (drop `LISTEN_STALE` re-export), `src/server/listen/ingest.ts` (uploadFingerprint, `draft_fingerprint`, `draft_revision_id`), `src/server/listen/sync.ts` (state DTO, aligner-facing `saveMarks` leaves the baseline alone), `src/server/articles/service.ts` (publish reasons: drop the Listen detail plumbing), `src/server/public/articles.ts` (resolved marks + timing in the view model and `PublicListenDto`), `src/app/api/admin/articles/[id]/audio/route.ts` + `src/app/api/admin/articles/[id]/listen/route.ts` + `src/app/api/public/articles/[slug]/listen/route.ts` (doc comments / DTO only), tests: `tests/unit/listen/estimate.test.ts` (new), `tests/unit/formats/listen-status.test.ts`, `tests/integration/listen-sync.test.ts`, `tests/integration/audio-ingest.test.ts`, `tests/integration/public-listen.test.ts`, `tests/integration/public-queries.test.ts` + `tests/integration/public-api.test.ts` (listen cases) | Phase 3 (landed) |
-| **F2 Frontend** | `src/components/admin/editor/ListenTab.tsx` (rewrite: upload/replace/remove + preview player + timing note + text-changed warning; `statusHelp`/`LISTEN_STATUS_LABEL` for the 3 statuses), `src/components/admin/listen/**` — **delete** `useTapSync.ts`, `SyncPanel.tsx`, `MarkList.tsx`, `save-sync.ts` (move `mediaKeyOf` only if still needed; `publishedDiffers` is replaced by `published.sameAudioAsDraft`), trim `listen-api.ts` (drop `saveListen`, `getPublishedAudioKey`), `AudioUploader.tsx` (disabled while the editor is dirty; no replace confirm); `src/components/admin/editor/ArticleEditor.tsx` (drop the unsaved-marks guard + Listen tab props it needed), `src/components/admin/editor/PublishBar.tsx` (drop `LISTEN_STALE` / **Go to Listen**), `src/components/admin/editor/HistoryTab.tsx` (stub copy "…arrives in a later version."), `src/lib/listen/marks.ts` (dead-code removal per §9.4 — no behaviour change), `src/components/reader/listen-sync.ts` (follow state machine: `following`, manual-scroll → off, `followAudio()` → on + immediate scroll, paragraph click → on), `src/components/reader/ListenView.tsx` (Follow audio button, focus handoff), `src/components/reader/AudioPlayer.tsx` (only if the follow logic needs a hook, e.g. focusing the play button), `src/styles/additions.css` (soft `.para.is-live` tokens, `.listenview__follow`), `src/styles/admin.css` (`text_changed` chips, removals per `spec/ui.md` §5), tests: **delete** `tests/unit/admin/tap-sync.test.ts` and `tests/unit/admin/listen-save-sync.test.ts`; update `tests/unit/admin/components.test.tsx` (Listen tab statuses, no Go to Listen), `tests/unit/listen/marks.test.ts` (drop removed helpers), `tests/unit/reader/listen-view.test.ts` (follow pause/resume), `tests/e2e/listen.spec.ts` (walk without tap-along), `tests/e2e/designer-mode.spec.ts` (`status 'ready'` after upload) | Codes against this spec's F1 contracts; its gate runs after F1 lands |
-
-Ownership notes: `src/components/admin/FormatChips.tsx` needs no change (labels come from
-`labels.ts`, F1); `ListenOverlay.tsx`, `SummaryHost.tsx`, `ModeCapsule.tsx`, `PostCard.tsx` and
-`src/server/public/home.ts` are untouched (minutes and overlay unchanged).
-
-**Fix gate (exact, after F1 + F2 land):**
-```bash
-# cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running)
 pnpm db:migrate && pnpm db:verify         # no new migration; "0 pending"
 pnpm typecheck && pnpm lint
-pnpm test:unit                            # incl. listen/estimate (edge cases: [], 1 paragraph → 0, zero-word, D ≤ 0 / NaN, very short audio non-decreasing, exact [0,3333,3768], seeded random strictly increasing), resolveMarks precedence, formats/listen-status (missing/ready/text_changed, legacy baseline), reader/listen-view (follow pause on wheel/touch/keys, Follow audio resumes + scrolls once, click seeks + resumes)
-pnpm test:integration                     # audio-ingest: upload ⇒ status 'ready' + uploadFingerprint; listen-sync: paragraph edit ⇒ 'text_changed', publish 200 (never PUBLISH_BLOCKED for Listen), heading edit stays ready, PUT validation unchanged and never changes status; public-listen/public-queries/public-api: marks === estimateMarks(published paragraphs, durationMs) by value, re-estimated after a text edit + publish, stored covering marks served as 'synced'
-pnpm build && pnpm test:e2e               # listen: upload sample.mp3 → chip "ready", no tap controls; publish (no block); Listen view highlight follows currentTime on estimated marks; wheel scroll pauses follow + shows Follow audio; seek while paused does not scroll; Follow audio resumes and scrolls; paragraph click seeks; card overlay player-only; /media/<key> 206
-! grep -rnE "needs_sync|LISTEN_STALE|useTapSync|SyncPanel|MarkList|tapbtn|marklist|nudgeMark|listenDiff" src tests   # no tap-along leftovers (non-zero exit = leftovers found)
-# Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
+pnpm test:unit                            # incl. listen/estimate, listen/marks, listen/probe, formats/listen-status, media/range, media/storage-key, admin/insert-image, reader/listen-view
+pnpm test:integration                     # media (200/206/304/416, traversal 404, SVG 415), audio-ingest, listen-sync, public-listen, public-queries, public-api — real files under var/storage-test
+pnpm build && pnpm test:e2e               # listen walk: upload → chip ready, publish (no block), highlight follows currentTime, wheel pauses follow, Follow audio resumes, click seeks, card overlay, /media 206, image upload
+! grep -rnE "needs_sync|LISTEN_STALE|useTapSync|SyncPanel|MarkList|tapbtn|marklist|nudgeMark|listenDiff" src tests
+# Boot check (background tool): pnpm start   then:
+curl -fsS -o /dev/null -w "%{http_code}\n" "http://localhost:3410/media/..%2F..%2Fetc%2Fpasswd"   # 404
 ```
 
-**How the user tests it:** in the editor's **Listen** tab upload an mp3/m4a → the chip reads
-**Ready** at once (no syncing step; the tab shows the preview player and the note that readers
-get estimated timing). **Publish**. On the article choose **Listen**: press play — the text
-beside the player scrolls along and the current paragraph has a soft highlight; scroll the text
-yourself → following stops and **Follow audio** appears; click it → the text jumps back to the
-current paragraph and follows again; click any paragraph → the audio jumps to it. Back in the
-editor, change one paragraph's wording and save → the Listen chip shows **text changed** and
-the tab warns "The recording may no longer match the text"; **Publish changes** still works (no
-block) and the live Listen follows the new text. Remaining labelled stub: the History tab
-(revision history deferred).
+**How the user tests it:** in the editor's **Listen** tab upload an mp3/m4a (drop or choose; a
+renamed text file is refused with the reason) → the chip reads **Ready** at once; the tab shows
+the preview player and the note that readers get estimated timing. **Publish**. On the article
+choose **Listen** ("Listen · N min"): press play — the text beside the player scrolls along with a
+soft highlight on the current paragraph; scroll yourself → following stops and **Follow audio**
+appears; click it → the text jumps back and follows again; click a paragraph → the audio jumps
+there; Space / ← / → work; the address is `/p/<slug>/listen` and survives a reload. On a home
+card, **Listen** opens the compact player overlay. Back in the editor, change one paragraph's
+wording and save → the chip shows **text changed** and the tab warns "The recording may no longer
+match the text"; **Publish changes** still works. In the Write tab, **Image** (or drop a PNG on the
+textarea), type alt text → `![alt](/media/…)` is inserted at the cursor and renders in the
+preview; an SVG is refused. Remaining labelled stub: the History tab (revision history deferred).
 
 ---
 
 ### Phase 4 — Editorial standards — **ON HOLD**
 
-> **On hold (user decision, 2026-10-13).** Do not start Phase 4 until the user re-opens it. When
-> it resumes, it is planned as below **without revision history**, which the user removed from
-> Phase 4 — `spec/capabilities/revision-history.md` is **deferred** (not scheduled; revisions keep
-> being recorded on every save, and the History tab stays a labelled stub). Listen has no
-> Re-sync offer any more (Phase 3 fix: timing is estimated at read time and never goes stale).
+> **On hold (user decision, 2026-10-13).** Do not start Phase 4 until the user re-opens it. It
+> resumes **without revision history** (`spec/capabilities/revision-history.md` is deferred:
+> revisions keep being recorded on every save; the History tab stays a labelled stub).
 
-**Goal (when resumed):** international editorial practice: public "Published <date> · Updated
-<date>" and an optional dated corrections note, stale detection + an explicit **Regenerate**
-offer for the TLDR deck (published content keeps serving), editor sign-off states (Submit for
-review / Approve — self-publish still allowed), AI cost dashboard (per generation and site-wide
-month-to-date), and a small Team page (add admin, change own password).
+**Goal (when resumed):** public "Published <date> · Updated <date>" and an optional dated
+corrections note; TLDR stale detection with an explicit **Regenerate** offer (published content
+keeps serving); editor sign-off states (Submit for review / Approve — self-publish still allowed);
+AI cost dashboard (per generation and site-wide month-to-date); a small Team page (add admin,
+change own password). Capabilities: `publication-record`, `format-lifecycle`, `ai-cost-ledger`
+(team accounts are part of `admin-auth`).
 
-Capabilities: `publication-record`, `format-lifecycle`, `ai-cost-ledger` (team accounts are part
-of `admin-auth`). Deferred out of this phase: `revision-history`.
+| Slice | Owns | Depends on |
+|---|---|---|
+| **S4.1 Publication record + sign-off** | `src/server/articles/workflow.ts`, `src/app/api/admin/articles/[id]/{submit,approve,corrections}/route.ts`, `src/components/admin/editor/PublishBar.tsx` (takes over), `src/components/reader/ReadHead.tsx` + `ArticleFoot.tsx` (take over: dates, corrections), `src/server/public/articles.ts` (takes over: `updatedLabel`, `correctionsHtml`), `tests/integration/workflow.test.ts` | — |
+| **S4.2 Format lifecycle** | `src/server/formats/status.ts` (new), `src/components/admin/FormatChips.tsx` (takes over), `src/components/admin/editor/StaleBanner.tsx`, `src/components/admin/editor/TldrTab.tsx` (takes over: Regenerate offer), `tests/integration/format-lifecycle.test.ts` | — |
+| **S4.3 AI cost ledger** | `src/server/ai-usage/**`, `src/app/api/admin/ai-usage/route.ts`, `src/app/admin/(authed)/ai-usage/page.tsx`, `src/components/admin/ai-usage/**`, `src/components/admin/DeskHeader.tsx` (takes over: month-to-date total), `tests/integration/ai-usage.test.ts` | — |
+| **S4.4 Team accounts** | `src/app/admin/(authed)/team/page.tsx`, `src/components/admin/team/**`, `src/app/api/admin/users/**`, `src/app/api/auth/password/route.ts`, `tests/integration/team.test.ts` | — |
+| **S4.5 Editorial E2E** | `tests/e2e/editorial.spec.ts`, `playwright.config.ts` (takes over: `editorial` project after `smoke`) | S4.1–S4.4 |
 
-| Wave | Slice | Owns | Depends on |
-|---|---|---|---|
-| A | **S4.2 Publication record + sign-off** | `src/server/articles/workflow.ts`, `src/app/api/admin/articles/[id]/{submit,approve,corrections}/route.ts`, `src/components/admin/editor/PublishBar.tsx` (takes over), `src/components/reader/ReadHead.tsx` + `ArticleFoot.tsx` (take over: dates, corrections), `src/server/public/articles.ts` (takes over: updatedAt/corrections), `tests/integration/workflow.test.ts` | Phase 3 |
-| A | **S4.3 Format lifecycle** | `src/server/formats/status.ts`, `src/components/admin/FormatChips.tsx` (takes over), `src/components/admin/editor/StaleBanner.tsx`, `src/components/admin/editor/TldrTab.tsx` (takes over: regenerate offer), `tests/integration/format-lifecycle.test.ts` | Phase 3 |
-| A | **S4.4 AI cost ledger** | `src/server/ai-usage/**`, `src/app/api/admin/ai-usage/route.ts`, `src/app/admin/(authed)/ai-usage/page.tsx`, `src/components/admin/ai-usage/**`, `src/components/admin/DeskHeader.tsx` (takes over: month-to-date total), `tests/integration/ai-usage.test.ts` | Phase 3 |
-| A | **S4.5 Team accounts** | `src/app/admin/(authed)/team/page.tsx`, `src/components/admin/team/**`, `src/app/api/admin/users/**`, `src/app/api/auth/password/route.ts`, `tests/integration/team.test.ts` | Phase 3 |
-| B | **S4.6 Editorial E2E** | `tests/e2e/phase4-editorial.spec.ts` | S4.2–S4.5 |
+> **Assumed:** the editorial walk is a fifth Playwright project depending on `smoke` (so it runs
+> last on the shared `blog0_test`), and S4.5 is the only slice that edits `playwright.config.ts`.
 
 **Gate (exact):**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
 pnpm db:migrate && pnpm db:verify
 pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration
-pnpm build && pnpm test:e2e              # phase4: edit → stale chips → Regenerate (real call) → publish → "Updated" shows; corrections note visible; cost page totals equal sum of generation rows
+pnpm build && pnpm test:e2e              # editorial: edit → stale chip → Regenerate (real call) → publish → "Updated" shows; corrections note visible; cost page total equals the sum of generation rows
 # Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
 ```
 
-**How the user tests it (when resumed):** change a deck line → TLDR chip **stale**, banner offers **Regenerate** (nothing happens
-until clicked); the live page still serves the published deck. **Publish changes** → article
-foot/header shows "Published 8 Sep 2026 · Updated 12 Oct 2026". Add a corrections note → it
-appears dated at the article foot. **Submit for review** / **Approve** chips show on the dashboard.
-**AI usage** page lists each generation (model, prompt version, tokens, $, who, when) and the
-month-to-date total also shown on the dashboard header. **Team** → add a second admin; sign in
-as them; their saves show their name on the desk ("Updated … by <name>").
+**How the user tests it (when resumed):** change a deck sentence → TLDR chip **stale**, banner
+offers **Regenerate** (nothing happens until clicked); the live page still serves the published
+deck. **Publish changes** on another day → the article shows "Published 8 Sep 2026 · Updated
+12 Oct 2026". Add a corrections note → it appears dated at the article foot. **Submit for review**
+/ **Approve** states show on the desk. **AI usage** lists each generation (model, prompt version,
+tokens, $, who, when) and the month-to-date total, also on the desk header. **Team** → add a
+second admin; sign in as them; their saves show their name on the desk.
 
 ---
 
@@ -612,21 +359,18 @@ as them; their saves show their name on the desk ("Updated … by <name>").
 non-root, migrations as a release step), production config validation (HTTPS cookie, required
 secrets), security headers + CSP, persistent rate limits on login and newsletter, graceful
 shutdown, liveness vs readiness endpoints, backup/restore scripts (Postgres dump + storage dir),
-and a deploy runbook. Capabilities: `container-image`, `backup-restore`, `abuse-protection`.
-Capability files are written at the start of this phase (spec-first) from this paragraph.
+and a deploy runbook. Capabilities: `container-image`, `backup-restore`, `abuse-protection`
+(capability files written at the start of this phase).
 
-Slices (planned): S5.1 Dockerfile + `.dockerignore` + `scripts/release.ts`, and adds
-`output: 'standalone'` to `next.config.ts` (absent until now because local `next start` warns
-under it); the container runs `node .next/standalone/server.js`; S5.2 backups
-(`scripts/backup.ts`, `scripts/restore.ts`, docs); S5.3 security headers/CSP in `next.config.ts`
-(depends on S5.1's one-line `next.config.ts` edit landing first)
-+ DB-backed rate limits (`src/server/rate-limit/**`, migration owned by this slice); S5.4
-readiness/liveness + graceful shutdown (`src/app/api/health/{live,ready}/route.ts`); S5.5 E2E
-against the container.
+Slices (planned): S5.1 Dockerfile + `.dockerignore` + `scripts/release.ts`, adds
+`output: 'standalone'` to `next.config.ts` (the container runs `node .next/standalone/server.js`);
+S5.2 backups (`scripts/backup.ts`, `scripts/restore.ts`, docs); S5.3 security headers/CSP in
+`next.config.ts` (after S5.1's edit lands) + DB-backed rate limits behind the
+`FixedWindowCounter` call sites (migration owned by this slice); S5.4 readiness/liveness +
+graceful shutdown (`src/app/api/health/{live,ready}/route.ts`); S5.5 E2E against the container.
 
 **Gate (exact):**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
 docker build -t blog0:local .
 pnpm db:migrate && pnpm db:verify
 pnpm test:unit && pnpm test:integration
@@ -642,23 +386,20 @@ pnpm tsx scripts/backup.ts --out var/backups && pnpm tsx scripts/restore.ts --in
 
 **Goal:** on an explicit **Auto-sync** click, a local faster-whisper worker (free; no paid STT)
 transcribes the uploaded reading with word timestamps and aligns it to the article's paragraphs
-and sentences — **the path to exact timings** (the Phase 3 fix ships estimated timing only).
-The aligner writes paragraph marks through the existing aligner-facing sync storage (`PUT
-/api/admin/articles/:id/listen` → `ListenPayload.marks`; sentence marks as an optional
-`sentenceMarks` beside them), so `resolveMarks` serves them as `synced` with no reader change,
-then upgrades the highlight to sentence level; the writer reviews. Stored marks are
-all-or-nothing (`resolveMarks` uses them only when they cover every paragraph; PUT requires a
-complete set), so an aligner run that misses paragraphs must fill the gaps (e.g. interpolate
-between aligned neighbours) before saving, or leave the estimate in place — decided in Phase 6's
-capability spec. Capabilities: `alignment-worker`, `alignment-jobs`,
-`sentence-level-listen`. Introduces a second toolchain (Python 3.12 via `uv`) in `workers/align/`;
-capability files and toolchain rules are written at the start of this phase.
+and sentences — the path to exact timings. The aligner writes paragraph marks through the
+existing aligner-facing `PUT /api/admin/articles/:id/listen` (`ListenPayload.marks`; sentence
+marks as an optional `sentenceMarks` beside them), so `resolveMarks` serves them as `synced` with
+no reader change; then the highlight goes sentence-level; the writer reviews. Stored marks are
+all-or-nothing (PUT requires a complete set), so a run that misses paragraphs must fill the gaps
+(e.g. interpolate between aligned neighbours) or leave the estimate — decided in Phase 6's
+capability spec. Capabilities: `alignment-worker`, `alignment-jobs`, `sentence-level-listen`.
+Introduces a second toolchain (Python 3.12 via `uv`) in `workers/align/`.
 
 Slices (planned): S6.1 `workers/align/` (uv project, faster-whisper `small.en`, CLI that reads a
 job and writes word timings); S6.2 `align_job` table (migration owned here) + job runner +
 `POST /api/admin/articles/:id/listen/auto-sync`; S6.3 sequence alignment of transcript words to
-`Paragraph[]` / `Sentence[]` (`src/server/listen/align.ts`, writing through `saveMarks`) + review UI; S6.4 reader sentence-level highlight;
-S6.5 E2E with the committed audio fixture.
+`Paragraph[]` / `Sentence[]` (`src/server/listen/align.ts`, writing through `saveMarks`) + review
+UI; S6.4 reader sentence-level highlight; S6.5 E2E with the committed audio fixture.
 
 **Gate (exact):** `uv --directory workers/align run pytest -q && pnpm test:integration && pnpm build && pnpm test:e2e`.
 

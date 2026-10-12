@@ -16,7 +16,7 @@ TLDR line selector. Everything else is deterministic code. LLM provider: **OpenR
 | Reader Q&A / chat over articles | Rejected for v0.1 | Out of scope; would put LLM cost on reader paths. |
 | Search / recommendations | Rejected | Search dropped by user; < 100 articles. |
 | Proofreading / style checks | Not now | Not requested; candidate for a later explicit-click helper. |
-| Alt-text for images | Not now | Phase 3 images are writer-uploaded with writer alt text. |
+| Alt-text for images | Not now | Images are writer-uploaded with writer alt text. |
 
 ## 2. Jev — composition
 
@@ -155,7 +155,11 @@ The orchestration around it (generation row, draft deck write) lives in
 ## 3. Model and call parameters
 
 - Model slug from `BLOG0_JEV_MODEL`; default **`google/gemini-2.5-flash`**.
-  > **Assumed:** this slug is listed on OpenRouter and supports `response_format: json_schema` in Oct 2026. `pnpm check:openrouter` proves it with a real structured call at scaffold time. Fallback list printed by the check, in order: `google/gemini-2.5-flash`, `anthropic/claude-haiku-4.5`, `openai/gpt-5-mini`, `google/gemini-2.5-flash-lite`. If the default is unlisted, the build switches `.env`/`.env.example` to the first listed fallback and records it here.
+  `pnpm check:openrouter` proves the slug is listed and honours `response_format: json_schema`
+  with one real structured call. Fallback list printed by the check, in order:
+  `google/gemini-2.5-flash`, `anthropic/claude-haiku-4.5`, `openai/gpt-5-mini`,
+  `google/gemini-2.5-flash-lite`; if the default ever becomes unlisted, switch
+  `.env`/`.env.example` to the first listed fallback and record it here.
 - Endpoint: `POST {BLOG0_OPENROUTER_BASE_URL}/chat/completions` (default
   `https://openrouter.ai/api/v1`). Headers: `Authorization: Bearer <BLOG0_OPENROUTER_API_KEY>`,
   `Content-Type: application/json`, `HTTP-Referer: <BLOG0_PUBLIC_BASE_URL>`, `X-Title: blog0`.
@@ -214,9 +218,9 @@ The orchestration around it (generation row, draft deck write) lives in
 - Max 2 model attempts per click (+ adapter transport retries, which cost nothing when they fail
   before generation).
 - Double-click / concurrent protection (`GENERATION_IN_PROGRESS`).
-- Every generation records model, prompt version, tokens, $ cost, who, when; Phase 1 shows the
-  per-generation cost in the TLDR panel; Phase 4 adds the per-generation table and site-wide
-  month-to-date total.
+- Every generation records model, prompt version, tokens, $ cost, who, when; the TLDR panel shows
+  the per-generation cost; the per-generation table and site-wide month-to-date total are
+  `ai-cost-ledger` (Phase 4, on hold).
 
 ## 6. Failure modes and the hand-pick fallback
 
@@ -244,8 +248,8 @@ editors". > **Assumed:** the user has not chosen a heuristic fallback, so none i
   invalid JSON → repair → success, invalid twice → `LLM_INVALID_OUTPUT`, adapter error mapping,
   fenced JSON stripping, usage summed across attempts.
 - **Integration (real OpenRouter key from `.env`, `tests/integration/jev-openrouter.test.ts`;
-  key absent/placeholder → `PENDING KEY` skip / CI or real key → failure, per
-  `spec/architecture.md` → `## Conventions` → Real-key tests; same rule for `eval:jev`):**
+  key check `openRouterKeyStatus()`; not `'real'` → `PENDING KEY` skip, CI or real key → failure,
+  per `spec/architecture.md` → `## Conventions` → Real-key tests; same rule for `eval:jev`):**
   for each of the 5 seed posts and `tests/fixtures/articles/hard-cases.md`, run `runJev` on the
   real pipeline output and assert: `ok`, picks count within bounds, indices unique + ascending,
   every pick's `text` is byte-identical to `sentences[index].text` and occurs verbatim in the
@@ -263,7 +267,8 @@ editors". > **Assumed:** the user has not chosen a heuristic fallback, so none i
 ```
 src/server/llm/types.ts        LlmClient, ChatMessage, LlmJsonRequest, LlmJsonResponse, LlmError(code, httpStatus)
 src/server/llm/openrouter.ts   OpenRouterClient implements LlmClient (fetch, timeout, retries, fence strip, llm.call logs)
-src/server/llm/index.ts        getLlmClient() singleton + resetLlmClientForTests()
+src/server/llm/index.ts        getLlmClient() singleton + resetLlmClientForTests() (LLM_NOT_CONFIGURED without a key)
+src/server/llm/key.ts          openRouterKeyStatus(), PENDING_KEY_REASON (real-key test gate)
 src/server/jev/state.ts        types above
 src/server/jev/bounds.ts       computeBounds
 src/server/jev/build-input.ts  guardInput, buildMessages, repairMessages
@@ -271,6 +276,7 @@ src/server/jev/prompt.ts       JEV_PROMPT_VERSION, loadPrompt()
 src/server/jev/prompts/select-v1.md
 src/server/jev/validate.ts     validatePicks
 src/server/jev/run.ts          runJev (assembly)
+src/server/jev/articles.ts     the 6-article set (5 seed posts + hard-cases.md) shared by the integration test and eval:jev
 ```
 
 ```ts

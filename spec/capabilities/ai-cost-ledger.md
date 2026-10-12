@@ -1,7 +1,7 @@
 # Capability: AI cost ledger
 
-Recording starts in Phase 1 (every generation row + per-generation line in the TLDR tab); the
-dashboard view arrives in Phase 4.
+Recording is live (every generation row + the per-generation line in the TLDR tab); the
+dashboard view is Phase 4 (on hold).
 
 ## What It Does
 Shows what every AI call cost — per generation and as a site-wide month-to-date total — so the
