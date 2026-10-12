@@ -7,12 +7,12 @@ import type { ReactNode } from 'react';
 export interface StubNoticeProps {
   /** What arrives, and when. */
   children: ReactNode;
-  /** Leading label; defaults to "Coming in a later phase". */
+  /** Leading label; defaults to "Not built yet". */
   label?: string;
   className?: string;
 }
 
-export function StubNotice({ children, label = 'Coming in a later phase', className }: StubNoticeProps) {
+export function StubNotice({ children, label = 'Not built yet', className }: StubNoticeProps) {
   return (
     <div className={className ? 'stub ' + className : 'stub'} role="note">
       <span className="stub__label">{label}</span> — {children}

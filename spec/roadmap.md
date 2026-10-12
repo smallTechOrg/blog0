@@ -91,8 +91,8 @@ rotator, sentence builder, in-deck poll).
 
 ## Phases of Development
 
-Scaffold and Phases 1–3 (with the Phase 3 fix) are **done**; Phase 4 is **on hold**; Phase 5 is
-**specified** (capability files written); Phase 6 is planned.
+Scaffold and Phases 1–3 (with the Phase 3 fix) and Phase 5 are **done**; Phase 4 is **on hold**;
+Phase 6 is planned.
 
 ### Planning rules (Phase 4 onward)
 
@@ -360,6 +360,10 @@ second admin; sign in as them; their saves show their name on the desk.
 ---
 
 ### Phase 5 — Production hardening (deploy-ready, target-agnostic)
+
+**Done** (commits 51aad2f, e72ed9d, 7923781 + a follow-up drift-fix commit). Container E2E passed
+locally (`pnpm test:container` 51/51 with the real key); the CI workflow ran on GitHub (`check`,
+`e2e`, `image` jobs green; `integration` fixed in the follow-up commit).
 
 **Goal:** one non-root container image that runs on any platform: the web server plus a separate
 release step (migrate + verify + seed site/admin), liveness vs readiness probes, graceful

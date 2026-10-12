@@ -47,8 +47,8 @@ makes the server log one aggregated error and exit 1 before serving.
 | `PORT` / `HOSTNAME` / `NODE_ENV` | baked in: `3410` / `0.0.0.0` / `production` | — | no | map a host/ingress port to 3410 instead of changing `PORT` |
 
 Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_DIR`,
-`BLOG0_STANDALONE`, `BLOG0_NEW_ADMIN_PASSWORD`, `BLOG0_E2E_*`, `BLOG0_REQUIRE_REAL_KEY` (local
-scripts and tests only).
+`BLOG0_STANDALONE`, `BLOG0_NEW_ADMIN_PASSWORD`, `BLOG0_E2E_*`, `BLOG0_REQUIRE_REAL_KEY`,
+`BLOG0_CONTAINER_BUILD` (local scripts and tests only).
 
 ## First deploy
 

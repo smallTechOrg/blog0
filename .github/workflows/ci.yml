@@ -153,7 +153,26 @@ jobs:
           uid="$(docker run --rm blog0:ci id -u)"
           echo "uid=$uid"
           test "$uid" = "1000"
-      - name: Probes and graceful shutdown (unreachable DB)
+      - name: Image size under 500 MiB
+        run: |
+          size="$(docker image inspect -f '{{.Size}}' blog0:ci)"
+          echo "image size: ${size} bytes"
+          test "$size" -lt 524288000
+      - name: Image contents (no .env; prompts, migrations journal, release.mjs present)
+        run: |
+          docker run --rm --entrypoint sh blog0:ci -c \
+            'test ! -e .env && test -f src/server/jev/prompts/select-v1.md && test -f src/server/db/migrations/meta/_journal.json && test -f release.mjs'
+      - name: No env → refuses to boot (exit 1 within 15 s)
+        run: |
+          set +e
+          out="$(timeout 15 docker run --rm blog0:ci 2>&1)"
+          code=$?
+          set -e
+          echo "$out" | tail -n 20
+          echo "exit code: $code"
+          test "$code" = "1"
+          grep -q 'BLOG0_DATABASE_URL is required in production' <<<"$out"
+      - name: Probes, docker health and graceful shutdown (unreachable DB)
         run: |
           set -euo pipefail
           docker run -d --name blog0-ci -p 3410:3410 \
@@ -172,12 +191,22 @@ jobs:
           ready_status="$(printf '%s' "$ready_body" | tail -n 1)"
           echo "ready: $ready_body"
           test "$ready_status" = "503"
-          printf '%s' "$ready_body" | grep -q '"NOT_READY"'
+          printf '%s' "$ready_body" | head -n 1 | jq -e '.error.code == "NOT_READY" and .error.details.reason == "DB_UNAVAILABLE"'
+          # Docker HEALTHCHECK probes liveness only (no DB) → healthy even with the DB down.
+          health=""
+          for _ in $(seq 1 60); do
+            health="$(docker inspect -f '{{.State.Health.Status}}' blog0-ci)"
+            [ "$health" = "healthy" ] && break
+            sleep 1
+          done
+          echo "docker health: $health"
+          test "$health" = "healthy"
           docker stop -t 15 blog0-ci
           code="$(docker inspect -f '{{.State.ExitCode}}' blog0-ci)"
           docker logs blog0-ci > container.log 2>&1
           echo "exit code: $code"
           test "$code" = "143"
+          grep 'app.shutdown' container.log | grep -q '"phase":"draining"'
           grep 'app.shutdown' container.log | grep -q '"phase":"closed"'
       - name: Container logs on failure
         if: failure()

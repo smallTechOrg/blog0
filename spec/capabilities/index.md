@@ -22,5 +22,6 @@
 | Abuse protection | `abuse-protection.md` | 5 | Login/newsletter caps counted atomically in Postgres (survive restarts, shared across instances); nonce CSP + security headers |
 | Alignment worker, alignment jobs, sentence-level Listen | written at start of Phase 6 | 6 | Local faster-whisper auto-sync (see `spec/roadmap.md`) |
 
-Phases 1–3 are done; Phase 5 is specified (capability files above); Phase 4 is on hold (user decision, 2026-10-13) and revision history is
+Phases 1–3 and Phase 5 are done (Phase 5: commits 51aad2f, e72ed9d, 7923781 + a follow-up drift-fix
+commit); Phase 4 is on hold (user decision, 2026-10-13) and revision history is
 deferred outright (`spec/roadmap.md` → Phase 4).

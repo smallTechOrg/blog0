@@ -73,6 +73,8 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     const res = await page.goto('/');
 
     expect(res?.status()).toBe(200);
+    // Designer mode is `next dev`: the nonce CSP is production-only (src/proxy.ts) — none here.
+    expect(res!.headers()['content-security-policy']).toBeUndefined();
     await expect(page.getByRole('heading', { name: 'Featured Editorial', exact: true })).toBeVisible();
     for (const title of SEED_TITLES) {
       await expect(page.getByRole('link', { name: title }).first()).toBeAttached();

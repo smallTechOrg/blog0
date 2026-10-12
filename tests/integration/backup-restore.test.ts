@@ -40,12 +40,20 @@ function withDb(suffix: string): string {
 const SRC_URL = withDb('_restore_src');
 const TARGET_URL = withDb('_restore');
 const TAMPER_URL = withDb('_restore_tamper');
+// The CLI password-leak tests need a URL whose password is (a) accepted by the server under ANY
+// auth method (trust locally, scram/md5 in CI) and (b) distinctive enough that "the output never
+// contains it" means something (CI's real password is `postgres`, which is also the user name).
+// So they connect as a throwaway login role with a distinctive password, created and dropped here.
 const PASSWORD = 'Zx9-backup-SECRET-pw';
+const PW_ROLE = `blog0_backup_pw_${process.pid}`;
 const withPassword = (url: string): string => {
   const u = new URL(url);
+  u.username = PW_ROLE;
   u.password = PASSWORD;
   return u.toString();
 };
+/** A PATH without pg_dump: an empty dir (CI's /usr/bin has the Debian pg_wrapper pg_dump). */
+const EMPTY_PATH = path.join(WORK, 'empty-path');
 const dbNameOf = (url: string) => decodeURIComponent(new URL(url).pathname.slice(1));
 
 async function admin<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
@@ -112,6 +120,10 @@ beforeAll(async () => {
 
   rmSync(WORK, { recursive: true, force: true });
   for (const url of [SRC_URL, TARGET_URL, TAMPER_URL]) await dropDatabase(url);
+  await admin(async (sql) => {
+    await sql.unsafe(`drop role if exists "${PW_ROLE}"`);
+    await sql.unsafe(`create role "${PW_ROLE}" login superuser password '${PASSWORD}'`);
+  });
   await ensurePostgresDatabase(SRC_URL);
   await runMigrations(SRC_URL);
   src = await createDbHandle({ engine: 'postgres', url: SRC_URL }, { max: 1 });
@@ -156,6 +168,7 @@ afterAll(async () => {
   await src?.close();
   rmSync(WORK, { recursive: true, force: true });
   for (const url of [SRC_URL, TARGET_URL, TAMPER_URL]) await dropDatabase(url);
+  await admin((sql) => sql.unsafe(`drop role if exists "${PW_ROLE}"`));
 });
 
 describe('backup → restore round trip', () => {
@@ -386,9 +399,13 @@ describe('CLI: pnpm backup / pnpm restore (exit codes, output, no password leaks
     expect(bogus.status).toBe(2);
     expect(bogus.stderr).toMatch(/usage: pnpm restore/);
 
+    // pg_dump is looked up BEFORE any DB connection: a URL whose server is unreachable proves the
+    // order (a connect-first CLI would report the connection failure instead).
+    mkdirSync(EMPTY_PATH, { recursive: true });
+    const unreachable = withPassword('postgres://x@127.0.0.1:1/nothing');
     const noTools = spawnSync(process.execPath, [TSX, 'scripts/backup.ts', '--', '--out', path.join(WORK, 'cli-x')], {
       cwd: ROOT,
-      env: { NODE_ENV: 'production', HOME: process.env.HOME ?? '', PATH: '/usr/bin:/bin', BLOG0_DATABASE_URL: withPassword(SRC_URL) },
+      env: { NODE_ENV: 'production', HOME: process.env.HOME ?? '', PATH: EMPTY_PATH, BLOG0_DATABASE_URL: unreachable },
       encoding: 'utf8',
       timeout: 90_000,
     });

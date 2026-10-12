@@ -585,7 +585,7 @@ payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`
   - `audioRefOf(payload)` reads `{ assetId, key }` from a stored listen payload.
   Publishing a Listen that supersedes an unreferenced recording uses the same two steps.
 
-## 10. Configuration (env → `src/server/config.ts`, documented 1:1 in `.env.example`)
+## 10. Configuration (env → `src/server/config.ts`; every row documented 1:1 in `.env.example` except the build-only `BLOG0_STANDALONE` and `CI`)
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
@@ -612,6 +612,7 @@ payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`
 | `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server (no `webServer` started) |
 | `BLOG0_E2E_LOG_FILE` | no | — | test harness only: host path of the external server's JSON log (the container writes it through a bind mount); with `BLOG0_E2E_BASE_URL` set, the log-asserting E2E tests run only when this is set (else they skip with a reason) |
 | `BLOG0_REQUIRE_REAL_KEY` | no | — | test harness/scripts only: `1` → a missing/placeholder OpenRouter key FAILS the real-key tests; `0` → it SKIPS as `PENDING KEY`; unset → `CI === 'true'` decides (Conventions → Real-key tests). CI sets it from secret presence |
+| `BLOG0_CONTAINER_BUILD` | no | `auto` | read only by `scripts/container-e2e.sh` (§12.5 step 2): `auto` = rebuild `blog0:local` only when it is missing or a build-context file is newer than the image; `always` = always `docker build`; `never` = reuse the existing image (fail when it does not exist) |
 | `BLOG0_DIST_DIR` | no | `.next` | not read by `config.ts`: `next.config.ts` `distDir`. A separate build dir (e.g. `.next-gate`) so a gate/CI `pnpm build` never overwrites the `.next` a running `pnpm start` serves; build and start with the same value (`scripts/serve.mjs` and the E2E `webServer` inherit it); `.next-*/` is gitignored |
 | `CI` | no | — | not a `BLOG0_*` setting: enables Playwright `forbidOnly`; when `BLOG0_REQUIRE_REAL_KEY` is unset, `CI=true` turns a missing/placeholder OpenRouter key from a `PENDING KEY` skip into a failure (Conventions → Real-key tests) |
 | (derived) `dbEngine` | — | — | not an env var: `getConfig().dbEngine` is `'postgres' \| 'pglite'`, from the URL scheme; reported by `app.boot` and `/api/health` |
@@ -756,12 +757,13 @@ Three stages, `ARG NODE_VERSION=22.23.1` (must equal `package.json` `devEngines.
    not corepack — no signature-key drift); `WORKDIR /app`; `COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./`;
    `RUN pnpm fetch --frozen-lockfile` (cache layer keyed only by the lockfile).
 2. **build** — `FROM deps`; `COPY . .`; `RUN pnpm install --offline --frozen-lockfile`;
-   `ENV NEXT_TELEMETRY_DISABLED=1 BLOG0_STANDALONE=1`; `RUN pnpm build && pnpm build:release`.
+   `ENV NEXT_TELEMETRY_DISABLED=1 BLOG0_STANDALONE=1`; `RUN pnpm build && pnpm build:release && mkdir -p public`
+   (so the runtime stage's `COPY public/` is unconditional even when the repo has no `public/`).
    No `BLOG0_*` runtime value exists at build time (the build is env-free — Conventions → Modules).
 3. **runtime** — `FROM node:${NODE_VERSION}-slim`; `WORKDIR /app`;
    `ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3410 BLOG0_PORT=3410 HOSTNAME=0.0.0.0 BLOG0_STORAGE_DIR=/data/storage`;
    copy from build: `.next/standalone/` → `/app/`, `.next/static/` → `/app/.next/static/`,
-   `public/` → `/app/public/` (if present), `src/server/db/migrations/` → same path,
+   `public/` → `/app/public/` (always exists — created in the build stage), `src/server/db/migrations/` → same path,
    `src/server/jev/prompts/` → same path (both are read via `process.cwd()` paths — §11.2 migrator,
    `jev/prompt.ts`), `dist/release.mjs` → `/app/release.mjs`. Files stay root-owned;
    `mkdir -p /data/storage /app/.next/cache && chown node:node /data/storage /app/.next/cache`;
@@ -772,7 +774,7 @@ Three stages, `ARG NODE_VERSION=22.23.1` (must equal `package.json` `devEngines.
 `.dockerignore`: `.git`, `node_modules`, `.next`, `.next-*`, `dist`, `var`, `test-results`,
 `playwright-report`, `blob-report`, `coverage`, `.env`, `.env.*` then `!.env.example`, `spec`,
 `docs`, `tests`, `workers`, `.github`, `playwright.config.ts`, `playwright.design.config.ts`,
-`vitest.config.ts`, `*.tsbuildinfo`, `.DS_Store` (the build's type-check must not see a config
+`vitest.config.ts`, `*.tsbuildinfo`, `.DS_Store`, `Dockerfile`, `.dockerignore` (the build's type-check must not see a config
 that imports the excluded `tests/`).
 
 `next.config.ts` additions: `output: process.env.BLOG0_STANDALONE === '1' ? 'standalone' : undefined`
@@ -794,10 +796,22 @@ content pipeline in through `seed-posts`, which would bloat the bundle with Shik
 `scripts/build-release.mjs` (`pnpm build:release`) bundles `scripts/release.ts` with esbuild into
 `dist/release.mjs`: `platform: 'node'`, `format: 'esm'`, `target: 'node22'`, `bundle: true`,
 tsconfig paths honoured (`@/*`), `alias: { 'server-only': './scripts/lib/empty-module.mjs' }`,
-`external: ['@node-rs/argon2', 'postgres', '@electric-sql/pglite']` (resolved at runtime from the
-standalone `node_modules` next to `release.mjs`), banner
-`import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);`.
+`external: ['@node-rs/argon2', 'next']`, `legalComments: 'none'`. Why: Next's standalone output
+under pnpm exposes only a few packages at `/app/node_modules` — `@node-rs/argon2` is one of them
+(native binary, stays external), but `postgres` and `@electric-sql/pglite` live only under
+`node_modules/.pnpm`, reached by the server through hashed `.next/node_modules` links, so a bare
+import from `/app/release.mjs` cannot resolve them. Hence `postgres` (pure JS) is **bundled**;
+`@electric-sql/pglite` (and any subpath) is replaced by a plugin-supplied stub whose `PGlite`
+constructor / `PGlite.create()` throw (the release step refuses `pglite://` before opening a DB,
+so the Postgres path never needs PGlite); `next` stays external (only reached through
+type-level/tree-shaken imports of the request guard). A second plugin resolves any
+`…/allow-server-only` import (the tsx-only `server-only` shim, which resolves `server-only` from
+disk) to `scripts/lib/empty-module.mjs`. Banner (bundled CommonJS such as `@next/env` needs
+`require`/`__dirname`; the alias avoids clashing with `src/server/db/pglite.ts`'s own
+`createRequire` import, since esbuild does not rename banner bindings), joined with spaces:
+`import { createRequire as __blog0CreateRequire } from 'node:module'; const require = __blog0CreateRequire(import.meta.url); const __filename = import.meta.filename; const __dirname = import.meta.dirname;`.
 The container runs it as `node release.mjs` with the same env as the web server.
+Product-level note: `spec/capabilities/container-image.md` (Assumed S5.1).
 
 ### 12.2 Probes and graceful shutdown
 
@@ -886,7 +900,8 @@ No deploy job, no registry push.
 3412. Steps, each echoing `container-e2e: <step>`; any failure prints `container-e2e: FAIL <step>`
 and exits 1; a `trap` always runs `docker rm -f blog0-e2e`:
 1. `docker info` fails → print `PENDING DOCKER: docker daemon not reachable (start it: colima start)` and **exit 3** (a gate reports this as pending, never as passed).
-2. `docker build -t blog0:local .`
+2. `docker build -t blog0:local .` — subject to `BLOG0_CONTAINER_BUILD` (§10; default `auto`
+   reuses an image no older than every build-context file).
 3. `node scripts/lib/container-env.mjs` writes `var/container-e2e.env` (mode 0600) — the
    `BLOG0_*` values from `.env` + shell (via `@next/env`), minus `BLOG0_DATABASE_URL`,
    `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_PUBLIC_BASE_URL`, `BLOG0_STORAGE_DIR`,
@@ -1075,9 +1090,9 @@ blog0/
 │   ├── setup/{global-setup,integration-env}.ts   # vitest integration: create/reset + migrate blog0_test; env + singleton resets, BLOG0_STORAGE_DIR=var/storage-test, BLOG0_RATE_LIMIT_STORE=memory
 │   ├── helpers/{db,session,env,logs,storage,api,seed-articles}.ts
 │   ├── unit/<domain>/**         # admin, auth, content, db, deck, formats, helpers, jev, listen, llm, media, reader, site, … — no catch-all folder
-│   ├── integration/*.test.ts
-│   ├── integration/  # Phase 5 adds rate-limit-db, release, health-probes, backup-restore
-│   ├── unit/ops/  unit/http/  # Phase 5: lifecycle, backup-manifest, release-args; csp, proxy-headers
+│   ├── integration/*.test.ts    # incl. rate-limit-db, release, health-probes, backup-restore (§12)
+│   ├── unit/ops/{lifecycle,backup-manifest}.test.ts  unit/http/csp.test.ts  unit/proxy.test.ts (nonce/CSP)
+│   │   unit/auth/rate-limit-store.test.ts  unit/llm/key.test.ts
 │   ├── e2e/{tldr,reader,listen,smoke,designer-mode}.spec.ts  e2e/{global-setup,designer.global-setup}.ts
 │   │   e2e/helpers/{admin,article-text,db,jev-key,logs,share,upload}.ts
 │   └── fixtures/articles/{hard-cases,e2e-article}.md  fixtures/audio/{sample.mp3,sample.m4a,sample.json,not-audio.wav}

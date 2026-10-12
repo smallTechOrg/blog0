@@ -280,6 +280,14 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await page.keyboard.press('ArrowRight');
     await expect(segs.nth(2)).toHaveAttribute('aria-selected', 'true');
     await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[1]);
+    // The progress bar is also the navigation: clicking a segment jumps straight to that slide.
+    const last = publishedLines.length;
+    await segs.nth(last).click();
+    await expect(segs.nth(last)).toHaveAttribute('aria-selected', 'true');
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[last - 1]);
+    await segs.nth(0).click();
+    await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"] .tdeck__big')).toHaveText(TITLE);
 
     await page.reload();
     await expect(page).toHaveURL(new RegExp(`/p/${slug}/tldr$`));

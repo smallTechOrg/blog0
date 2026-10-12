@@ -118,9 +118,6 @@ schemas and the editor forms): title 1–200, dek ≤ 400, topic ≤ 40, slug �
 Both probe routes log their `api.request` line at `debug` when 2xx (probe noise), at the normal
 level otherwise (`spec/architecture.md` §7); DTOs live in the health section of `src/lib/api/dto.ts`.
 
-> **Assumed:** `dbEngine` is part of the contract (the route always sets it); the optional `?` on
-> `HealthDto.dbEngine` in `src/lib/api/dto.ts` is a leftover to tighten, not a behaviour.
-
 ## Endpoints — auth, articles, TLDR
 
 | Method & path | Auth | Request | Response `data` / notes |

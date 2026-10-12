@@ -248,6 +248,8 @@ describe('Image toolbar', () => {
 describe('editor stubs', () => {
   it('labels the History tab as a deferred stub (no phase number)', () => {
     const history = renderToStaticMarkup(<HistoryTab revisionCount={3} />);
+    expect(history).toContain('<span class="stub__label">Not built yet</span>');
+    expect(history).toContain('role="note"');
     expect(history).toContain('3 revisions');
     expect(history).toContain('arrives in a later version.');
     expect(history).not.toContain('Phase');

@@ -183,6 +183,7 @@ code="$(docker inspect -f '{{.State.ExitCode}}' "$NAME")"
 say "stopped in ${elapsed} ms, exit code ${code}"
 ((elapsed < 12000)) || fail "docker stop took ${elapsed} ms (≥ 12 s)"
 [[ "$code" == "143" ]] || fail "exit code ${code}, expected 143"
+docker logs "$NAME" 2>&1 | grep '"app.shutdown"' | grep -q '"phase":"draining"' || fail "no app.shutdown draining line in the container logs"
 docker logs "$NAME" 2>&1 | grep '"app.shutdown"' | grep -q '"outcome":"drained"' || fail "no app.shutdown drained line in the container logs"
 
 # 11. Done

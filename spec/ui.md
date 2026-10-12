@@ -226,8 +226,8 @@ to the editor.
   published). `beforeunload` guard when dirty. A 409 `CONFLICT` shows "Someone saved a newer
   version (rev N by X). Reload to continue." with **Reload**.
 - **Tabs**: Write · TLDR · Listen · History, with a `tabchip` showing the TLDR and Listen statuses.
-  History = `StubNotice` "Every save is already kept (N revisions). Browsing and restoring arrives
-  in a later version." (revision history deferred).
+  History = `StubNotice` labelled "Not built yet": "Every save is already kept (N revisions).
+  Browsing and restoring arrives in a later version." (revision history deferred, no phase).
 - **Write tab**: fields Title, Dek, Topic; **Settings** disclosure: Slug (locked note after
   publish), Byline, Featured (toggle + rank), "Show ‘Draft — in progress’ badge". Split view ≥
   1100 px: `MarkdownEditor` (monospace textarea, Tab inserts 2 spaces, word count) left; **Live
@@ -337,7 +337,9 @@ browsing/restore is deferred (`spec/capabilities/revision-history.md`).
   visible — the design's "Notes"), `sup a` accent ink, back-references.
 - `.prose del`, task-list checkbox alignment; `.mdfig`/`.mdimg` already exist.
 - `.stub` (`StubNotice`): dashed `--border-strong` 1 px, `--surface` bg, 14 px 18 px padding,
-  `--font-head` 14.5px `--muted`, leading label "Coming in a later phase" in `--accent-ink` 600.
+  `--font-head` 14.5px `--muted`, leading label "Not built yet" in `--accent-ink` 600 (its only
+  user, the History tab, belongs to deferred revision history with no phase, so "later phase"
+  would promise a schedule that does not exist).
 - `.mode:disabled` (opacity .45, cursor not-allowed) — the design references disabled modes.
 
 `src/styles/admin.css` (tokens only): desk, editor, TLDR panel and sign-in styles;

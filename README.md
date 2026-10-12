@@ -101,8 +101,8 @@ PostgreSQL. In designer mode a Generate holds the single PGlite connection for i
 transaction, so concurrent requests queue behind it (the double-click guard still refuses a second
 run via the `running` generation row).
 
-Status: **Phases 0–3 done** (incl. estimated Listen timing); **Phase 4 on hold**; next:
-**Phase 5 production hardening** (see [`spec/roadmap.md`](spec/roadmap.md)). An admin signs in at
+Status: **Scaffold + Phases 1–3 and 5 done; Phase 4 on hold; next: Phase 6** (see
+[`spec/roadmap.md`](spec/roadmap.md)). An admin signs in at
 `/admin/login`, writes a Markdown article with images, generates a TLDR deck with Jev (one real
 OpenRouter call, only on an explicit click), edits it, uploads a Listen recording, and publishes;
 readers open the article in Read, TLDR or Listen mode at `/p/<slug>`. Listen and images are real;
@@ -177,7 +177,7 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 1 applied (latest 0000_init), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK
    ```
 
 6. **Prove the OpenRouter key and the Jev model** with one real structured-output call (prints
@@ -288,7 +288,8 @@ pnpm eval:jev
 Runs Jev for real (one batched OpenRouter call per article, plus retries on invalid output) on the 5 seed posts plus
 `tests/fixtures/articles/hard-cases.md` and prints a table (N, bounds, picks, coverage,
 attempts, tokens, cost, latency). Non-gating; exit 1 if any article fails. With no real key it
-prints `PENDING KEY …` and exits 0 without scoring — unless `CI=true`, where it exits 1.
+prints `PENDING KEY …` and exits 0 without scoring — unless a real key is required
+(`BLOG0_REQUIRE_REAL_KEY=1`, or that is unset and `CI=true`), where it exits 1.
 
 ## Tests
 
@@ -298,13 +299,15 @@ migrates automatically; they refuse to run if it equals `BLOG0_DATABASE_URL`.
 
 **Real-key tests and the PENDING KEY rule.** Tests that call the LLM
 (`tests/integration/jev-openrouter.test.ts`, the Generate step of
-`tests/integration/tldr-flow.test.ts`, the Generate step of the E2E golden path, and
-`pnpm eval:jev`) use the real OpenRouter key from `.env` — never a stub. When
+`tests/integration/tldr-flow.test.ts`, the real-key seed suite of `tests/integration/seed-tldr.test.ts`,
+the Generate-on-PGlite test of `tests/integration/designer-mode.test.ts`, the Generate step of the E2E
+golden path, and `pnpm eval:jev`) use the real OpenRouter key from `.env` — never a stub. When
 `BLOG0_OPENROUTER_API_KEY` is empty or a placeholder (`pending-placeholder`, `replace-with-…`):
 
-- locally they **skip** with a visible `PENDING KEY: BLOG0_OPENROUTER_API_KEY not set` reason — a
-  run with such skips is "pending key", not a pass;
-- with `CI=true` they **fail** (e.g. `CI=true pnpm test:integration`).
+- they **fail** when `BLOG0_REQUIRE_REAL_KEY=1`, or when it is unset and `CI=true` (e.g.
+  `CI=true pnpm test:integration`) — a required run must end with 0 skips;
+- otherwise (locally) they **skip** with a visible `PENDING KEY: BLOG0_OPENROUTER_API_KEY not set`
+  reason — a run with such skips is "pending key", not a pass.
 
 With a real key present, a rejected key (401/403) or any provider error is always a failure.
 
@@ -318,6 +321,8 @@ With a real key present, a rejected key (401/403) or any provider error is alway
 | `pnpm test:e2e` | Playwright (Chromium) against `pnpm start` on port **3411** using `blog0_test`; run `pnpm build` first |
 | `pnpm test:e2e:design` | Playwright against designer mode (`pnpm dev:design`) on port **3413** with its own PGlite dir `var/pglite-e2e` |
 | `pnpm eval:jev` | Jev evaluation table (real key; non-gating) |
+| `pnpm release` | the release step run locally via `tsx` (migrate + verify 0 pending + ensure the site row and, when `BLOG0_ADMIN_EMAIL`/`BLOG0_ADMIN_PASSWORD` are set, the first admin) against `BLOG0_DATABASE_URL` (postgres:// only); the image runs the same step as `node release.mjs` |
+| `pnpm build:release` | bundles `scripts/release.ts` into `dist/release.mjs` (esbuild) — the image's release step; the Dockerfile runs it after `pnpm build` |
 | `pnpm test:container` | builds the container image, runs the release step and the full E2E suite against the container on port **3412** (needs Docker) — see [Deploy](#deploy) |
 
 `pnpm test:e2e` runs 4 Playwright projects in a fixed order — `tldr` → `reader` → `listen` →
@@ -379,7 +384,7 @@ Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g
 
 ```bash
 BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
-# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 1 applied (latest 0000_init), 0 pending: OK
+# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK
 ```
 
 Run them only while no dev server has that directory open. `drizzle-kit` commands
@@ -407,7 +412,7 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `BLOG0_LOG_FILE` | no | — | append JSON lines here too (E2E sets it) |
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | seed + E2E | name `Sai Krishna V` | first admin for `pnpm db:seed`; password ≥ 12; local dev may export them from gitignored `var/dev-admin.env` |
-| `CI` | no | — | `true` turns PENDING KEY skips into failures |
+| `CI` | no | — | `true` turns PENDING KEY skips into failures when `BLOG0_REQUIRE_REAL_KEY` is unset |
 | `BLOG0_NEW_ADMIN_PASSWORD` | no | — | non-interactive `pnpm admin:create` |
 | `BLOG0_STORAGE_DIR` | no | `./var/storage` | audio/image storage + upload limits |
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | audio/image storage + upload limits |

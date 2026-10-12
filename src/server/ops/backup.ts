@@ -99,6 +99,8 @@ export async function createBackup(opts: CreateBackupOptions): Promise<BackupRes
   if (target.engine !== 'postgres') throw new BackupUsageError(PGLITE_NOT_SUPPORTED);
   const url = target.url;
   const conn = pgEnv(url, opts.toolEnv ?? process.env);
+  // Tool lookup before any DB connection: a missing pg_dump is reported as such, never masked by a
+  // connection/auth error (the CLI exit-1 contract).
   const pgDump = await findPgTool('pg_dump', opts.toolEnv);
 
   const storageRoot = path.resolve(opts.storageDir);

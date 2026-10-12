@@ -57,7 +57,7 @@ scripts, framing, MIME sniffing and needless powerful features.
   Content-Security-Policy whose scripts are allowed only by a fresh per-request nonce
   (`'strict-dynamic'`), no framing (`frame-ancestors 'none'`), `object-src 'none'`, same-origin
   `base-uri`/`form-action`/`connect-src`; images from self, `data:`, `blob:` and any `https:`
-  host (Markdown may embed remote images); audio only from self. HSTS (1 year, subdomains) and
+  host (Markdown may embed remote images); audio from self (and `blob:` for local previews). HSTS (1 year, subdomains) and
   `upgrade-insecure-requests` are added only when `BLOG0_PUBLIC_BASE_URL` is https. Every response
   (pages, API, `/media`, static assets) carries `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`,

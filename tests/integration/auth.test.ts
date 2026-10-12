@@ -154,6 +154,27 @@ describe('admin auth', () => {
       expect((raw as unknown as Array<{ n: number }>)[0].n).toBe(0);
     });
 
+    it('with an https BLOG0_PUBLIC_BASE_URL the session cookie is Secure', async () => {
+      const previous = process.env.BLOG0_PUBLIC_BASE_URL;
+      process.env.BLOG0_PUBLIC_BASE_URL = 'https://blog.example';
+      resetConfigForTests();
+      try {
+        await createUserWithPassword(EMAIL, PASSWORD);
+        const response = await loginRoute(
+          loginRequest({ email: EMAIL, password: PASSWORD }, { origin: 'https://blog.example', host: 'blog.example' }),
+          ctx,
+        );
+        expect(response.status).toBe(200);
+        const setCookie = response.headers.get('set-cookie') ?? '';
+        expect(setCookie).toMatch(/^blog0_session=[A-Za-z0-9_-]{43}; /);
+        expect(setCookie.split('; ')).toEqual(expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Secure']));
+      } finally {
+        if (previous === undefined) delete process.env.BLOG0_PUBLIC_BASE_URL;
+        else process.env.BLOG0_PUBLIC_BASE_URL = previous;
+        resetConfigForTests();
+      }
+    });
+
     it('signs in with a differently-cased, padded email and the session works on the next request', async () => {
       await createUserWithPassword(EMAIL, PASSWORD);
 
