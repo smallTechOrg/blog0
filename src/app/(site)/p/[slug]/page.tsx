@@ -2,7 +2,8 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { ArticleView } from '@/components/reader/ArticleView';
-import { articlePageMetadata, loadArticlePage } from '@/server/public/page-data';
+import { articleRouteMetadata } from '@/server/public/metadata';
+import { loadArticlePage } from '@/server/public/page-data';
 
 // Public article, Read view (spec/ui.md §3 "Article"): server-rendered from the published
 // revision; the bottom capsule opens the TLDR deck (address → /p/<slug>/tldr) or the Listen stub.
@@ -17,7 +18,9 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  return articlePageMetadata(slug, 'read');
+  // "<Title> — <wordmark>", description = dek, OG article tags (published/modified times, site
+  // name from the site record), canonical = the absolute Read address (BLOG0_PUBLIC_BASE_URL).
+  return articleRouteMetadata(await loadArticlePage(slug), 'read');
 }
 
 export default async function ArticlePage({ params }: Props) {

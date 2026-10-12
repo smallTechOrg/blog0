@@ -411,7 +411,7 @@ describe('home view model', () => {
 });
 
 describe('metadata', () => {
-  it('builds the "<Title> — log0" title, dek description and Open Graph tags', async () => {
+  it('builds the "<Title> — blog0" title, dek description and Open Graph tags', async () => {
     const pre = await renderArticle({ title: 'OG test', dek: 'The dek.', bodyMd: BODY_B });
     await seedArticle({ slug: 'og-test', title: 'OG test', dek: 'The dek.', bodyMd: BODY_B, firstPublishedAt: day(8), deck: deckFrom(pre, [0]) });
     await seedArticle({ slug: 'og-no-deck', title: 'No deck', dek: 'The dek.', bodyMd: BODY_C, firstPublishedAt: day(9) });
@@ -419,25 +419,25 @@ describe('metadata', () => {
     const noDeck = await getPublishedArticle('og-no-deck');
     if (!vm) throw new Error('expected article');
 
-    const meta = articleMetadata(vm, { wordmark: 'log0', mode: 'read', publishedAt: day(8) });
-    const tldrMeta = articleMetadata(vm, { wordmark: 'log0', mode: 'tldr', publishedAt: day(8) });
+    const meta = articleMetadata(vm, { wordmark: 'blog0', mode: 'read', publishedAt: day(8) });
+    const tldrMeta = articleMetadata(vm, { wordmark: 'blog0', mode: 'tldr', publishedAt: day(8) });
 
-    expect(meta.title).toBe('OG test — log0');
+    expect(meta.title).toBe('OG test — blog0');
     expect(meta.description).toBe('The dek.');
     expect(meta.alternates?.canonical).toBe('http://localhost:3410/p/og-test');
     const og = meta.openGraph as Record<string, unknown>;
     expect(og.title).toBe('OG test');
     expect(og.description).toBe('The dek.');
     expect(og.url).toBe('http://localhost:3410/p/og-test');
-    expect(og.siteName).toBe('log0');
+    expect(og.siteName).toBe('blog0');
     expect(og.type).toBe('article');
     expect(og.publishedTime).toBe(day(8).toISOString());
     expect((tldrMeta.openGraph as Record<string, unknown>).url).toBe('http://localhost:3410/p/og-test/tldr');
     expect(tldrMeta.alternates?.canonical).toBe('http://localhost:3410/p/og-test');
     // /p/<slug>/tldr without a published deck falls back to Read, so its preview points at Read.
     if (!noDeck) throw new Error('expected article');
-    const fallback = articleMetadata(noDeck, { wordmark: 'log0', mode: 'tldr', publishedAt: day(9) });
+    const fallback = articleMetadata(noDeck, { wordmark: 'blog0', mode: 'tldr', publishedAt: day(9) });
     expect((fallback.openGraph as Record<string, unknown>).url).toBe('http://localhost:3410/p/og-no-deck');
-    expect(pageTitle('Archive', 'log0')).toBe('Archive — log0');
+    expect(pageTitle('Archive', 'blog0')).toBe('Archive — blog0');
   });
 });

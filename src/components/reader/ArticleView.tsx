@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildDeckSlides } from '@/lib/deck/timing';
+import { articleSubject } from '@/lib/share-links';
 import type { ArticleViewModel } from '@/lib/view-models';
 
 import { ArticleBody } from './ArticleBody';
@@ -11,7 +12,9 @@ import { ArticleFoot } from './ArticleFoot';
 import { ListenStub } from './ListenStub';
 import { ModeBar } from './ModeBar';
 import { ModeCapsule, type ReaderMode } from './ModeCapsule';
+import { ParagraphShare } from './ParagraphShare';
 import { ReadHead } from './ReadHead';
+import { FALLBACK_BRAND, placeAgainst, useShare } from './ShareMenu';
 import { TldrDeck } from './TldrDeck';
 
 /* Article template — one component, every article (design ArticlePage):
@@ -23,9 +26,11 @@ export interface ArticleViewProps {
   article: ArticleViewModel;
   /** `'tldr'` when the page was loaded at /p/<slug>/tldr (ignored without a published deck). */
   initialMode?: 'read' | 'tldr';
+  /** The site record's wordmark — the brand in every outgoing share text (spec/capabilities/paragraph-share.md). */
+  brand?: string;
 }
 
-export function ArticleView({ article: a, initialMode = 'read' }: ArticleViewProps) {
+export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK_BRAND }: ArticleViewProps) {
   const router = useRouter();
   const [mode, setMode] = useState<'read' | 'listen'>('read');
   /* the deck is part of the address: /p/<slug>/tldr opens it, closing returns to /p/<slug> */
@@ -48,6 +53,10 @@ export function ArticleView({ article: a, initialMode = 'read' }: ArticleViewPro
       /* history unavailable (sandboxed frames) — the deck still works */
     }
   }, [deck, base]);
+
+  /* one share surface for the page: paragraphs, selections and Share article */
+  const sharing = useShare(brand);
+  const readRef = useRef<HTMLDivElement>(null);
 
   const slides = useMemo(
     () => (a.deck ? buildDeckSlides(a.title, a.dek, a.deck.slides.map((s) => s.text)) : []),
@@ -103,6 +112,7 @@ export function ArticleView({ article: a, initialMode = 'read' }: ArticleViewPro
             meta={a.publishedLabel + ' · ' + a.times.read + ' min read'}
             disclosure={a.deck.disclosure}
             shareLink={a.deck.shareUrl}
+            brand={brand}
             times={{ read: a.times.read, tldr: a.times.tldr, listen: a.times.listen }}
             onClose={() => setDeck(false)}
             onRead={() => {
@@ -117,11 +127,32 @@ export function ArticleView({ article: a, initialMode = 'read' }: ArticleViewPro
         ) : null}
 
         {!listening ? (
-          <div className="readbody">
+          <div className="readbody" ref={readRef}>
             <ArticleBody blocks={a.blocks} />
-            <ArticleFoot inProgress={a.inProgress} next={a.next} />
+            <ArticleFoot
+              inProgress={a.inProgress}
+              next={a.next}
+              shareOpen={sharing.openKind === 'article'}
+              onShare={(button, keyboard) =>
+                sharing.share(articleSubject(a.title, a.articleUrl, brand), {
+                  place: () => placeAgainst(button),
+                  returnFocus: keyboard ? button : null,
+                })
+              }
+            />
           </div>
         ) : null}
+        {/* Read view only: tap/click/select a paragraph to share it; #p-… deep links */}
+        {!listening ? (
+          <ParagraphShare
+            key={a.slug + '-share'}
+            scopeRef={readRef}
+            articleUrl={a.articleUrl}
+            brand={brand}
+            controller={sharing}
+          />
+        ) : null}
+        {sharing.menu}
       </div>
       {/* The capsule floats at the base of the viewport in every mode. The deck
           carries its own copy, so this one steps aside while the deck is open. */}

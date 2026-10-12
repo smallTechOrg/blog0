@@ -15,8 +15,10 @@ import {
   type DeckLayout,
   type DeckSlide,
 } from '@/lib/deck/timing';
+import { deckSubject } from '@/lib/share-links';
 
 import { ShareLinkButton } from './ShareLinkButton';
+import { FALLBACK_BRAND, placeAgainst, useShare } from './ShareMenu';
 
 /* ============================================================
    TL;DR deck — the summary as a full-viewport horizontal story
@@ -41,6 +43,8 @@ export interface TldrDeckProps {
   disclosure?: string | null;
   /** Absolute deck link the end slide's Share copies (…/p/<slug>/tldr). Defaults to the current URL. */
   shareLink?: string;
+  /** The site record's wordmark, carried by the deck's share text (`<title> — TLDR — <brand>`). */
+  brand?: string;
   /** Minutes shown in the deck's own capsule; `listen: null` shows "—". */
   times: { read: number; tldr: number; listen: number | null };
   /** X, Escape. */
@@ -72,6 +76,18 @@ export function TldrDeck(props: TldrDeckProps) {
   const slidesRef = useRef(slides);
   const reduce = useReducedMotion();
   const reduceRef = useRef(reduce);
+
+  /* the end slide's Share: copy the deck text + link, then the menu inside the deck (or the
+     native sheet on touch/narrow). Escape and outside taps close the menu, never the deck. */
+  const sharing = useShare(props.brand || FALLBACK_BRAND);
+  const closeShare = sharing.close;
+  function shareDeck(button: HTMLButtonElement, keyboard: boolean) {
+    const link = props.shareLink || String(window.location.href).split('#')[0];
+    sharing.share(deckSubject(title, link, props.brand || FALLBACK_BRAND), {
+      place: () => placeAgainst(button),
+      returnFocus: keyboard ? button : null,
+    });
+  }
 
   useLayoutEffect(() => {
     idxRef.current = idx;
@@ -124,6 +140,11 @@ export function TldrDeck(props: TldrDeckProps) {
     },
     [goTo],
   );
+
+  /* a menu belongs to the end slide; moving off it closes the menu */
+  useEffect(() => {
+    closeShare();
+  }, [idx, closeShare]);
 
   /* --- auto-advance ---------------------------------------------------
      Each slide holds for about as long as it takes to read, and the bar
@@ -390,7 +411,11 @@ export function TldrDeck(props: TldrDeckProps) {
                     Read the full article
                   </button>
                 ) : null}
-                <ShareLinkButton link={props.shareLink} title={title} />
+                <ShareLinkButton
+                  onShare={shareDeck}
+                  ariaLabel="Share this summary"
+                  expanded={sharing.openKind === 'deck'}
+                />
               </div>
             ) : null;
 
@@ -497,6 +522,9 @@ export function TldrDeck(props: TldrDeckProps) {
           {'Slide ' + (idx + 1) + ' of ' + n}
         </span>
       </div>
+
+      {/* outside the transformed track/card, so the fixed menu places against the viewport */}
+      {sharing.menu}
     </div>
   );
 }

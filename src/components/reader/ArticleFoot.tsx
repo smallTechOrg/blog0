@@ -1,15 +1,25 @@
 import Link from 'next/link';
 
-/* The article's foot (design `.artfoot`): the in-progress note when flagged, then
-   "Next: <title> →". Phase 2 adds the "Share article" button above it (S2.4). */
+import { ShareLinkButton } from './ShareLinkButton';
+
+/* The article's foot (design `.artfoot`): the Share article button (Phase 2, div. 5), the
+   in-progress note when flagged, then "Next: <title> →". */
 export interface ArticleFootProps {
   inProgress: boolean;
   next: { slug: string; title: string } | null;
+  /** Share article: the host copies the article text + link and opens the menu against the button. */
+  onShare?: (button: HTMLButtonElement, keyboard: boolean) => void;
+  shareOpen?: boolean;
 }
 
-export function ArticleFoot({ inProgress, next }: ArticleFootProps) {
+export function ArticleFoot({ inProgress, next, onShare, shareOpen }: ArticleFootProps) {
   return (
     <div className="artfoot">
+      {onShare ? (
+        <p style={{ margin: '0 0 16px' }}>
+          <ShareLinkButton onShare={onShare} label="Share article" expanded={shareOpen} />
+        </p>
+      ) : null}
       {inProgress ? (
         <p>This piece is still being written. It is published here in draft so the team can read along.</p>
       ) : null}
