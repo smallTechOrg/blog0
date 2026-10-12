@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 import { ShareLinkButton } from './ShareLinkButton';
 
-/* The article's foot (design `.artfoot`): the Share article button (Phase 2, div. 5), the
+/* The article's foot (design `.artfoot`): the Share article button (divergence 5), the
    in-progress note when flagged, then "Next: <title> →". */
 export interface ArticleFootProps {
   inProgress: boolean;

@@ -1,5 +1,6 @@
 /* Global stylesheet (spec/architecture.md → Layout, spec/ui.md §1 + §5).
-   design.css is a byte-for-byte copy of spec/design/design-app.css — never edit it.
+   design.css is ported from spec/design/design-app.css with the rules for dropped features
+   removed (spec/ui.md §1 rule 1); every rule it keeps is verbatim — never restyle in it.
    Every new or overriding rule lives in additions.css, loaded after it.
    (admin.css is imported by the admin layout, not here.) */
 @import './design.css';

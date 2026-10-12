@@ -1,4 +1,4 @@
-// Upload + media helpers for the Phase 3 E2E walks (S3.6): the committed audio / image fixtures,
+// Upload + media helpers for the E2E walks: the committed audio / image fixtures,
 // the E2E server's storage dir, and small API round trips (upload a recording, read a byte range
 // from /media/<key>). No server-only imports — playwright.config.ts imports E2E_STORAGE_DIR.
 import { readFileSync } from 'node:fs';

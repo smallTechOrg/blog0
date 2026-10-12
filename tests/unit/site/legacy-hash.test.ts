@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { legacyHashTarget } from '@/components/site/LegacyHashRedirect';
 
-// Legacy design hash links → real routes (spec/architecture.md divergence 1; S2.5).
+// Legacy design hash links → real routes (spec/architecture.md divergence 1).
 
 describe('legacyHashTarget', () => {
   it('maps article, deck, archive and about hashes to their real routes', () => {

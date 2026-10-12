@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 
 // Smoke: the production server (`pnpm start` on 3411 against blog0_test) renders the home page
-// (Phase 1: the "Latest" list) with its stylesheet and answers the health check.
+// (the "Latest" list) with its stylesheet and answers the health check.
 
 test('home page renders the Latest list with a non-empty linked stylesheet', async ({ page, request }) => {
   const response = await page.goto('/');

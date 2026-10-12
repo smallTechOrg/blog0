@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
-import { Icon } from '@/components/design/Icon';
-import { cx } from '@/components/design/motion';
+import { useHeadTop, usePageLock } from '@/components/design/overlay';
 import { AudioPlayer } from '@/components/reader/AudioPlayer';
+import { ModeBar } from '@/components/reader/ModeBar';
+import { ModeCapsule } from '@/components/reader/ModeCapsule';
 import type { PublicListenDto } from '@/lib/api/dto';
 
 /* ============================================================
@@ -30,55 +31,17 @@ export function ListenOverlay({ listen, onClose, onRead, onTldr }: ListenOverlay
     onCloseRef.current = onClose;
   });
 
-  /* Locking the page can clamp its scroll, so the offset is recorded on open
-     and put back on close — the reader lands exactly where they left off. */
-  useEffect(() => {
-    const at = window.pageYOffset || document.documentElement.scrollTop || 0;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-      window.requestAnimationFrame(() => {
-        const now = window.pageYOffset || document.documentElement.scrollTop || 0;
-        if (Math.abs(now - at) > 2) window.scrollTo({ top: at, behavior: 'auto' });
-      });
-    };
-  }, []);
-
+  /* The page underneath is locked; its scroll offset is put back on close. */
+  usePageLock();
   /* Sits under the site header, like the deck, so the frame reads the same
      whether Listen was opened from a card or from inside the article. */
-  const [headTop, setHeadTop] = useState(0);
-  useLayoutEffect(() => {
-    function measure() {
-      const el = document.querySelector('.sitehead');
-      setHeadTop(el ? Math.max(0, Math.round(el.getBoundingClientRect().bottom)) : 0);
-    }
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
-
-  const { times } = listen;
-  const modes: Array<{ key: 'read' | 'tldr' | 'listen'; label: string; icon: 'text' | 'bolt' | 'headphones'; min: number | null; go: (() => void) | null }> = [
-    { key: 'read', label: 'Read', icon: 'text', min: times.read, go: onRead },
-    { key: 'tldr', label: 'TLDR', icon: 'bolt', min: times.tldr, go: onTldr && times.tldr != null ? onTldr : null },
-    { key: 'listen', label: 'Listen', icon: 'headphones', min: times.listen, go: null },
-  ];
+  const headTop = useHeadTop();
 
   return (
     <div className="sheetfull" role="dialog" aria-modal="true" aria-label={listen.title} style={{ top: headTop + 'px' }}>
       <div className="sheetfull__scrim" />
       <div className="sheetfull__panel">
-        <div className="modebar">
-          <div className="modebar__crumb">
-            <span className="modebar__mode">Listen</span>
-            <span className="modebar__sep" aria-hidden="true" />
-            <span className="modebar__title">{listen.title}</span>
-          </div>
-          <button className="modebar__x" type="button" onClick={onClose} aria-label="Close">
-            <Icon name="close" size={14} />
-          </button>
-        </div>
+        <ModeBar mode="listen" title={listen.title} onClose={onClose} closeLabel="Close" />
         <section className="listenview" aria-label="Listen to this article">
           {listen.topic ? <span className="tag">{listen.topic}</span> : null}
           <h1>{listen.title}</h1>
@@ -91,29 +54,15 @@ export function ListenOverlay({ listen, onClose, onRead, onTldr }: ListenOverlay
           />
         </section>
         <div className="modedock">
-          <div className="modes modes--timed" role="tablist" aria-label="How to take this in">
-            {modes.map((m) => {
-              const on = m.key === 'listen';
-              const missing = m.min == null;
-              return (
-                <button
-                  key={m.key}
-                  type="button"
-                  className={cx('mode', on && 'is-on')}
-                  role="tab"
-                  aria-selected={on ? 'true' : 'false'}
-                  aria-label={missing ? m.label + ' — no summary yet' : m.label + ' — ' + m.min + ' min'}
-                  disabled={!on && !m.go}
-                  title={!on && missing ? 'No summary yet' : undefined}
-                  onClick={() => m.go?.()}
-                >
-                  <Icon name={m.icon} size={14} />
-                  <span className="mode__t">{m.label}</span>
-                  <span className="mode__d">{m.min != null ? m.min + ' min' : '—'}</span>
-                </button>
-              );
-            })}
-          </div>
+          <ModeCapsule
+            active="listen"
+            times={listen.times}
+            enabled={{ tldr: Boolean(onTldr) }}
+            onPick={(mode) => {
+              if (mode === 'read') onRead();
+              else if (mode === 'tldr') onTldr?.();
+            }}
+          />
         </div>
       </div>
     </div>

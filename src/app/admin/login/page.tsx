@@ -9,7 +9,7 @@ import { log } from '@/server/log';
 import { getCurrentSite } from '@/server/site/current';
 
 // /admin/login (spec/ui.md → Sign in). Centered `.surface` card; styles live in admin.css
-// (`.admin-login*`, owned by S1.5 via src/app/admin/layout.tsx). Already signed in → `next` or /admin.
+// (`.admin-login*`, loaded via src/app/admin/layout.tsx). Already signed in → `next` or /admin.
 
 export const dynamic = 'force-dynamic';
 

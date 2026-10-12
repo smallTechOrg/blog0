@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 
-// A clearly-labelled, non-functional placeholder for a feature a later phase builds
-// (spec/ui.md §5 `.stub`). Reads "Coming in a later phase — <children>" so a stub is never
-// mistaken for a bug.
+// A clearly-labelled, non-functional placeholder for a deferred feature (spec/ui.md §5 `.stub`;
+// used by the editor's History tab). Reads "<label> — <children>" so a stub is never mistaken for
+// a bug.
 
 export interface StubNoticeProps {
-  /** What arrives, and when — e.g. "Featured and About arrive in Phase 2." */
+  /** What arrives, and when. */
   children: ReactNode;
   /** Leading label; defaults to "Coming in a later phase". */
   label?: string;

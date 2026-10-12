@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
+import { AdminLoadError } from '@/components/admin/AdminLoad';
 import { ArticleTable } from '@/components/admin/ArticleTable';
 import { HistoryTab } from '@/components/admin/editor/HistoryTab';
 import { ImageUploadButton } from '@/components/admin/editor/ImageUploadButton';
@@ -28,6 +29,29 @@ describe('FormatChips', () => {
     expect(html).toContain('Listen text changed');
     expect(html).toContain('data-status="text_changed"');
     expect(html).toContain('title="Not published"');
+  });
+});
+
+describe('AdminLoadError', () => {
+  it('names what failed and offers Retry; a signed-out writer gets Sign in again back to the screen', () => {
+    const retry = renderToStaticMarkup(<AdminLoadError error={{ message: 'Boom.', signedOut: false }} what="the articles" onRetry={() => {}} signInPath="/admin" />);
+    expect(retry).toContain('<div class="admin-alert" role="alert"><p>Couldn’t load the articles: Boom.</p><button type="button" class="admin-btn">Retry</button></div>');
+
+    const signIn = renderToStaticMarkup(<AdminLoadError error={{ message: 'x', signedOut: true }} what="the subscribers" onRetry={() => {}} signInPath="/admin/subscribers" />);
+    expect(signIn).toContain('<a class="admin-btn" href="/admin/login?next=%2Fadmin%2Fsubscribers">Sign in again</a>');
+    expect(signIn).not.toContain('Retry');
+  });
+
+  it('without a sign-in path always retries; supports a custom line, small buttons and an extra class', () => {
+    const tab = renderToStaticMarkup(<AdminLoadError error={{ message: 'x', signedOut: true }} what="the recording" onRetry={() => {}} />);
+    expect(tab).toContain('>Retry</button>');
+
+    const site = renderToStaticMarkup(
+      <AdminLoadError className="desk-page" error={{ message: 'x', signedOut: true }} message="Your session ended." onRetry={() => {}} signInPath="/admin/site" small />,
+    );
+    expect(site).toBe(
+      '<div class="desk-page admin-alert" role="alert"><p>Your session ended.</p><p><a class="admin-btn admin-btn--small" href="/admin/login?next=%2Fadmin%2Fsite">Sign in again</a></p></div>',
+    );
   });
 });
 
@@ -96,7 +120,7 @@ describe('ListenTab', () => {
   };
   const now = new Date('2026-10-12T12:00:00Z');
 
-  it('labels exactly the three Phase 3 fix statuses', () => {
+  it('labels exactly the three Listen statuses', () => {
     expect(LISTEN_STATUS_LABEL).toEqual({ missing: 'No recording', ready: 'Ready', text_changed: 'Text changed' });
   });
 

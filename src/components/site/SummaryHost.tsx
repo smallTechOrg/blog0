@@ -22,12 +22,12 @@ import { ListenOverlay } from './ListenOverlay';
    the featured stack — can never trap the fixed-position sheet.
    ============================================================ */
 
-/** Endpoint for a card's deck (spec/api.md Phase 2). */
+/** Endpoint for a card's deck (spec/api.md). */
 export function publicTldrUrl(slug: string): string {
   return '/api/public/articles/' + encodeURIComponent(slug) + '/tldr';
 }
 
-/** Endpoint for a card's recording (spec/api.md Phase 3). */
+/** Endpoint for a card's recording (spec/api.md). */
 export function publicListenUrl(slug: string): string {
   return '/api/public/articles/' + encodeURIComponent(slug) + '/listen';
 }

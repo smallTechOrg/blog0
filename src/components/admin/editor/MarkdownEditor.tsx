@@ -7,7 +7,7 @@ import { insertAtCursor, shiftRange, type TextRange } from './insert-image';
 
 // Plain monospace Markdown textarea (spec/architecture.md: swap for CodeMirror later behind this
 // component). Tab inserts two spaces; Esc then Tab leaves the field, so keyboard users are never
-// trapped. Phase 3: a `.mdedit__tools` slot right of the label (the Image button), file drops on
+// trapped. A `.mdedit__tools` slot right of the label (the Image button), file drops on
 // the textarea (handed to `onDropFiles`), and an imperative `insertAtCursor` for the snippet.
 
 export interface MarkdownEditorHandle {

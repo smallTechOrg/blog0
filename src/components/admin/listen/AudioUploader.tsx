@@ -11,7 +11,7 @@ import { relativeTime } from '../relative-time';
 
 import { fmtMb, uploadAudio } from './listen-api';
 
-// Recording section of the Listen tab (spec/ui.md §4 Listen tab → Recording; Phase 3 fix): dropzone
+// Recording section of the Listen tab (spec/ui.md §4 Listen tab → Recording): dropzone
 // + file picker (disabled while the editor has unsaved text), XHR progress with Cancel, inline
 // errors with Try again, and — once a recording exists — the design `.audio` player as the
 // preview, the file line, Replace… (no confirm: there is no writer-made sync to lose) and Remove

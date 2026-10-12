@@ -2,26 +2,19 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import { fmtDate } from '@/lib/format-date';
-import type {
-  ArticleDetailDto,
-  DeleteArticleResponse,
-  GetArticleResponse,
-  PublishBlockedDetails,
-  PublishResponse,
-  UnpublishResponse,
-  UpdateArticleResponse,
-} from '@/lib/api/dto';
+import type { DeleteArticleResponse, PublishBlockedDetails, PublishResponse, UnpublishResponse } from '@/lib/api/dto';
 
-import { apiRequest, signInHref } from '../api';
+import { AdminLoadError } from '../AdminLoad';
+import { apiRequest, articleApi, signInHref } from '../api';
 import { FORMAT_STATUS_LABEL } from '../labels';
-import { changedFields, fieldsFrom, mergeAfterSave, type EditorFields } from './fields';
 import { HistoryTab } from './HistoryTab';
 import { ListenTab } from './ListenTab';
-import { PublishBar, type SaveState } from './PublishBar';
+import { PublishBar } from './PublishBar';
 import { TldrTab } from './TldrTab';
+import { useArticleDoc } from './use-article-doc';
 import { WriteTab } from './WriteTab';
 
 // Editor /admin/articles/[id] (spec/ui.md §4). Explicit saves only (every content save is a
@@ -36,14 +29,6 @@ const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'history', label: 'History' },
 ];
 
-type Load =
-  | { kind: 'loading' }
-  | { kind: 'missing' }
-  | { kind: 'error'; message: string; signIn: boolean }
-  | { kind: 'ready'; article: ArticleDetailDto; fields: EditorFields };
-
-type Conflict = { number: number; by: string } | null;
-
 export interface ArticleEditorProps {
   articleId: string;
   timeZone: string;
@@ -51,86 +36,14 @@ export interface ArticleEditorProps {
 
 export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
   const router = useRouter();
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
-  const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' });
-  const [conflict, setConflict] = useState<Conflict>(null);
   const [busy, setBusy] = useState<null | 'publish' | 'unpublish' | 'delete'>(null);
   const [blocked, setBlocked] = useState<PublishBlockedDetails['reasons'] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { load, doc, dirty, saveState, conflict, save, adoptArticle, refreshArticle, onField, reload, reloadLatest, close } =
+    useArticleDoc(articleId, () => setActionError(null));
   const [tab, setTab] = useState<TabId>('write');
   const [visited, setVisited] = useState<ReadonlySet<TabId>>(() => new Set<TabId>(['write']));
-  const [reloadTick, setReloadTick] = useState(0);
-
-  const loadRef = useRef(load);
-  const savingRef = useRef(false);
   const selfPath = `/admin/articles/${articleId}`;
-
-  useLayoutEffect(() => {
-    loadRef.current = load;
-  });
-
-  useEffect(() => {
-    let live = true;
-    void apiRequest<GetArticleResponse>(`/api/admin/articles/${encodeURIComponent(articleId)}`).then((res) => {
-      if (!live) return;
-      if (res.ok) setLoad({ kind: 'ready', article: res.data.article, fields: fieldsFrom(res.data.article) });
-      else if (res.error.code === 'NOT_FOUND') setLoad({ kind: 'missing' });
-      else setLoad({ kind: 'error', message: res.error.message, signIn: res.error.code === 'UNAUTHENTICATED' });
-    });
-    return () => {
-      live = false;
-    };
-  }, [articleId, reloadTick]);
-
-  const dirty = load.kind === 'ready' && Object.keys(changedFields(load.article, load.fields)).length > 0;
-
-  /** Server article changed underneath (deck save, publish…): adopt it, keep the writer's edits. */
-  const adoptArticle = useCallback((next: ArticleDetailDto) => {
-    setLoad((prev) => {
-      if (prev.kind !== 'ready') return { kind: 'ready', article: next, fields: fieldsFrom(next) };
-      return { kind: 'ready', article: next, fields: mergeAfterSave(fieldsFrom(prev.article), prev.fields, next) };
-    });
-  }, []);
-
-  const refreshArticle = useCallback(async () => {
-    const res = await apiRequest<GetArticleResponse>(`/api/admin/articles/${articleId}`);
-    if (res.ok) adoptArticle(res.data.article);
-  }, [articleId, adoptArticle]);
-
-  const save = useCallback(async (): Promise<ArticleDetailDto | null> => {
-    const current = loadRef.current;
-    if (current.kind !== 'ready' || savingRef.current) return null;
-    const patch = changedFields(current.article, current.fields);
-    if (Object.keys(patch).length === 0) {
-      setSaveState({ kind: 'idle' });
-      return current.article;
-    }
-    const sent = current.fields;
-    savingRef.current = true;
-    setSaveState({ kind: 'saving' });
-    setActionError(null);
-    const res = await apiRequest<UpdateArticleResponse>(`/api/admin/articles/${articleId}`, {
-      method: 'PATCH',
-      body: { baseRevisionId: current.article.currentRevision.id, ...patch },
-    });
-    savingRef.current = false;
-
-    if (res.ok) {
-      const next = res.data.article;
-      setLoad((prev) => (prev.kind === 'ready' ? { kind: 'ready', article: next, fields: mergeAfterSave(sent, prev.fields, next) } : prev));
-      setSaveState({ kind: 'idle' });
-      return next;
-    }
-    if (res.error.code === 'CONFLICT') {
-      const latest = await apiRequest<GetArticleResponse>(`/api/admin/articles/${articleId}`);
-      const rev = latest.ok ? latest.data.article.currentRevision : null;
-      setConflict({ number: rev?.number ?? 0, by: rev?.createdBy ?? 'someone' });
-      setSaveState({ kind: 'error', message: 'Someone saved a newer version — see above.', signIn: false });
-      return null;
-    }
-    setSaveState({ kind: 'error', message: res.error.message, signIn: res.error.code === 'UNAUTHENTICATED' });
-    return null;
-  }, [articleId]);
 
   // Cmd/Ctrl+S anywhere on the page saves.
   const saveRef = useRef(save);
@@ -159,19 +72,14 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  const onField = useCallback(<K extends keyof EditorFields>(key: K, value: EditorFields[K]) => {
-    setLoad((prev) => (prev.kind === 'ready' ? { ...prev, fields: { ...prev.fields, [key]: value } } : prev));
-    setSaveState((s) => (s.kind === 'error' ? s : { kind: 'idle' }));
-  }, []);
-
   async function publish(): Promise<void> {
-    if (load.kind !== 'ready' || dirty || busy) return;
+    if (!doc || dirty || busy) return;
     setBusy('publish');
     setBlocked(null);
     setActionError(null);
-    const res = await apiRequest<PublishResponse>(`/api/admin/articles/${articleId}/publish`, {
+    const res = await apiRequest<PublishResponse>(articleApi(articleId, 'publish'), {
       method: 'POST',
-      body: { revisionId: load.article.currentRevision.id },
+      body: { revisionId: doc.article.currentRevision.id },
     });
     setBusy(null);
     if (res.ok) {
@@ -190,7 +98,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     if (busy || !window.confirm('Unpublish this article? Readers will get “That article isn’t here.” until you publish again.')) return;
     setBusy('unpublish');
     setActionError(null);
-    const res = await apiRequest<UnpublishResponse>(`/api/admin/articles/${articleId}/unpublish`, { method: 'POST' });
+    const res = await apiRequest<UnpublishResponse>(articleApi(articleId, 'unpublish'), { method: 'POST' });
     setBusy(null);
     if (res.ok) adoptArticle(res.data.article);
     else setActionError(`Couldn’t unpublish: ${res.error.message}`);
@@ -200,9 +108,9 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     if (busy || !window.confirm('Delete this draft and all its revisions? This can’t be undone.')) return;
     setBusy('delete');
     setActionError(null);
-    const res = await apiRequest<DeleteArticleResponse>(`/api/admin/articles/${articleId}`, { method: 'DELETE' });
+    const res = await apiRequest<DeleteArticleResponse>(articleApi(articleId), { method: 'DELETE' });
     if (res.ok) {
-      setLoad({ kind: 'loading' }); // drops the beforeunload guard before leaving
+      close(); // drops the beforeunload guard before leaving
       router.push('/admin');
       return;
     }
@@ -210,12 +118,9 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     setActionError(`Couldn’t delete: ${res.error.message}`);
   }
 
-  function reloadLatest(): void {
+  function confirmReloadLatest(): void {
     if (!window.confirm('Reload the latest version? Your unsaved changes in this editor will be replaced.')) return;
-    setConflict(null);
-    setSaveState({ kind: 'idle' });
-    setLoad({ kind: 'loading' });
-    setReloadTick((n) => n + 1);
+    reloadLatest();
   }
 
   function selectTab(next: TabId): void {
@@ -231,8 +136,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     if (e.key === 'ArrowLeft') j = (i - 1 + TABS.length) % TABS.length;
     if (j < 0) return;
     e.preventDefault();
-    setTab(TABS[j].id);
-    setVisited((prev) => (prev.has(TABS[j].id) ? prev : new Set(prev).add(TABS[j].id)));
+    selectTab(TABS[j].id);
     document.getElementById(`tab-${TABS[j].id}`)?.focus();
   }
 
@@ -245,7 +149,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
       </main>
     );
   }
-  if (load.kind === 'missing') {
+  if (load.kind === 'error' && load.code === 'NOT_FOUND') {
     return (
       <main className="desk-main">
         <div className="desk-page">
@@ -261,23 +165,12 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
   if (load.kind === 'error') {
     return (
       <main className="desk-main">
-        <div className="desk-page admin-alert" role="alert">
-          <p>Couldn’t load the article: {load.message}</p>
-          {load.signIn ? (
-            <a className="admin-btn" href={signInHref(selfPath)}>
-              Sign in again
-            </a>
-          ) : (
-            <button type="button" className="admin-btn" onClick={() => setReloadTick((n) => n + 1)}>
-              Retry
-            </button>
-          )}
-        </div>
+        <AdminLoadError className="desk-page" error={load} what="the article" onRetry={reload} signInPath={selfPath} />
       </main>
     );
   }
 
-  const { article, fields } = load;
+  const { article, fields } = load.data;
   const dateIso = article.firstPublishedAt ?? new Date().toISOString();
   let dateLabel: string;
   try {
@@ -311,7 +204,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
           <p>
             Someone saved a newer version (rev {conflict.number} by {conflict.by}). Reload to continue.
           </p>
-          <button type="button" className="admin-btn" onClick={reloadLatest}>
+          <button type="button" className="admin-btn" onClick={confirmReloadLatest}>
             Reload
           </button>
         </div>

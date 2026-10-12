@@ -1,8 +1,12 @@
 import 'server-only';
 
+import { and, desc, eq, max, ne } from 'drizzle-orm';
+
 import type { PostCardViewModel } from '@/lib/view-models';
 
 import { validateSessionToken } from '../auth/session';
+import { getDb } from '../db/client';
+import { article } from '../db/schema';
 import { getCurrentSite } from '../site/current';
 
 import { publishedCards, type PublishedCard } from './articles';
@@ -61,4 +65,17 @@ export async function getHomeSections(sessionToken: string | null | undefined): 
   const { featured, latest } = splitHomeSections(rows);
   const signedIn = rows.length === 0 ? await isAdminSignedIn(sessionToken) : false;
   return { featured, latest, signedIn };
+}
+
+/** The topics the published articles actually carry, newest tag first, so the footer row can never
+ *  advertise a section with nothing behind it (design TOPICS). */
+export async function publishedTopics(siteId: string): Promise<string[]> {
+  const latest = max(article.firstPublishedAt);
+  const rows = await getDb()
+    .select({ topic: article.topic, latest })
+    .from(article)
+    .where(and(eq(article.siteId, siteId), eq(article.status, 'published'), ne(article.topic, '')))
+    .groupBy(article.topic)
+    .orderBy(desc(latest));
+  return rows.map((r) => r.topic);
 }

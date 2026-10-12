@@ -6,11 +6,11 @@ import { generationRows } from './helpers/db';
 import { jevKeyPlan, PENDING_KEY_TITLE } from './helpers/jev-key';
 import { apiRequests, readServerLog } from './helpers/logs';
 
-// Phase 1 golden path (spec/roadmap.md → Phase 1 "How the user tests it"): sign in, paste an
-// article, live preview, save, Generate with Jev (real OpenRouter call — or a visible PENDING KEY
-// skip and the hand-pick fallback), hand-edit + preview + save the deck, publish, read it live,
-// play the TLDR deck, then edit a deck sentence → stale, the live page keeps the old deck, nothing
-// regenerates. Finally the server log carries the api.request / llm.call lines.
+// TLDR golden path (capability jev-tldr; spec/roadmap.md "How the user tests it"): sign in, paste
+// an article, live preview, save, Generate with Jev (real OpenRouter call — or a visible PENDING
+// KEY skip and the hand-pick fallback), hand-edit + preview + save the deck, publish, read it
+// live, play the TLDR deck, then edit a deck sentence → stale, the live page keeps the old deck,
+// nothing regenerates. Finally the server log carries the api.request / llm.call lines.
 //
 // One browser context is shared by the serial steps so the journey reads top to bottom.
 
@@ -51,7 +51,7 @@ async function deckTexts(page: Page): Promise<string[]> {
 
 test.describe.configure({ mode: 'serial' });
 
-test.describe('Phase 1 golden path: paste → TLDR → publish → read', () => {
+test.describe('golden path: paste → TLDR → publish → read', () => {
   test.beforeAll(async ({ browser }, testInfo) => {
     const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
     j.context = context;
@@ -79,7 +79,7 @@ test.describe('Phase 1 golden path: paste → TLDR → publish → read', () => 
 
     await expect(page).toHaveURL(/\/admin\/login\?next=%2Fadmin$/);
     await signInThroughForm(page);
-    // Phase 2 global setup seeds the 5 design articles (seedPosts) before this walk.
+    // Global setup seeds the 5 design articles (seedPosts) before this walk.
     await expect(page.locator('.admin-table tbody tr')).toHaveCount(5);
     await expect(page.locator('.admin-table__title', { hasText: 'Humans are Software' })).toBeVisible();
   });
@@ -269,6 +269,10 @@ test.describe('Phase 1 golden path: paste → TLDR → publish → read', () => 
     const segs = deck.locator('.tdeck__seg');
     await expect(segs).toHaveCount(publishedLines.length + 1);
     await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+    // The deck's own mode switcher is the capsule: no recording → Listen disabled with its copy.
+    const deckListen = deck.locator('.tdeck__foot').getByRole('tab', { name: 'Listen — no recording yet' });
+    await expect(deckListen).toBeDisabled();
+    await expect(deckListen).toHaveAttribute('title', 'No recording yet');
     // Auto-advance: the intro holds 3.8 s, then the deck moves on with no input.
     await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'true', { timeout: 8_000 });
     await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[0]);

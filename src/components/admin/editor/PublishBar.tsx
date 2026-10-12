@@ -7,7 +7,7 @@ import type { ArticleDetailDto, PublishBlockedDetails } from '@/lib/api/dto';
 
 // Editor top bar (spec/ui.md §4 PublishBar): ← Desk · title · save state · Save (Cmd/Ctrl+S) ·
 // Publish / Publish changes (disabled while unsaved; PUBLISH_BLOCKED reasons in a popover) ·
-// View live ↗ · menu (Unpublish, Delete draft). S4.2 takes this file over.
+// View live ↗ · menu (Unpublish, Delete draft).
 
 export type SaveState =
   | { kind: 'idle' }

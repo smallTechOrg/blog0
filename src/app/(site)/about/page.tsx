@@ -2,8 +2,7 @@ import type { Metadata } from 'next';
 
 import { AboutView } from '@/components/site/about/AboutView';
 import { aboutParagraphs } from '@/components/site/about/about-text';
-import { getConfig } from '@/server/config';
-import { pageTitle, sitePageMetadata } from '@/server/public/metadata';
+import { pageTitle, sitePageRouteMetadata } from '@/server/public/metadata';
 import { getCurrentSite } from '@/server/site/current';
 
 // About /about (spec/ui.md §3; design `About`): wordmark heading, stand, strap, body — all from
@@ -11,14 +10,8 @@ import { getCurrentSite } from '@/server/site/current';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata(): Promise<Metadata> {
-  const site = await getCurrentSite();
-  return sitePageMetadata({
-    title: pageTitle('About', site.wordmark),
-    description: site.aboutStand,
-    url: getConfig().publicBaseUrl.replace(/\/+$/, '') + '/about',
-    siteName: site.wordmark,
-  });
+export function generateMetadata(): Promise<Metadata> {
+  return sitePageRouteMetadata('/about', (site) => ({ title: pageTitle('About', site.wordmark), description: site.aboutStand }));
 }
 
 export default async function AboutPage() {

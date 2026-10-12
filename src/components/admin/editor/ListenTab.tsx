@@ -8,13 +8,13 @@ import type { ListenResponse, ListenStateDto, ListenStatus, ListenTiming } from 
 import { fmtDate } from '@/lib/format-date';
 import { listenMinutes } from '@/lib/listen/marks';
 
+import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { AudioUploader } from '../listen/AudioUploader';
 import { deleteAudio, getListen } from '../listen/listen-api';
 import { relativeTime } from '../relative-time';
 
-// Listen tab (spec/ui.md §4 Listen tab, revised by the Phase 3 fix; capabilities listen-audio +
-// listen-sync). Upload / replace / remove + a preview player + the estimated-timing note. There is
-// no sync step: an upload is `ready` at once; editing paragraph text afterwards turns the status
+// Listen tab (spec/ui.md §4 Listen tab; capabilities listen-audio + listen-sync). Upload / replace /
+// remove + a preview player + the estimated-timing note. There is no sync step: an upload is `ready` at once; editing paragraph text afterwards turns the status
 // `text_changed` — a non-blocking warning. Loads GET …/listen when first shown and again after each
 // saved revision (the status is computed against the current revision).
 
@@ -29,7 +29,6 @@ export interface ListenTabProps {
   active?: boolean;
 }
 
-type Load = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready' };
 type Notice = { tone: 'ok' | 'error'; text: string } | null;
 
 export const LISTEN_STATUS_LABEL: Record<ListenStatus, string> = {
@@ -81,30 +80,16 @@ export function ListenTab(props: ListenTabProps) {
   const revisionId = article.currentRevision.id;
 
   const [listen, setListen] = useState<ListenStateDto | null>(null);
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
-  const [reloadTick, setReloadTick] = useState(0);
   const [notice, setNotice] = useState<Notice>(null);
   const [now, setNow] = useState(() => new Date());
   const player = useRef<AudioPlayerHandle | null>(null);
   const uploaderFocus = useRef<HTMLButtonElement | null>(null);
 
   // (Re)load whenever the saved revision changes — the status is computed against it.
-  useEffect(() => {
-    let live = true;
-    void getListen(articleId).then((res) => {
-      if (!live) return;
-      if (res.ok) {
-        setListen(res.data);
-        setNow(new Date());
-        setLoad({ kind: 'ready' });
-      } else {
-        setLoad({ kind: 'error', message: res.error.message });
-      }
-    });
-    return () => {
-      live = false;
-    };
-  }, [articleId, revisionId, reloadTick]);
+  const { load, reload } = useAdminLoad(() => getListen(articleId), articleId + ' ' + revisionId, (state) => {
+    setListen(state);
+    setNow(new Date());
+  });
 
   // Hidden tab (still mounted): the preview stops playing.
   useEffect(() => {
@@ -135,14 +120,7 @@ export function ListenTab(props: ListenTabProps) {
     );
   }
   if (load.kind === 'error' && !listen) {
-    return (
-      <div className="admin-alert" role="alert">
-        <p>Couldn’t load the recording: {load.message}</p>
-        <button type="button" className="admin-btn" onClick={() => setReloadTick((n) => n + 1)}>
-          Retry
-        </button>
-      </div>
-    );
+    return <AdminLoadError error={load} what="the recording" onRetry={reload} />;
   }
   if (!listen) return null;
 

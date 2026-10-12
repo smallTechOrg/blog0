@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   NARROW_PX,
+  clickTagPath,
   menuPlacement,
   nativeShareFallback,
   paragraphIdFromHash,
@@ -88,5 +89,22 @@ describe('shareClickIgnored', () => {
     expect(shareClickIgnored(['em', 'p'])).toBe(false);
     expect(shareClickIgnored(['code', 'li'])).toBe(false);
     expect(shareClickIgnored(['p'])).toBe(false);
+  });
+});
+
+describe('clickTagPath', () => {
+  type El = { tagName: string; parentElement: El | null };
+  const para: El = { tagName: 'P', parentElement: { tagName: 'DIV', parentElement: null } };
+  const em: El = { tagName: 'EM', parentElement: para };
+  const link: El = { tagName: 'A', parentElement: em };
+
+  it('lists the lower-cased tags from the target up to, not including, the stop element', () => {
+    expect(clickTagPath(link, para)).toEqual(['a', 'em']);
+    expect(clickTagPath(em, para)).toEqual(['em']);
+    expect(clickTagPath(para, para)).toEqual([]);
+  });
+  it('walks to the root when the stop element is not an ancestor, and is empty for no target', () => {
+    expect(clickTagPath(em, null)).toEqual(['em', 'p', 'div']);
+    expect(clickTagPath(null, para)).toEqual([]);
   });
 });

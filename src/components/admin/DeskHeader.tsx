@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { apiRequest } from './api';
 
 // Admin header bar (spec/ui.md §4 DeskHeader): small wordmark "blog0 · desk", links Desk, Site,
-// Subscribers (Phase 2), the signed-in writer's name, Sign out. Phase 4 adds AI usage, Team.
+// Subscribers, the signed-in writer's name, Sign out.
 
 const LINKS = [
   { href: '/admin', label: 'Desk' },

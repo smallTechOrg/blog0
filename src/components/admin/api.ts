@@ -25,6 +25,20 @@ function isAbort(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
 }
 
+const ABORTED: ApiFailure = { code: 'ABORTED', message: 'Request was cancelled.' };
+
+/** Unwraps a parsed envelope (null when the body was not JSON); INTERNAL errors read as UNEXPECTED_MESSAGE. */
+export function toApiResult<T>(status: number, envelope: Envelope<T> | null): ApiResult<T> {
+  if (envelope && envelope.ok === true) return { ok: true, status, data: envelope.data };
+  if (envelope && envelope.ok === false && envelope.error) {
+    const { code, message, details } = envelope.error;
+    const error: ApiFailure = { code, message: code === 'INTERNAL' ? UNEXPECTED_MESSAGE : message };
+    if (details !== undefined) error.details = details;
+    return { ok: false, status, error };
+  }
+  return { ok: false, status, error: { code: 'INTERNAL', message: UNEXPECTED_MESSAGE } };
+}
+
 export async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Promise<ApiResult<T>> {
   const method = init.method ?? 'GET';
   const headers: Record<string, string> = { accept: 'application/json' };
@@ -41,7 +55,7 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Pr
       signal: init.signal,
     });
   } catch (error) {
-    if (isAbort(error)) return { ok: false, status: 0, error: { code: 'ABORTED', message: 'Request was cancelled.' } };
+    if (isAbort(error)) return { ok: false, status: 0, error: ABORTED };
     return { ok: false, status: 0, error: { code: 'NETWORK', message: NETWORK_MESSAGE } };
   }
 
@@ -49,18 +63,14 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}): Pr
   try {
     envelope = (await response.json()) as Envelope<T>;
   } catch (error) {
-    if (isAbort(error)) return { ok: false, status: response.status, error: { code: 'ABORTED', message: 'Request was cancelled.' } };
-    envelope = null;
+    if (isAbort(error)) return { ok: false, status: response.status, error: ABORTED };
   }
+  return toApiResult(response.status, envelope);
+}
 
-  if (envelope && envelope.ok === true) return { ok: true, status: response.status, data: envelope.data };
-  if (envelope && envelope.ok === false && envelope.error) {
-    const { code, message, details } = envelope.error;
-    const error: ApiFailure = { code, message: code === 'INTERNAL' ? UNEXPECTED_MESSAGE : message };
-    if (details !== undefined) error.details = details;
-    return { ok: false, status: response.status, error };
-  }
-  return { ok: false, status: response.status, error: { code: 'INTERNAL', message: UNEXPECTED_MESSAGE } };
+/** `/api/admin/articles/<id>[/<sub>]` — an article's admin route (spec/api.md). */
+export function articleApi(articleId: string, sub?: string): string {
+  return '/api/admin/articles/' + encodeURIComponent(articleId) + (sub ? '/' + sub : '');
 }
 
 /** Sign-in URL that returns here afterwards. */

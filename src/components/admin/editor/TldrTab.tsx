@@ -14,7 +14,8 @@ import type {
   TldrStateDto,
 } from '@/lib/api/dto';
 
-import { apiRequest } from '../api';
+import { AdminLoadError, useAdminLoad } from '../AdminLoad';
+import { apiRequest, articleApi } from '../api';
 import { boundsHint, FORMAT_STATUS_LABEL, generationMeta } from '../labels';
 import { DeckList } from '../tldr/DeckList';
 import { DeckPreview } from '../tldr/DeckPreview';
@@ -52,7 +53,6 @@ export interface TldrTabProps {
   onArticleChanged: () => void;
 }
 
-type Load = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready' };
 type DeckState = { saved: DeckLine[]; lines: DeckLine[] };
 type Failure = { message: string; generation: GenerationDto | null };
 type Notice = { tone: 'ok' | 'error'; text: string } | null;
@@ -72,7 +72,6 @@ export function TldrTab(props: TldrTabProps) {
   const revisionId = article.currentRevision.id;
 
   const [tldr, setTldr] = useState<TldrStateDto | null>(null);
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
   const [deck, setDeck] = useState<DeckState>(NO_DECK);
   const [running, setRunning] = useState<number | null>(null); // start time (ms)
   const [presaving, setPresaving] = useState(false); // "Save & generate": saving the editor first
@@ -84,7 +83,6 @@ export function TldrTab(props: TldrTabProps) {
   const [busy, setBusy] = useState<null | 'save' | 'clear'>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [previewing, setPreviewing] = useState(false);
-  const [reloadTick, setReloadTick] = useState(0);
   const [now, setNow] = useState(() => new Date());
 
   /** Take the server's state; keep the writer's unsaved deck edits unless `force`. */
@@ -99,21 +97,11 @@ export function TldrTab(props: TldrTabProps) {
   }, []);
 
   // (Re)load whenever the saved revision changes — the sentence list belongs to it.
-  useEffect(() => {
-    let live = true;
-    void apiRequest<TldrStateDto>(`/api/admin/articles/${articleId}/tldr`).then((res) => {
-      if (!live) return;
-      if (res.ok) {
-        applyServer(res.data, false);
-        setLoad({ kind: 'ready' });
-      } else {
-        setLoad({ kind: 'error', message: res.error.message });
-      }
-    });
-    return () => {
-      live = false;
-    };
-  }, [articleId, revisionId, reloadTick, applyServer]);
+  const { load, reload } = useAdminLoad(
+    () => apiRequest<TldrStateDto>(articleApi(articleId, 'tldr')),
+    articleId + ' ' + revisionId,
+    (state) => applyServer(state, false),
+  );
 
   // Elapsed seconds while Jev reads.
   useEffect(() => {
@@ -160,7 +148,7 @@ export function TldrTab(props: TldrTabProps) {
     const started = Date.now();
     setElapsed(0);
     setRunning(started);
-    const res = await apiRequest<GenerateTldrResponse>(`/api/admin/articles/${articleId}/tldr/generate`, {
+    const res = await apiRequest<GenerateTldrResponse>(articleApi(articleId, 'tldr/generate'), {
       method: 'POST',
       body: { revisionId: revId },
     });
@@ -176,7 +164,7 @@ export function TldrTab(props: TldrTabProps) {
     setFailure({ message: res.error.message, generation: details?.generation ?? null });
     onArticleChanged(); // chips: a failed run can move TLDR to `failed`
     // Refresh status + latest generation without touching the writer's deck.
-    const fresh = await apiRequest<TldrStateDto>(`/api/admin/articles/${articleId}/tldr`);
+    const fresh = await apiRequest<TldrStateDto>(articleApi(articleId, 'tldr'));
     if (fresh.ok) applyServer(fresh.data, false);
   }
 
@@ -188,7 +176,7 @@ export function TldrTab(props: TldrTabProps) {
     if (busy || deck.lines.length === 0) return;
     setBusy('save');
     setNotice(null);
-    const res = await apiRequest<SaveDeckResponse>(`/api/admin/articles/${articleId}/tldr`, {
+    const res = await apiRequest<SaveDeckResponse>(articleApi(articleId, 'tldr'), {
       method: 'PUT',
       body: { revisionId, slides: toSaveSlides(deck.lines) },
     });
@@ -222,7 +210,7 @@ export function TldrTab(props: TldrTabProps) {
       return;
     }
     setBusy('clear');
-    const res = await apiRequest<ClearDeckResponse>(`/api/admin/articles/${articleId}/tldr`, { method: 'DELETE' });
+    const res = await apiRequest<ClearDeckResponse>(articleApi(articleId, 'tldr'), { method: 'DELETE' });
     setBusy(null);
     if (res.ok) {
       applyServer(res.data.tldr, true);
@@ -259,14 +247,7 @@ export function TldrTab(props: TldrTabProps) {
     );
   }
   if (load.kind === 'error' && !tldr) {
-    return (
-      <div className="admin-alert" role="alert">
-        <p>Couldn’t load the TLDR deck: {load.message}</p>
-        <button type="button" className="admin-btn" onClick={() => setReloadTick((n) => n + 1)}>
-          Retry
-        </button>
-      </div>
-    );
+    return <AdminLoadError error={load} what="the TLDR deck" onRetry={reload} />;
   }
 
   const status = tldr?.status ?? 'missing';
@@ -286,7 +267,7 @@ export function TldrTab(props: TldrTabProps) {
         ? 'Remove the lines that are no longer in the article before saving.'
         : null;
   const readMinutes = Math.max(1, Math.ceil(article.currentRevision.wordCount / 230));
-  // Designer mode with no OpenRouter key (spec/ui.md §4, Phase 2): Generate disabled + notice.
+  // Designer mode with no OpenRouter key (spec/ui.md §4): Generate disabled + notice.
   const jevAvailable = tldr?.jevAvailable !== false;
 
   return (

@@ -15,17 +15,26 @@ export type PlayerKeyAction = 'toggle' | 'back' | 'forward' | 'close' | null;
 export type FollowEvent = 'manual-scroll' | 'follow-audio' | 'paragraph-click';
 
 const SCROLL_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown']);
-const FORM_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON']);
+const TEXT_ENTRY_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+type FocusLike = { tagName?: string; isContentEditable?: boolean } | null | undefined;
 
 /** Keys that scroll the page by themselves — a manual scroll that pauses following. */
 export function isScrollKey(key: string): boolean {
   return SCROLL_KEYS.has(key);
 }
 
-/** True when the keyboard focus sits in a form control (or editable text), where keys belong to it. */
-export function isFormControl(el: { tagName?: string; isContentEditable?: boolean } | null | undefined): boolean {
+/** True when the focus is in a text-entry control (input / textarea / select / contentEditable),
+ *  which keeps the scroll keys for itself. A focused button does not. */
+export function ownsScrollKeys(el: FocusLike): boolean {
   if (!el) return false;
-  return FORM_TAGS.has(String(el.tagName ?? '').toUpperCase()) || el.isContentEditable === true;
+  return TEXT_ENTRY_TAGS.has(String(el.tagName ?? '').toUpperCase()) || el.isContentEditable === true;
+}
+
+/** True when the focus is in a form control — a text-entry control or a button, whose own
+ *  Space/Enter activation wins — where the player keys are ignored. */
+export function isFormControl(el: FocusLike): boolean {
+  return ownsScrollKeys(el) || String(el?.tagName ?? '').toUpperCase() === 'BUTTON';
 }
 
 /** Space play/pause, ←/→ ±5 s (ignored in a form control); Escape always closes. */
@@ -36,6 +45,32 @@ export function playerKeyAction(key: string, inFormControl: boolean): PlayerKeyA
   if (key === 'ArrowLeft') return 'back';
   if (key === 'ArrowRight') return 'forward';
   return null;
+}
+
+/** What a window keydown drives on a player. */
+export interface PlayerKeyTarget {
+  toggle(): void;
+  seek(seconds: number): void;
+  currentTime(): number;
+  durationS: number;
+  close?: () => void;
+}
+
+/**
+ * Applies a window keydown to a player (Space / ← / →, Escape → `close`), with `active` the focused
+ * element. Returns true when the key was a player key; its default is prevented except for Escape.
+ */
+export function applyPlayerKey(e: { key: string; preventDefault(): void }, active: FocusLike, p: PlayerKeyTarget): boolean {
+  const action = playerKeyAction(e.key, isFormControl(active));
+  if (!action) return false;
+  if (action === 'close') {
+    p.close?.();
+    return true;
+  }
+  e.preventDefault();
+  if (action === 'toggle') p.toggle();
+  else p.seek(seekTarget(action, p.currentTime(), p.durationS));
+  return true;
 }
 
 /** The seek target (seconds) for ←/→, clamped to [0, duration] (an unknown duration only clamps at 0). */
@@ -56,9 +91,14 @@ export function nextFollowing(_following: boolean, event: FollowEvent): boolean 
   return event !== 'manual-scroll';
 }
 
-/** Whether a scroll key press counts as a manual scroll (never while typing in a form control). */
-export function isManualScrollKey(key: string, inFormControl: boolean): boolean {
-  return !inFormControl && isScrollKey(key);
+/** Whether a scroll key press counts as a manual scroll (never while typing in a text-entry control). */
+export function isManualScrollKey(key: string, inTextEntry: boolean): boolean {
+  return !inTextEntry && isScrollKey(key);
+}
+
+/** A window keydown that pauses following: a scroll key, unless the focus owns the scroll keys. */
+export function pausesFollow(key: string, active: FocusLike): boolean {
+  return isManualScrollKey(key, ownsScrollKeys(active));
 }
 
 /** The slice of `<audio>` the sync reads: the position and the two events. */

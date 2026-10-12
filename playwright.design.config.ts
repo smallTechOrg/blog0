@@ -7,7 +7,7 @@ import {
   DESIGN_E2E_SERVER_LOG,
 } from './tests/e2e/designer.global-setup';
 
-// Designer-mode E2E (S2.10, capability designer-mode): the app exactly as a designer runs it —
+// Designer-mode E2E (capability designer-mode): the app exactly as a designer runs it —
 // `pnpm dev:design` (embedded PGlite + the hot-reload dev server), from a clean state, with no
 // Postgres and no `.env` values for the database, the session secret or the OpenRouter key.
 //

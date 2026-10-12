@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 
 import { Icon } from '@/components/design/Icon';
 import { cx, useReducedMotion } from '@/components/design/motion';
+import { useHeadTop, usePageLock } from '@/components/design/overlay';
 import {
   TDECK_LAYOUT,
   TDECK_STEP_MS,
@@ -17,6 +18,7 @@ import {
 } from '@/lib/deck/timing';
 import { deckSubject } from '@/lib/share-links';
 
+import { ModeCapsule } from './ModeCapsule';
 import { ShareLinkButton } from './ShareLinkButton';
 import { FALLBACK_BRAND, placeAgainst, useShare } from './ShareMenu';
 
@@ -51,7 +53,7 @@ export interface TldrDeckProps {
   onClose: () => void;
   /** "Read the full article" + the capsule's Read; omitted → the end button is hidden and Read disabled. */
   onRead?: () => void;
-  /** Capsule Listen; omitted → disabled with "Audio is not recorded yet". */
+  /** Capsule Listen; omitted → disabled with the capsule's "No recording yet". */
   onListen?: () => void;
   layout?: DeckLayout;
 }
@@ -96,18 +98,9 @@ export function TldrDeck(props: TldrDeckProps) {
     reduceRef.current = reduce;
   });
 
-  /* The deck starts where the site header ends, so the header stays in view.
-     Measured rather than assumed: the header is taller before it compacts. */
-  const [headTop, setHeadTop] = useState(0);
-  useLayoutEffect(() => {
-    function measure() {
-      const el = document.querySelector('.sitehead');
-      setHeadTop(el ? Math.max(0, Math.round(el.getBoundingClientRect().bottom)) : 0);
-    }
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
+  /* The deck starts where the site header ends, so the header stays in view. */
+  const headTop = useHeadTop();
+  usePageLock({ overscroll: true });
 
   const goTo = useCallback(
     (next: number): boolean => {
@@ -257,7 +250,7 @@ export function TldrDeck(props: TldrDeckProps) {
     };
   }, [n, step]);
 
-  /* --- keys, and the page lock underneath ----------------------------- */
+  /* --- keys ---------------------------------------------------------- */
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
@@ -281,30 +274,8 @@ export function TldrDeck(props: TldrDeckProps) {
       }
     }
     document.addEventListener('keydown', onKey);
-
-    const at = window.pageYOffset || document.documentElement.scrollTop || 0;
-    const prevO = document.body.style.overflow;
-    const prevR = document.documentElement.style.overscrollBehavior;
-    document.body.style.overflow = 'hidden';
-    document.documentElement.style.overscrollBehavior = 'none';
     if (rootRef.current) rootRef.current.focus({ preventScroll: true });
-
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevO;
-      document.documentElement.style.overscrollBehavior = prevR;
-      /* land the reader back exactly where they were */
-      window.requestAnimationFrame(() => {
-        const now = window.pageYOffset || document.documentElement.scrollTop || 0;
-        if (Math.abs(now - at) > 2) {
-          try {
-            window.scrollTo({ top: at, behavior: 'auto' });
-          } catch {
-            window.scrollTo(0, at);
-          }
-        }
-      });
-    };
+    return () => document.removeEventListener('keydown', onKey);
   }, [n, step, goTo]);
 
   if (!n) return null;
@@ -478,46 +449,16 @@ export function TldrDeck(props: TldrDeckProps) {
       {/* The mode switcher stays reachable from inside the deck, so Read and
           Audio are one tap away without closing it first. */}
       <div className="tdeck__foot">
-        <div className="modes modes--deck modes--timed" role="tablist" aria-label="How to take this in">
-          <button
-            className="mode"
-            type="button"
-            role="tab"
-            aria-selected="false"
-            aria-label={'Read — ' + times.read + ' min'}
-            disabled={!onRead}
-            onClick={() => onRead?.()}
-          >
-            <Icon name="text" size={14} />
-            <span className="mode__t">Read</span>
-            <span className="mode__d">{times.read + ' min'}</span>
-          </button>
-          <button
-            className="mode is-on"
-            type="button"
-            role="tab"
-            aria-selected="true"
-            aria-label={'TLDR — ' + times.tldr + ' min'}
-          >
-            <Icon name="bolt" size={14} />
-            <span className="mode__t">TLDR</span>
-            <span className="mode__d">{times.tldr + ' min'}</span>
-          </button>
-          <button
-            className="mode"
-            type="button"
-            role="tab"
-            aria-selected="false"
-            aria-label={times.listen == null ? 'Listen — coming in a later phase' : 'Listen — ' + times.listen + ' min'}
-            disabled={!onListen}
-            title={onListen ? undefined : 'Audio is not recorded yet'}
-            onClick={() => onListen?.()}
-          >
-            <Icon name="headphones" size={14} />
-            <span className="mode__t">Listen</span>
-            <span className="mode__d">{times.listen == null ? '—' : times.listen + ' min'}</span>
-          </button>
-        </div>
+        <ModeCapsule
+          className="modes--deck"
+          active="tldr"
+          times={{ read: times.read, tldr: times.tldr, listen: onListen ? times.listen : null }}
+          enabled={{ read: Boolean(onRead) }}
+          onPick={(mode) => {
+            if (mode === 'read') onRead?.();
+            else if (mode === 'listen') onListen?.();
+          }}
+        />
         <span className="sr" aria-live="polite">
           {'Slide ' + (idx + 1) + ' of ' + n}
         </span>

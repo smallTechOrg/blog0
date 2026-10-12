@@ -3,14 +3,13 @@
 import { useRef, useState, type FormEvent } from 'react';
 
 import type { LoginRequest, LoginResponse } from '@/lib/api/dto';
-import type { Envelope } from '@/lib/api/envelope';
+
+import { apiRequest } from './api';
 
 // Sign-in form (spec/ui.md → Sign in). Posts to /api/auth/login; on success navigates to `next`
 // (a sanitised same-site path supplied by the page). Errors render inline under the form with the
-// server's message ("Email or password is incorrect." / "Too many attempts — try again in N minutes.").
-
-const NETWORK_MESSAGE = "Couldn't reach the server — check your connection and try again.";
-const UNEXPECTED_MESSAGE = 'Something went wrong on our side. Try again in a moment.';
+// server's message ("Email or password is incorrect." / "Too many attempts — try again in N minutes.");
+// network and unexpected failures read as apiRequest's messages.
 
 type State = { kind: 'idle' } | { kind: 'pending' } | { kind: 'error'; message: string } | { kind: 'done' };
 
@@ -33,38 +32,16 @@ export function LoginForm({ next }: { next: string }) {
     }
 
     setState({ kind: 'pending' });
-    let response: Response;
-    try {
-      response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-        credentials: 'same-origin',
-      });
-    } catch {
-      setState({ kind: 'error', message: NETWORK_MESSAGE });
-      return;
-    }
-
-    let body: Envelope<LoginResponse> | null = null;
-    try {
-      body = (await response.json()) as Envelope<LoginResponse>;
-    } catch {
-      body = null;
-    }
-
-    if (body?.ok) {
+    const res = await apiRequest<LoginResponse>('/api/auth/login', { method: 'POST', body: payload });
+    if (res.ok) {
       setState({ kind: 'done' });
       // Full navigation so every server component re-renders with the new session cookie.
       window.location.assign(next);
       return;
     }
 
-    const code = body && !body.ok ? body.error.code : null;
-    let message = body && !body.ok ? body.error.message : UNEXPECTED_MESSAGE;
-    if (code === 'VALIDATION_FAILED') message = 'Enter a valid email address and your password.';
-    if (code === 'INTERNAL') message = UNEXPECTED_MESSAGE;
-    setState({ kind: 'error', message });
+    const { code } = res.error;
+    setState({ kind: 'error', message: code === 'VALIDATION_FAILED' ? 'Enter a valid email address and your password.' : res.error.message });
     if (code === 'BAD_CREDENTIALS' && passwordRef.current) {
       passwordRef.current.value = '';
       passwordRef.current.focus();

@@ -77,7 +77,7 @@
 @keyframes adminSpin { to { transform: rotate(360deg); } }
 .dirtydot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: middle; }
 
-/* ---------- sign in (S1.1 markup) ---------- */
+/* ---------- sign in ---------- */
 .admin-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
 .admin-login__card {
   width: 100%; max-width: 400px; padding: 34px 32px 26px;
@@ -167,7 +167,6 @@
 .fchip--stale, .fchip--failed { background: transparent; border-color: var(--accent); color: var(--accent-ink); }
 .fchip--generating { border-style: dashed; color: var(--text); }
 .fchip--missing { background: transparent; border-style: dashed; }
-.fchip--unavailable { opacity: .55; background: transparent; }
 .fchip__live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
 /* ---------- editor ---------- */
@@ -341,7 +340,7 @@
 .picker__line.is-on { background: var(--accent-softer); }
 .picker__line input { margin-top: 5px; accent-color: var(--accent); width: 15px; height: 15px; }
 
-/* ---------- Phase 3: Listen tab + image upload (spec/ui.md §5; Phase 3 fix F2) — tokens only ---------- */
+/* ---------- Listen tab + image upload (spec/ui.md §5) — tokens only ---------- */
 /* text_changed: a caution, not the solid failed/stale look — dashed accent border, accent ink */
 .tabchip--stale { color: var(--accent-ink); opacity: 1; border-bottom: 1px solid var(--accent); }
 .tabchip--text_changed { color: var(--accent-ink); opacity: 1; background: transparent; border-bottom: 1px dashed var(--accent); }
@@ -398,10 +397,6 @@
 .admin-dialog__file { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .admin-dialog__actions { display: flex; gap: 8px; }
 
-@media (prefers-reduced-motion: reduce) {
-  .dropzone { transition: none; }
-}
-
 @media (max-width: 720px) {
   .pubbar { top: 0; position: relative; }
   .pubbar__actions { margin-left: 0; width: 100%; flex-wrap: wrap; }
@@ -409,5 +404,6 @@
   .deskhead__in { gap: 8px 14px; flex-wrap: wrap; padding: 9px 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .dropzone { transition: none; }
   .spinner { animation: none; border-right-color: currentColor; opacity: .6; }
 }

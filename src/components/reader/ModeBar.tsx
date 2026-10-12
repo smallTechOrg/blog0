@@ -9,9 +9,11 @@ export interface ModeBarProps {
   mode: 'read' | 'listen';
   title: string;
   onClose: () => void;
+  /** The X's label; defaults to "Back to all articles" (Read) / "Close the player" (Listen). */
+  closeLabel?: string;
 }
 
-export function ModeBar({ mode, title, onClose }: ModeBarProps) {
+export function ModeBar({ mode, title, onClose, closeLabel }: ModeBarProps) {
   const listening = mode === 'listen';
   return (
     <div className="modebar">
@@ -23,7 +25,7 @@ export function ModeBar({ mode, title, onClose }: ModeBarProps) {
       <button
         className="modebar__x"
         type="button"
-        aria-label={listening ? 'Close the player' : 'Back to all articles'}
+        aria-label={closeLabel ?? (listening ? 'Close the player' : 'Back to all articles')}
         onClick={onClose}
       >
         <Icon name="close" size={14} />

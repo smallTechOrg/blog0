@@ -1,6 +1,8 @@
 // Pure pieces of the editor's Image button (spec/ui.md §4 Editor → Image; capability
-// media-images): the Markdown snippet, cursor insertion with blank-line padding, the alt text
-// pre-filled from the filename, and the client-side type allowlist.
+// media-images): the Markdown snippet (shared with the upload route), cursor insertion with
+// blank-line padding, the alt text pre-filled from the filename, and the client-side type allowlist.
+
+import { imageMarkdown } from '@/lib/media/image-markdown';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
 export const ACCEPTED_IMAGE_EXT: Record<string, (typeof ACCEPTED_IMAGE_TYPES)[number]> = {
@@ -14,12 +16,10 @@ export const IMAGES_ONLY_NOTICE = 'Images only — PNG, JPEG, WebP or GIF';
 export const ALT_MAX = 200;
 export const CAPTION_MAX = 200;
 
-/** `![alt](url)` or `![alt](url "caption")` — `"` in the caption escaped as `\"`, `[`/`]` in the alt escaped. */
+/** The upload route's snippet (`![alt](url)` / `![alt](url "caption")`, escaped, single-line), built
+ *  client-side when a response carries no `markdown`. */
 export function imageSnippet(alt: string, url: string, caption?: string | null): string {
-  const safeAlt = alt.replace(/[[\]]/g, '\\$&');
-  const cap = caption?.trim() ?? '';
-  if (cap !== '') return `![${safeAlt}](${url} "${cap.replace(/"/g, '\\"')}")`;
-  return `![${safeAlt}](${url})`;
+  return imageMarkdown(alt, url, caption ?? undefined);
 }
 
 function clamp(n: number, lo: number, hi: number): number {

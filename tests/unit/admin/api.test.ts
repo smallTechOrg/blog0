@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { apiRequest } from '@/components/admin/api';
+import { apiRequest, articleApi, toApiResult, UNEXPECTED_MESSAGE } from '@/components/admin/api';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -57,5 +57,30 @@ describe('apiRequest', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('ABORTED');
+  });
+});
+
+describe('toApiResult', () => {
+  it('unwraps data, keeps error details, hides INTERNAL messages and treats a missing envelope as INTERNAL', () => {
+    expect(toApiResult(200, { ok: true, data: { a: 1 } })).toEqual({ ok: true, status: 200, data: { a: 1 } });
+    expect(toApiResult(409, { ok: false, error: { code: 'CONFLICT', message: 'Newer', details: { n: 2 }, requestId: 'r' } })).toEqual({
+      ok: false,
+      status: 409,
+      error: { code: 'CONFLICT', message: 'Newer', details: { n: 2 } },
+    });
+    expect(toApiResult(500, { ok: false, error: { code: 'INTERNAL', message: 'stack trace', requestId: 'r' } })).toEqual({
+      ok: false,
+      status: 500,
+      error: { code: 'INTERNAL', message: UNEXPECTED_MESSAGE },
+    });
+    expect(toApiResult(502, null)).toEqual({ ok: false, status: 502, error: { code: 'INTERNAL', message: UNEXPECTED_MESSAGE } });
+  });
+});
+
+describe('articleApi', () => {
+  it('builds an article route, encoding the id', () => {
+    expect(articleApi('a1')).toBe('/api/admin/articles/a1');
+    expect(articleApi('a1', 'tldr/generate')).toBe('/api/admin/articles/a1/tldr/generate');
+    expect(articleApi('a/b')).toBe('/api/admin/articles/a%2Fb');
   });
 });

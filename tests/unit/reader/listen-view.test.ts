@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyPlayerKey,
   createListenSync,
+  isFormControl,
   isManualScrollKey,
   isScrollKey,
   livePid,
   nextFollowing,
+  ownsScrollKeys,
+  pausesFollow,
   playerKeyAction,
   seekTarget,
   type AudioLike,
@@ -79,6 +83,83 @@ describe('nextFollowing (follow pause/resume decisions)', () => {
     expect(isManualScrollKey('PageDown', true)).toBe(false);
     expect(isManualScrollKey('ArrowLeft', false)).toBe(false);
     expect(isManualScrollKey(' ', false)).toBe(false);
+  });
+});
+
+const BUTTON = { tagName: 'BUTTON' };
+const TEXT_ENTRY = [{ tagName: 'INPUT' }, { tagName: 'textarea' }, { tagName: 'SELECT' }, { tagName: 'DIV', isContentEditable: true }];
+
+describe('ownsScrollKeys / isFormControl (two different focus predicates)', () => {
+  it('text-entry controls own the scroll keys; a button does not', () => {
+    for (const el of TEXT_ENTRY) expect(ownsScrollKeys(el), el.tagName).toBe(true);
+    expect(ownsScrollKeys(BUTTON)).toBe(false);
+    expect(ownsScrollKeys({ tagName: 'DIV' })).toBe(false);
+    expect(ownsScrollKeys(null)).toBe(false);
+  });
+
+  it('the player-key predicate also counts a button (its own Space/Enter activation wins)', () => {
+    for (const el of TEXT_ENTRY) expect(isFormControl(el), el.tagName).toBe(true);
+    expect(isFormControl(BUTTON)).toBe(true);
+    expect(isFormControl({ tagName: 'P' })).toBe(false);
+    expect(isFormControl(undefined)).toBe(false);
+  });
+});
+
+describe('pausesFollow (a scroll key on the window pauses following)', () => {
+  it('pauses with nothing focused and with a button focused (e.g. ▶)', () => {
+    expect(pausesFollow('PageDown', null)).toBe(true);
+    expect(pausesFollow('PageDown', BUTTON)).toBe(true);
+    expect(pausesFollow('End', BUTTON)).toBe(true);
+  });
+
+  it('never pauses while typing in a text-entry control, nor for non-scroll keys', () => {
+    for (const el of TEXT_ENTRY) expect(pausesFollow('PageDown', el), el.tagName).toBe(false);
+    expect(pausesFollow('ArrowLeft', null)).toBe(false);
+    expect(pausesFollow(' ', BUTTON)).toBe(false);
+  });
+});
+
+describe('applyPlayerKey (shared by AudioPlayer and ListenView)', () => {
+  function player(currentS = 12, durationS = 100) {
+    const calls: string[] = [];
+    return {
+      calls,
+      target: {
+        toggle: () => calls.push('toggle'),
+        seek: (s: number) => calls.push('seek ' + s),
+        currentTime: () => currentS,
+        durationS,
+        close: () => calls.push('close'),
+      },
+    };
+  }
+  function key(k: string) {
+    const e = { key: k, prevented: false, preventDefault() { e.prevented = true; } };
+    return e;
+  }
+
+  it('Space toggles, ←/→ seek ±5 s (default prevented); Escape closes without preventing', () => {
+    const p = player();
+    const space = key(' ');
+    expect(applyPlayerKey(space, null, p.target)).toBe(true);
+    expect(space.prevented).toBe(true);
+    applyPlayerKey(key('ArrowLeft'), null, p.target);
+    applyPlayerKey(key('ArrowRight'), null, p.target);
+    const esc = key('Escape');
+    expect(applyPlayerKey(esc, BUTTON, p.target)).toBe(true);
+    expect(esc.prevented).toBe(false);
+    expect(p.calls).toEqual(['toggle', 'seek 7', 'seek 17', 'close']);
+  });
+
+  it('ignores the player keys with a form control or a button focused, and unrelated keys', () => {
+    const p = player();
+    for (const el of [...TEXT_ENTRY, BUTTON]) {
+      const e = key(' ');
+      expect(applyPlayerKey(e, el, p.target)).toBe(false);
+      expect(e.prevented).toBe(false);
+    }
+    expect(applyPlayerKey(key('Enter'), null, p.target)).toBe(false);
+    expect(p.calls).toEqual([]);
   });
 });
 
@@ -203,8 +284,8 @@ describe('createListenSync (fake <audio>, fake scroll target)', () => {
       at(audio, 1);
       expect(seen.scrolls).toEqual(['p-a']);
 
-      // ListenView maps wheel / touchmove / a scroll key outside form controls to noteManualScroll.
-      if (how === 'PageDown') expect(isManualScrollKey(how, false)).toBe(true);
+      // ListenView maps wheel / touchmove / a scroll key (also with ▶ focused) to noteManualScroll.
+      if (how === 'PageDown') expect(pausesFollow(how, BUTTON)).toBe(true);
       sync.noteManualScroll();
       expect(sync.following()).toBe(false);
       expect(seen.follow).toEqual([false]); // Follow audio becomes visible

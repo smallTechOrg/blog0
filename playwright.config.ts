@@ -31,7 +31,14 @@ export default defineConfig({
     baseURL,
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // The walks share one database and run in this order (each needs the state the previous one
+  // leaves): tldr → reader → listen → smoke. Project dependencies pin it.
+  projects: [
+    { name: 'tldr', testMatch: 'tldr.spec.ts', use: { ...devices['Desktop Chrome'] } },
+    { name: 'reader', testMatch: 'reader.spec.ts', dependencies: ['tldr'], use: { ...devices['Desktop Chrome'] } },
+    { name: 'listen', testMatch: 'listen.spec.ts', dependencies: ['reader'], use: { ...devices['Desktop Chrome'] } },
+    { name: 'smoke', testMatch: 'smoke.spec.ts', dependencies: ['listen'], use: { ...devices['Desktop Chrome'] } },
+  ],
   webServer: externalBaseUrl
     ? undefined
     : {

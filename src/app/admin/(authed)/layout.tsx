@@ -1,8 +1,9 @@
+import { cookies } from 'next/headers';
 import type { ReactNode } from 'react';
 
 import { DeskHeader } from '@/components/admin/DeskHeader';
-
-import { loadAdminContext } from './_lib/admin-context';
+import { SESSION_COOKIE_NAME, validateSessionToken } from '@/server/auth/session';
+import { getCurrentSite } from '@/server/site/current';
 
 // Authenticated admin chrome: DeskHeader + page. A layout cannot see the pathname, so each page
 // calls requireAdminPage(<its own path>) and a signed-out writer lands on
@@ -12,11 +13,13 @@ import { loadAdminContext } from './_lib/admin-context';
 export const dynamic = 'force-dynamic';
 
 export default async function AuthedAdminLayout({ children }: { children: ReactNode }) {
-  const ctx = await loadAdminContext();
-  if (!ctx.user) return <>{children}</>;
+  const site = await getCurrentSite();
+  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? null;
+  const user = token ? ((await validateSessionToken(token, site.id))?.user ?? null) : null;
+  if (!user) return <>{children}</>;
   return (
     <div className="desk">
-      <DeskHeader wordmark={ctx.wordmark} userName={ctx.user.displayName} />
+      <DeskHeader wordmark={site.wordmark} userName={user.displayName} />
       {children}
     </div>
   );

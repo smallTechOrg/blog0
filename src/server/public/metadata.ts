@@ -7,7 +7,7 @@ import type { ArticleViewModel } from '@/lib/view-models';
 
 import { getConfig } from '../config';
 import { getDb } from '../db/client';
-import { article } from '../db/schema';
+import { article, type SiteRow } from '../db/schema';
 import { getCurrentSite } from '../site/current';
 import { publishedWhere, type PublishedArticlePage } from './articles';
 
@@ -64,6 +64,16 @@ export function sitePageMetadata(opts: { title: string; description?: string; ur
       siteName: opts.siteName,
     },
   };
+}
+
+/** `generateMetadata` for a non-article site page at `path` ('/', '/archive', '/about'): title and
+ *  description from the site record, canonical = the absolute address (BLOG0_PUBLIC_BASE_URL). */
+export async function sitePageRouteMetadata(
+  path: string,
+  page: (site: SiteRow) => { title: string; description?: string },
+): Promise<Metadata> {
+  const site = await getCurrentSite();
+  return sitePageMetadata({ ...page(site), url: getConfig().publicBaseUrl + path, siteName: site.wordmark });
 }
 
 /** `generateMetadata` for `/p/<slug>` and `/p/<slug>/tldr`; empty for an unknown slug (the page 404s). */

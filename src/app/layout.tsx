@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 import '@/styles/index.css';
 
-// Root layout (S1.4): self-hosted design fonts, the no-flash theme script, global CSS.
+// Root layout: self-hosted design fonts, the no-flash theme script, global CSS.
 // Reads no config and no DB, so `next build` stays env-free.
 
 const head = Space_Grotesk({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--nf-head', display: 'swap' });

@@ -1,12 +1,12 @@
-// Listen tab + image button → the Phase 3 routes (spec/api.md Endpoints — Phase 3). The admin UI
-// never calls PUT …/listen (aligner-facing since the Phase 3 fix). JSON calls
-// go through the shared apiRequest; uploads use XHR so `upload.onprogress` can drive the
-// progress bar and `abort()` the Cancel button. Same envelope handling as apiRequest.
+// Listen tab + image button → the audio and image routes (spec/api.md). The admin UI never calls
+// PUT …/listen (aligner-facing). JSON calls go through the shared apiRequest; uploads use XHR so
+// `upload.onprogress` can drive the progress bar and `abort()` the Cancel button. Same envelope
+// handling as apiRequest.
 
 import type { Envelope } from '@/lib/api/envelope';
 import type { GetListenResponse, ImageUploadResponse, ListenResponse } from '@/lib/api/dto';
 
-import { apiRequest, NETWORK_MESSAGE, UNEXPECTED_MESSAGE, type ApiFailure, type ApiResult } from '../api';
+import { apiRequest, articleApi, NETWORK_MESSAGE, toApiResult, type ApiResult } from '../api';
 
 export interface UploadProgress {
   loaded: number;
@@ -25,15 +25,8 @@ function parseEnvelope<T>(status: number, text: string): ApiResult<T> {
   } catch {
     envelope = null;
   }
-  if (envelope && envelope.ok === true) return { ok: true, status, data: envelope.data };
-  if (envelope && envelope.ok === false && envelope.error) {
-    const { code, message, details } = envelope.error;
-    const error: ApiFailure = { code, message: code === 'INTERNAL' ? UNEXPECTED_MESSAGE : message };
-    if (details !== undefined) error.details = details;
-    return { ok: false, status, error };
-  }
-  if (status === 413) return { ok: false, status, error: { code: 'PAYLOAD_TOO_LARGE', message: 'That file is too large.' } };
-  return { ok: false, status, error: { code: 'INTERNAL', message: UNEXPECTED_MESSAGE } };
+  if (!envelope && status === 413) return { ok: false, status, error: { code: 'PAYLOAD_TOO_LARGE', message: 'That file is too large.' } };
+  return toApiResult(status, envelope);
 }
 
 /** Multipart POST with progress + cancel. Resolves (never rejects) with the unwrapped envelope. */
@@ -68,25 +61,19 @@ export function uploadMultipart<T>(url: string, form: FormData, opts: UploadOpti
   });
 }
 
-export function listenPath(articleId: string): string {
-  return `/api/admin/articles/${encodeURIComponent(articleId)}/listen`;
-}
-export function audioPath(articleId: string): string {
-  return `/api/admin/articles/${encodeURIComponent(articleId)}/audio`;
-}
 
 export function getListen(articleId: string): Promise<ApiResult<GetListenResponse>> {
-  return apiRequest<GetListenResponse>(listenPath(articleId));
+  return apiRequest<GetListenResponse>(articleApi(articleId, 'listen'));
 }
 
 export function deleteAudio(articleId: string): Promise<ApiResult<ListenResponse>> {
-  return apiRequest<ListenResponse>(audioPath(articleId), { method: 'DELETE' });
+  return apiRequest<ListenResponse>(articleApi(articleId, 'audio'), { method: 'DELETE' });
 }
 
 export function uploadAudio(articleId: string, file: File, opts: UploadOptions = {}): Promise<ApiResult<ListenResponse>> {
   const form = new FormData();
   form.append('file', file, file.name);
-  return uploadMultipart<ListenResponse>(audioPath(articleId), form, opts);
+  return uploadMultipart<ListenResponse>(articleApi(articleId, 'audio'), form, opts);
 }
 
 export interface ImageUploadFields {

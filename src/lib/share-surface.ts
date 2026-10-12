@@ -64,3 +64,12 @@ const INTERACTIVE = new Set(['a', 'button', 'input', 'textarea', 'select', 'labe
 export function shareClickIgnored(path: ReadonlyArray<string>): boolean {
   return path.some((t) => INTERACTIVE.has(t));
 }
+
+/** The lower-cased tag names from a click target up to (not including) `stop` — the `path` for
+ *  `shareClickIgnored`. */
+export function clickTagPath(target: unknown, stop: unknown): string[] {
+  const path: string[] = [];
+  type Node = { tagName: string; parentElement: Node | null };
+  for (let n = target as Node | null; n && n !== stop; n = n.parentElement) path.push(n.tagName.toLowerCase());
+  return path;
+}

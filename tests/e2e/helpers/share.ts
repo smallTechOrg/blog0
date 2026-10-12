@@ -1,4 +1,4 @@
-// Share helpers for the Phase 2 reader walk (spec/capabilities/paragraph-share.md): the six menu
+// Share helpers for the reader walk (spec/capabilities/paragraph-share.md): the six menu
 // options, clipboard access, a stubbed navigator.share for mobile emulation, and the share text a
 // paragraph is expected to produce (computed the same way the reader does: footnote markers
 // removed, whitespace collapsed).

@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
 import { paragraphLink, quoteSubject } from '@/lib/share-links';
-import { paragraphIdFromHash, shareClickIgnored } from '@/lib/share-surface';
+import { clickTagPath, paragraphIdFromHash, shareClickIgnored } from '@/lib/share-surface';
 
 import { placeAgainst, type ShareController } from './ShareMenu';
 
@@ -106,9 +106,7 @@ export function ParagraphShare({ scopeRef, articleUrl, brand, controller }: Para
       const p = paraOf(e.target as Node);
       if (!p) return;
       // links, buttons and figures inside a paragraph keep their own behaviour
-      const path: string[] = [];
-      for (let n = e.target as Element | null; n && n !== p; n = n.parentElement) path.push(n.tagName.toLowerCase());
-      if (shareClickIgnored(path)) return;
+      if (shareClickIgnored(clickTagPath(e.target, p))) return;
       // a drag that left a selection is the selection gesture, not a tap
       if (selectedText().length > 2) return;
       pick(p, false);

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref
 
 import { fmtClock, listenMinutes } from '@/lib/listen/marks';
 
-import { isFormControl, playerKeyAction, seekTarget } from './listen-sync';
+import { applyPlayerKey } from './listen-sync';
 
 /* The design's AudioPanel (design-app.js) bound to a real <audio> (divergence 28):
    the same `.audio` markup, ▶ / ⏸, a 0.25 s range in seconds, m:ss clocks — only
@@ -120,15 +120,13 @@ export function AudioPlayer({ audio, bylineName, hotkeys = false, onEscape, ref 
   useEffect(() => {
     if (!hotkeys) return;
     function onKey(e: KeyboardEvent) {
-      const action = playerKeyAction(e.key, isFormControl(document.activeElement as HTMLElement | null));
-      if (!action) return;
-      if (action === 'close') {
-        onEscape?.();
-        return;
-      }
-      e.preventDefault();
-      if (action === 'toggle') toggle();
-      else seek(seekTarget(action, el.current?.currentTime ?? 0, dur));
+      applyPlayerKey(e, document.activeElement as HTMLElement | null, {
+        toggle,
+        seek,
+        currentTime: () => el.current?.currentTime ?? 0,
+        durationS: dur,
+        close: onEscape,
+      });
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

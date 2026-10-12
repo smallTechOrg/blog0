@@ -1,10 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import type { SubscriberListResponse } from '@/lib/api/dto';
 
-import type { SubscriberDto, SubscriberListResponse } from '@/lib/api/dto';
-
-import { apiRequest, signInHref } from '../api';
+import { AdminLoadError, stamped, useAdminLoad } from '../AdminLoad';
+import { apiRequest } from '../api';
 import { relativeTime } from '../relative-time';
 
 // Admin → Subscribers (spec/ui.md §4 "Later admin screens"): count, table, Export CSV.
@@ -13,36 +12,12 @@ import { relativeTime } from '../relative-time';
 const PATH = '/admin/subscribers';
 export const CSV_HREF = '/api/admin/subscribers?format=csv';
 
-type State =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string; signedOut: boolean }
-  | { kind: 'ready'; subscribers: SubscriberDto[]; total: number; now: Date };
-
-async function fetchSubscribers(): Promise<State> {
-  const res = await apiRequest<SubscriberListResponse>('/api/admin/subscribers');
-  if (res.ok) return { kind: 'ready', subscribers: res.data.subscribers, total: res.data.total, now: new Date() };
-  return { kind: 'error', message: res.error.message, signedOut: res.error.code === 'UNAUTHENTICATED' };
-}
+const fetchSubscribers = () => stamped(apiRequest<SubscriberListResponse>('/api/admin/subscribers'));
 
 export function SubscribersView({ timeZone }: { timeZone: string }) {
-  const [state, setState] = useState<State>({ kind: 'loading' });
-
-  const load = useCallback(async () => {
-    setState({ kind: 'loading' });
-    setState(await fetchSubscribers());
-  }, []);
-
-  useEffect(() => {
-    let live = true;
-    void fetchSubscribers().then((next) => {
-      if (live) setState(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const total = state.kind === 'ready' ? state.total : null;
+  const { load: state, reload } = useAdminLoad(fetchSubscribers);
+  const ready = state.kind === 'ready' ? state.data : null;
+  const total = ready ? ready.total : null;
 
   return (
     <main className="desk-main">
@@ -65,28 +40,15 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
           </p>
         ) : null}
 
-        {state.kind === 'error' ? (
-          <div className="admin-alert" role="alert">
-            <p>Couldn’t load the subscribers: {state.message}</p>
-            {state.signedOut ? (
-              <a className="admin-btn" href={signInHref(PATH)}>
-                Sign in again
-              </a>
-            ) : (
-              <button type="button" className="admin-btn" onClick={() => void load()}>
-                Retry
-              </button>
-            )}
-          </div>
-        ) : null}
+        {state.kind === 'error' ? <AdminLoadError error={state} what="the subscribers" onRetry={reload} signInPath={PATH} /> : null}
 
-        {state.kind === 'ready' && state.subscribers.length === 0 ? (
+        {ready && ready.subscribers.length === 0 ? (
           <div className="desk-empty">
             <p>No subscribers yet. Signups from the footer form on every public page land here.</p>
           </div>
         ) : null}
 
-        {state.kind === 'ready' && state.subscribers.length > 0 ? (
+        {ready && ready.subscribers.length > 0 ? (
           <div className="admin-tablewrap">
             <table className="data admin-table">
               <thead>
@@ -98,7 +60,7 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
                 </tr>
               </thead>
               <tbody>
-                {state.subscribers.map((s) => (
+                {ready.subscribers.map((s) => (
                   <tr key={s.email}>
                     <td className="admin-table__title mono">{s.email}</td>
                     <td>{s.name ? s.name : <span className="admin-faint">—</span>}</td>
@@ -107,7 +69,7 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
                     </td>
                     <td className="admin-table__updated">
                       <time dateTime={s.createdAt} title={s.createdAt}>
-                        {relativeTime(s.createdAt, state.now, timeZone)}
+                        {relativeTime(s.createdAt, ready.now, timeZone)}
                       </time>
                     </td>
                   </tr>

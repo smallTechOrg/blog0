@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
 import { AboutView } from '@/components/site/about/AboutView';
 import { aboutParagraphs } from '@/components/site/about/about-text';
 import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
 
+import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { apiRequest, signInHref } from '../api';
 
 import {
@@ -29,34 +30,10 @@ import {
 
 const PATH = '/admin/site';
 
-type Load =
-  | { kind: 'loading' }
-  | { kind: 'error'; message: string; signedOut: boolean }
-  | { kind: 'ready'; saved: SiteSettingsDto };
-
-async function fetchSettings(): Promise<Load> {
-  const res = await apiRequest<SiteSettingsResponse>('/api/admin/site');
-  if (res.ok) return { kind: 'ready', saved: res.data.site };
-  return { kind: 'error', message: res.error.message, signedOut: res.error.code === 'UNAUTHENTICATED' };
-}
+const fetchSettings = () => apiRequest<SiteSettingsResponse>('/api/admin/site');
 
 export function SiteSettingsView({ wordmark }: { wordmark: string }) {
-  const [load, setLoad] = useState<Load>({ kind: 'loading' });
-
-  const retry = useCallback(async () => {
-    setLoad({ kind: 'loading' });
-    setLoad(await fetchSettings());
-  }, []);
-
-  useEffect(() => {
-    let live = true;
-    void fetchSettings().then((next) => {
-      if (live) setLoad(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
+  const { load, setLoad, reload } = useAdminLoad(fetchSettings);
 
   return (
     <main className="desk-main">
@@ -71,23 +48,16 @@ export function SiteSettingsView({ wordmark }: { wordmark: string }) {
           </p>
         ) : null}
         {load.kind === 'error' ? (
-          <div className="admin-alert" role="alert">
-            <p>{load.signedOut ? 'Your session ended — sign in again to edit the site.' : load.message}</p>
-            <p>
-              {load.signedOut ? (
-                <a className="admin-btn admin-btn--small" href={signInHref(PATH)}>
-                  Sign in again
-                </a>
-              ) : (
-                <button type="button" className="admin-btn admin-btn--small" onClick={() => void retry()}>
-                  Retry
-                </button>
-              )}
-            </p>
-          </div>
+          <AdminLoadError
+            error={load}
+            message={load.signedOut ? 'Your session ended — sign in again to edit the site.' : load.message}
+            onRetry={reload}
+            signInPath={PATH}
+            small
+          />
         ) : null}
         {load.kind === 'ready' ? (
-          <SiteSettingsForm wordmark={wordmark} saved={load.saved} onSaved={(saved) => setLoad({ kind: 'ready', saved })} />
+          <SiteSettingsForm wordmark={wordmark} saved={load.data.site} onSaved={(site) => setLoad({ kind: 'ready', data: { site } })} />
         ) : null}
       </div>
     </main>

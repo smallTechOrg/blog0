@@ -5,16 +5,13 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 
 import type { ArticleListResponse, CreateArticleRequest, CreateArticleResponse } from '@/lib/api/dto';
+import { ARTICLE_LIMITS } from '@/lib/articles/limits';
 
 import { apiRequest } from './api';
 
 // New article (spec/ui.md §4): Title (required), Topic (datalist of existing topics), Dek,
 // Markdown (optional) → Create → POST /api/admin/articles → the editor.
 
-export const TITLE_MAX = 200;
-export const DEK_MAX = 400;
-export const TOPIC_MAX = 40;
-export const BODY_MAX = 200_000;
 
 export function NewArticleForm() {
   const router = useRouter();
@@ -72,11 +69,11 @@ export function NewArticleForm() {
         <form className="admin-form" onSubmit={onSubmit} noValidate>
           <label className="admin-field">
             <span className="admin-label">Title</span>
-            <input className="admin-input admin-input--title" name="title" required maxLength={TITLE_MAX} autoFocus disabled={pending} />
+            <input className="admin-input admin-input--title" name="title" required maxLength={ARTICLE_LIMITS.title} autoFocus disabled={pending} />
           </label>
           <label className="admin-field">
             <span className="admin-label">Topic</span>
-            <input className="admin-input" name="topic" list="new-article-topics" maxLength={TOPIC_MAX} disabled={pending} />
+            <input className="admin-input" name="topic" list="new-article-topics" maxLength={ARTICLE_LIMITS.topic} disabled={pending} />
             <datalist id="new-article-topics">
               {topics.map((t) => (
                 <option key={t} value={t} />
@@ -85,13 +82,13 @@ export function NewArticleForm() {
           </label>
           <label className="admin-field">
             <span className="admin-label">Dek</span>
-            <textarea className="admin-input admin-input--dek" name="dek" rows={2} maxLength={DEK_MAX} disabled={pending} />
+            <textarea className="admin-input admin-input--dek" name="dek" rows={2} maxLength={ARTICLE_LIMITS.dek} disabled={pending} />
           </label>
           <label className="admin-field">
             <span className="admin-label">
               Markdown <span className="admin-faint">(optional — you can paste it in the editor too)</span>
             </span>
-            <textarea className="admin-input mdedit__area" name="bodyMd" rows={12} maxLength={BODY_MAX} spellCheck={false} disabled={pending} />
+            <textarea className="admin-input mdedit__area" name="bodyMd" rows={12} maxLength={ARTICLE_LIMITS.body} spellCheck={false} disabled={pending} />
           </label>
           <div className="admin-form__actions">
             <button type="submit" className="admin-btn admin-btn--primary" disabled={pending} aria-busy={pending}>

@@ -4,12 +4,12 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
 import type { Block } from '@/lib/content/types';
-import { shareClickIgnored } from '@/lib/share-surface';
+import { clickTagPath, shareClickIgnored } from '@/lib/share-surface';
 import type { ListenViewModel } from '@/lib/view-models';
 
 import { ArticleBody } from './ArticleBody';
 import { AudioPlayer, type AudioPlayerHandle } from './AudioPlayer';
-import { createListenSync, isFormControl, isManualScrollKey, playerKeyAction, seekTarget, type ListenSync } from './listen-sync';
+import { applyPlayerKey, createListenSync, pausesFollow, type ListenSync } from './listen-sync';
 
 /* ============================================================
    Listen (spec/ui.md §3 Listen; divergences 28–29): the design's listen
@@ -92,13 +92,8 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
     }
     function pidOf(target: EventTarget | null): string | null {
       if (!(target instanceof Element)) return null;
-      const path: string[] = [];
-      let node: Element | null = target;
-      while (node && node !== scope) {
-        path.push(node.tagName.toLowerCase());
-        node = node.parentElement;
-      }
-      if (shareClickIgnored(path) || path.includes('figure')) return null;
+      // links, buttons, form controls and figures keep their own behaviour
+      if (shareClickIgnored(clickTagPath(target, scope))) return null;
       const para = target.closest<HTMLElement>('.para[data-pid]');
       return para && scope!.contains(para) ? para.dataset.pid || null : null;
     }
@@ -113,7 +108,8 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
       const active = document.activeElement as HTMLElement | null;
-      if (isManualScrollKey(e.key, isFormControl(active))) {
+      // a scroll key pauses following — also with ▶ focused, never while typing
+      if (pausesFollow(e.key, active)) {
         manual();
         return;
       }
@@ -122,15 +118,15 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
         if (seekTo(focusedPara.dataset.pid || '')) e.preventDefault();
         return;
       }
-      const action = playerKeyAction(e.key, isFormControl(active));
-      if (!action) return;
-      if (action === 'close') {
-        live.current.onClose();
-        return;
-      }
-      e.preventDefault();
-      if (action === 'toggle') player.current?.toggle();
-      else player.current?.seek(seekTarget(action, player.current.currentTime(), listen.durationMs / 1000));
+      const p = player.current;
+      if (!p) return;
+      applyPlayerKey(e, active, {
+        toggle: p.toggle,
+        seek: p.seek,
+        currentTime: p.currentTime,
+        durationS: listen.durationMs / 1000,
+        close: () => live.current.onClose(),
+      });
     };
 
     scope.addEventListener('click', onClick);

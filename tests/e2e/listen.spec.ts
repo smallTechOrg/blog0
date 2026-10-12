@@ -2,26 +2,26 @@ import { expect, test, type BrowserContext, type Locator, type Page } from '@pla
 
 import { countWords, estimateMarks } from '@/lib/listen/estimate';
 
-import { signInThroughForm } from './helpers/admin';
+import { createArticleApi, originOf, signIn } from './helpers/admin';
 import { withTestDb } from './helpers/db';
 import { AUDIO_FIXTURE, IMAGE_FIXTURE, audioFixtureMeta, expectRange206, pngFixtureMeta } from './helpers/upload';
 
-// Phase 3 Listen walk, revised by the Phase 3 fix (spec/roadmap.md → "Phase 3 fix" — "How the user
-// tests it"; capabilities listen-audio, listen-sync, media-images): sign in → a fresh four-paragraph
-// article (the words of the committed reading, tests/fixtures/audio/sample.json) → Listen tab:
-// upload sample.mp3 → Ready at once (preview player + estimated-timing note, no tap-along controls)
-// → Write tab: Image uploads sample.png → `![…](/media/…)` at the cursor → Publish (never blocked
-// by Listen) → /p/<slug>: capsule "Listen · 1 min" → Listen view: the soft highlight follows
-// currentTime on the server-estimated marks; a wheel scroll pauses following and shows Follow
-// audio; seeking while paused leaves the page where it is; Follow audio scrolls back and resumes;
+// Listen walk (capabilities listen-audio, listen-sync, media-images; spec/roadmap.md "How the user
+// tests it"): sign in → a fresh four-paragraph article (the words of the committed reading,
+// tests/fixtures/audio/sample.json) → Listen tab: upload sample.mp3 → Ready at once (preview player
+// + estimated-timing note, no tap-along controls) → Write tab: Image uploads sample.png →
+// `![…](/media/…)` at the cursor → Publish (never blocked by Listen) → /p/<slug>: capsule
+// "Listen · 1 min" → Listen view: the soft highlight follows currentTime on the server-estimated
+// marks; a wheel scroll pauses following and shows Follow audio; seeking while paused leaves the
+// page where it is; Follow audio scrolls back and resumes; PageDown with ▶ focused pauses again;
 // a paragraph click seeks and resumes → /media/<key> answers 206 → upload is locked while the
 // text is unsaved → edit a paragraph + Save → "text changed" warning, Publish changes still works
 // and the live Listen follows the new text → home card Listen opens the player-only overlay →
 // reverting the paragraph clears the warning → ← Desk confirms with unsaved text. Listen never
 // calls the LLM: zero new ai_generation rows.
 //
-// Runs after phase1-tldr and phase2-reader (file order), so the home card and the Listen quick
-// button for this article cannot disturb their assertions.
+// Runs after tldr.spec.ts and reader.spec.ts (project dependencies in playwright.config.ts), so
+// the home card and the Listen quick button for this article cannot disturb their assertions.
 
 const AUDIO = audioFixtureMeta();
 const PNG = pngFixtureMeta();
@@ -98,7 +98,7 @@ async function scrollY(page: Page): Promise<number> {
   return page.evaluate(() => window.scrollY);
 }
 
-/** No tap-along control anywhere on the page (Phase 3 fix). */
+/** No tap-along control anywhere on the page (timing is estimated, never tapped). */
 async function expectNoTapAlong(scope: Locator): Promise<void> {
   await expect(scope.getByRole('button', { name: /start syncing|save sync|tap|nudge|redo|undo|discard changes/i })).toHaveCount(0);
   await expect(scope.getByText(/Start syncing|Save sync|Needs sync|paragraph \d+ starts now/)).toHaveCount(0);
@@ -117,11 +117,10 @@ async function livePids(page: Page): Promise<string[]> {
 
 test.describe.configure({ mode: 'serial' });
 
-test.describe('Phase 3 Listen walk: upload → ready → image → publish → follow along → text changed', () => {
+test.describe('Listen walk: upload → ready → image → publish → follow along → text changed', () => {
   test.beforeAll(async ({ browser }, testInfo) => {
-    const baseURL = testInfo.project.use.baseURL as string;
-    j.origin = new URL(baseURL).origin;
-    j.context = await browser.newContext({ baseURL });
+    j.origin = originOf(testInfo);
+    j.context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
     j.page = await j.context.newPage();
     j.aiRowsBefore = await aiGenerationCount();
   });
@@ -132,15 +131,9 @@ test.describe('Phase 3 Listen walk: upload → ready → image → publish → f
 
   test('sign in and create a four-paragraph article (the reading’s words)', async () => {
     const { page, origin } = journey();
-    await page.goto('/admin/login?next=%2Fadmin');
-    await signInThroughForm(page);
+    await signIn(page);
 
-    const created = await page.request.post('/api/admin/articles', {
-      headers: { origin },
-      data: { title: TITLE, topic: TOPIC, dek: DEK, bodyMd: PARAS.join('\n\n') + '\n' },
-    });
-    expect(created.status(), await created.text()).toBe(201);
-    const article = (await created.json()).data.article as { id: string; slug: string };
+    const article = await createArticleApi(page.request, origin, { title: TITLE, topic: TOPIC, dek: DEK, bodyMd: PARAS.join('\n\n') + '\n' });
     j.articleId = article.id;
     j.slug = article.slug;
     expect(AUDIO.text).toBe(PARAS.join(' '));
@@ -342,6 +335,12 @@ test.describe('Phase 3 Listen walk: upload → ready → image → publish → f
     await expect(follow).toBeHidden();
     await expect(lastPara).toBeInViewport({ timeout: 2_000 });
     await expect(view.locator('.audio__play')).toBeFocused();
+
+    // PageDown with ▶ focused is a manual scroll too: following pauses, Follow audio is back.
+    await page.keyboard.press('PageDown');
+    await expect(follow).toBeVisible();
+    await follow.click();
+    await expect(follow).toBeHidden();
 
     // A paragraph click seeks the audio to its estimated start and resumes following.
     await page.mouse.move(textX.x + textX.width / 2, 360);

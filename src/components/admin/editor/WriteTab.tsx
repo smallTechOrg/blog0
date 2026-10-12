@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 
 import type { ArticleDetailDto } from '@/lib/api/dto';
+import { ARTICLE_LIMITS } from '@/lib/articles/limits';
 
 import type { EditorFields } from './fields';
 import { LivePreview } from './LivePreview';
@@ -11,10 +12,8 @@ import { MarkdownEditor, type MarkdownEditorHandle } from './MarkdownEditor';
 
 // Write tab (spec/ui.md §4): Title, Dek, Topic; Settings disclosure (slug, byline, featured,
 // in-progress badge); Markdown left + live preview right at ≥ 1100 px, a Write/Preview toggle
-// below that (admin.css switches on `data-pane`). Phase 3: the Image button in the editor's
-// toolbar slot; files dropped on the textarea go to the same queue.
-
-export const LIMITS = { title: 200, dek: 400, topic: 40, slug: 80, byline: 80, body: 200_000 } as const;
+// below that (admin.css switches on `data-pane`). The Image button sits in the editor's toolbar
+// slot; files dropped on the textarea go to the same queue. Field limits = the API's (ARTICLE_LIMITS).
 
 export interface WriteTabProps {
   article: ArticleDetailDto;
@@ -37,7 +36,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
           <input
             className="admin-input admin-input--title"
             value={fields.title}
-            maxLength={LIMITS.title}
+            maxLength={ARTICLE_LIMITS.title}
             required
             onChange={(e) => onField('title', e.target.value)}
           />
@@ -48,7 +47,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             className="admin-input admin-input--dek"
             rows={2}
             value={fields.dek}
-            maxLength={LIMITS.dek}
+            maxLength={ARTICLE_LIMITS.dek}
             onChange={(e) => onField('dek', e.target.value)}
           />
         </label>
@@ -58,7 +57,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             className="admin-input"
             value={fields.topic}
             list={`topics-${id}`}
-            maxLength={LIMITS.topic}
+            maxLength={ARTICLE_LIMITS.topic}
             onChange={(e) => onField('topic', e.target.value)}
           />
           <datalist id={`topics-${id}`}>
@@ -79,7 +78,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
               <input
                 className="admin-input mono"
                 value={fields.slug}
-                maxLength={LIMITS.slug}
+                maxLength={ARTICLE_LIMITS.slug}
                 disabled={article.slugLocked}
                 pattern="[a-z0-9]+(-[a-z0-9]+)*"
                 onChange={(e) => onField('slug', e.target.value)}
@@ -97,7 +96,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             <input
               className="admin-input"
               value={fields.bylineName}
-              maxLength={LIMITS.byline}
+              maxLength={ARTICLE_LIMITS.byline}
               onChange={(e) => onField('bylineName', e.target.value)}
             />
           </label>
@@ -150,7 +149,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             id={`md-${id}`}
             value={fields.bodyMd}
             onChange={(v) => onField('bodyMd', v)}
-            maxLength={LIMITS.body}
+            maxLength={ARTICLE_LIMITS.body}
             onDropFiles={(files) => imageRef.current?.addFiles(files)}
             tools={
               <ImageUploadButton

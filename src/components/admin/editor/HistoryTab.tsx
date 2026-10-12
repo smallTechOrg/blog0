@@ -1,6 +1,6 @@
 import { StubNotice } from '@/components/StubNotice';
 
-// Labelled stub (spec/ui.md §4): revision history is deferred (Phase 3 fix — no phase number);
+// Labelled stub (spec/ui.md §4): browsing revision history is deferred (no phase number);
 // revisions keep being recorded on every save.
 export function HistoryTab({ revisionCount }: { revisionCount: number }) {
   return (

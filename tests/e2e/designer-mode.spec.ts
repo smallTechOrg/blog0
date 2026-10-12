@@ -3,11 +3,11 @@ import path from 'node:path';
 
 import { expect, test } from '@playwright/test';
 
-import { signInThroughForm } from './helpers/admin';
+import { e2eAdmin, originOf, signIn } from './helpers/admin';
 import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
 import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGNER_ENV } from './designer.global-setup';
 
-// Designer mode end to end (S2.10, spec/capabilities/designer-mode.md → Success Criteria): the site
+// Designer mode end to end (spec/capabilities/designer-mode.md → Success Criteria): the site
 // served by `pnpm dev:design` on embedded PGlite from a clean state, with no OpenRouter key and no
 // session secret from .env. Runs only under playwright.design.config.ts (project "designer"): the
 // main E2E config (`pnpm test:e2e`, Postgres, `pnpm start` on 3411) must not run it.
@@ -33,12 +33,8 @@ interface DeckFixture {
 const FIXTURE = JSON.parse(readFileSync(`src/server/seed/decks/${SLUG}.json`, 'utf8')) as DeckFixture;
 const FIXTURE_LINES = FIXTURE.lines.map((l) => l.text);
 
-function designer(): { email: string; password: string; displayName: string } {
-  const email = process.env[DESIGNER_ENV.email] ?? '';
-  const password = process.env[DESIGNER_ENV.password] ?? '';
-  if (!email || !password) throw new Error('designer credentials missing — tests/e2e/designer.global-setup.ts did not run');
-  return { email, password, displayName: 'Designer' };
-}
+/** The designer admin dev:design generated (handed over by designer.global-setup.ts). */
+const designer = () => e2eAdmin(DESIGNER_ENV, 'Designer');
 
 test.describe.configure({ mode: 'serial' });
 
@@ -113,8 +109,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
   });
 
   test('the generated designer admin signs in; the desk lists 5 published articles with TLDR ready', async ({ page }) => {
-    await page.goto('/admin/login');
-    await signInThroughForm(page, designer());
+    await signIn(page, designer());
 
     const rows = page.locator('.admin-table tbody tr');
     await expect(rows).toHaveCount(5);
@@ -132,9 +127,8 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     await expect(page).toHaveURL(/\/admin\/login/);
   });
 
-  test('with no OpenRouter key the TLDR tab shows the notice and Generate is disabled; the API refuses', async ({ page }) => {
-    await page.goto('/admin/login');
-    await signInThroughForm(page, designer());
+  test('with no OpenRouter key the TLDR tab shows the notice and Generate is disabled; the API refuses', async ({ page }, testInfo) => {
+    await signIn(page, designer());
     await page.getByRole('link', { name: TITLE }).click();
     await expect(page).toHaveURL(/\/admin\/articles\/[^/]+$/);
     const articleId = new URL(page.url()).pathname.split('/').pop()!;
@@ -151,7 +145,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     await expect(page.locator('#tab-tldr .tabchip')).toHaveText('ready');
 
     // The server refuses too, before any AI call or generation row (README: 503 LLM_NOT_CONFIGURED).
-    const origin = { origin: `http://localhost:${DESIGN_E2E_PORT}` };
+    const origin = { origin: originOf(testInfo) };
     const detail = await page.request.get(`/api/admin/articles/${articleId}`);
     expect(detail.status()).toBe(200);
     const revisionId = ((await detail.json()) as { data: { article: { currentRevision: { id: string } } } }).data.article
@@ -164,11 +158,10 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect(await res.json()).toMatchObject({ ok: false, error: { code: 'LLM_NOT_CONFIGURED' } });
   });
 
-  test('an mp3 upload streams back from /media/<key> (206) on PGlite; the file lands in ./var/storage and Remove deletes it', async ({ page }) => {
-    const origin = `http://localhost:${DESIGN_E2E_PORT}`;
+  test('an mp3 upload streams back from /media/<key> (206) on PGlite; the file lands in ./var/storage and Remove deletes it', async ({ page }, testInfo) => {
+    const origin = originOf(testInfo);
     const audioMeta = audioFixtureMeta();
-    await page.goto('/admin/login');
-    await signInThroughForm(page, designer());
+    await signIn(page, designer());
     const list = await page.request.get('/api/admin/articles');
     expect(list.status()).toBe(200);
     const articles = ((await list.json()) as { data: { articles: { id: string; slug: string }[] } }).data.articles;

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { e2eAdmin, signInThroughForm } from './helpers/admin';
+import { createArticleApi, originOf, publishApi, signIn } from './helpers/admin';
 import { withTestDb } from './helpers/db';
 import {
   BRAND,
@@ -18,15 +18,16 @@ import {
   stubNativeShare,
 } from './helpers/share';
 
-// Phase 2 reader walk (spec/roadmap.md → Phase 2 "How the user tests it", full path): the public
+// Reader walk (capabilities reader-site, article-reading, paragraph-share; full path): the public
 // site under the brand blog0 with the 5 seeded design articles and their fixture decks (seeded by
 // global-setup.ts — 0 LLM calls on this walk). Home (boot strip, wordmark, About, Featured,
 // Latest), card TLDR → deck over the list, Archive + topic filter, About, newsletter →
 // Admin → Subscribers, Admin → Site → About text, paragraph / article / deck share (desktop menu
 // and stubbed native sheet on mobile), deep links, theme persistence, legacy hash links, OG tags,
-// sitemap, and Listen without a recording (disabled; the Phase 3 walk is phase3-listen.spec.ts).
+// sitemap, and Listen without a recording (disabled; the Listen walk is listen.spec.ts).
 //
-// phase1-tldr.spec.ts runs before this file and publishes one more Op-Ed article, so counts that
+// tldr.spec.ts runs before this file (project dependencies in playwright.config.ts) and publishes
+// one more Op-Ed article, so counts that
 // depend on "every published article" are read from blog0_test rather than hard-coded.
 
 const SEEDED = {
@@ -46,12 +47,6 @@ const FEATURED_ORDER = [SEEDED.destroy.title, SEEDED.techFirst.title, SEEDED.hum
 const HUMANS_DEK =
   'A human is a collection of perceptions, feelings, thoughts and intentions — read through the Buddha’s account of how perception becomes proliferation.';
 const NL_DONE = 'You’re in. First issue lands Thursday.';
-
-function baseUrlOf(testInfo: { project: { use: { baseURL?: string } } }): string {
-  const base = testInfo.project.use.baseURL;
-  if (!base) throw new Error('baseURL missing from playwright.config.ts');
-  return base.replace(/\/$/, '');
-}
 
 interface PublishedRow {
   slug: string;
@@ -90,7 +85,7 @@ async function bootLine(page: Page) {
 
 test.describe.configure({ mode: 'serial' });
 
-test.describe('Phase 2 reader site (blog0)', () => {
+test.describe('reader site (blog0)', () => {
   test('global setup seeded the 5 design articles, each with a published fixture deck and 0 AI calls', async () => {
     const rows = await withTestDb(
       (sql) => sql<Array<{ slug: string; status: string; deck: boolean }>>`
@@ -165,7 +160,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
     } else {
       await expect(latest.locator('.feed__status')).toHaveText('That’s everything in the feed.');
     }
-    // Listen quick buttons stay hidden until audio exists (Phase 3).
+    // Listen quick buttons stay hidden until a recording is published.
     await expect(page.getByRole('button', { name: /^Listen to / })).toHaveCount(0);
 
     await latest.getByRole('link', { name: 'View all articles' }).click();
@@ -286,8 +281,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
     );
     expect(stored).toEqual([{ email, name: 'E2E Reader' }]);
 
-    await page.goto('/admin/login?next=%2Fadmin');
-    await signInThroughForm(page);
+    await signIn(page);
     await page.getByRole('navigation', { name: 'Desk' }).getByRole('link', { name: 'Subscribers' }).click();
     await expect(page).toHaveURL(/\/admin\/subscribers$/);
     const row = page.locator('.admin-table tbody tr', { hasText: email });
@@ -303,9 +297,8 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('Admin → Site: editing the About strap changes home and /about (restored afterwards)', async ({ page }, testInfo) => {
-    const base = baseUrlOf(testInfo);
-    await page.goto('/admin/login?next=%2Fadmin');
-    await signInThroughForm(page, e2eAdmin());
+    const base = originOf(testInfo);
+    await signIn(page);
     await page.getByRole('navigation', { name: 'Desk' }).getByRole('link', { name: 'Site' }).click();
     await expect(page).toHaveURL(/\/admin\/site$/);
     const strapField = page.getByLabel('About strap');
@@ -332,7 +325,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('paragraph share (desktop): highlight, clipboard = quote + link, six options; Escape closes only the menu', async ({ page, context }, testInfo) => {
-    const base = baseUrlOf(testInfo);
+    const base = originOf(testInfo);
     await grantClipboard(context, base);
     await page.goto(`/p/${SEEDED.humans.slug}`);
     await clearClipboard(page);
@@ -389,7 +382,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('Share article copies "<title> — blog0" + the article URL and opens the menu', async ({ page, context }, testInfo) => {
-    const base = baseUrlOf(testInfo);
+    const base = originOf(testInfo);
     await grantClipboard(context, base);
     await page.goto(`/p/${SEEDED.humans.slug}`);
     await clearClipboard(page);
@@ -408,7 +401,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('deck end slide Share copies the deck text + link; the menu opens inside the deck; Escape closes only the menu', async ({ page, context }, testInfo) => {
-    const base = baseUrlOf(testInfo);
+    const base = originOf(testInfo);
     await grantClipboard(context, base);
     await page.goto(`/p/${SEEDED.humans.slug}/tldr`);
     const deck = page.locator('.tdeck');
@@ -455,7 +448,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('mobile (390 px, touch) with navigator.share: tapping a paragraph opens the native sheet, no menu', async ({ browser }, testInfo) => {
-    const base = baseUrlOf(testInfo);
+    const base = originOf(testInfo);
     const context = await browser.newContext({
       baseURL: base,
       viewport: { width: 390, height: 844 },
@@ -486,7 +479,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
 
   test('mobile: when navigator.share rejects (not AbortError) the share menu opens instead', async ({ browser }, testInfo) => {
     const context = await browser.newContext({
-      baseURL: baseUrlOf(testInfo),
+      baseURL: originOf(testInfo),
       viewport: { width: 390, height: 844 },
       hasTouch: true,
       isMobile: true,
@@ -536,7 +529,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('an article carries its title and OG / Twitter tags', async ({ page, request }, testInfo) => {
-    const base = baseUrlOf(testInfo);
+    const base = originOf(testInfo);
     const res = await request.get(`/p/${SEEDED.humans.slug}`);
     expect(res.status()).toBe(200);
     const html = await res.text();
@@ -554,7 +547,7 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('/sitemap.xml lists every published article (the 5 seeded included) plus /, /archive, /about', async ({ request }, testInfo) => {
-    const base = baseUrlOf(testInfo);
+    const base = originOf(testInfo);
     const res = await request.get('/sitemap.xml');
     expect(res.status()).toBe(200);
     const xml = await res.text();
@@ -568,14 +561,18 @@ test.describe('Phase 2 reader site (blog0)', () => {
     expect(locs).toHaveLength(published.length + 3);
   });
 
-  // Phase 3 replaced the Listen stub (S3.5); the real walk is phase3-listen.spec.ts. A seeded
-  // article has no recording: Listen is disabled with its reason, and /listen falls back to Read.
+  // A seeded article has no recording: Listen is disabled with its reason (in the capsule and in the
+  // deck's switcher alike), and /listen falls back to Read. The Listen walk is listen.spec.ts.
   test('without a recording the capsule’s Listen is disabled ("No recording yet") and /listen falls back to Read', async ({ page }) => {
     await page.goto(`/p/${SEEDED.humans.slug}`);
     const listen = page.locator('.modedock').getByRole('tab', { name: 'Listen — no recording yet' });
     await expect(listen).toBeVisible();
     await expect(listen).toBeDisabled();
     await expect(listen).toHaveAttribute('title', 'No recording yet');
+    await page.locator('.modedock').getByRole('tab', { name: /^TLDR — \d+ min$/ }).click();
+    const deckListen = page.locator('.tdeck__foot').getByRole('tab', { name: 'Listen — no recording yet' });
+    await expect(deckListen).toBeDisabled();
+    await expect(deckListen).toHaveAttribute('title', 'No recording yet');
 
     await page.goto(`/p/${SEEDED.humans.slug}/listen`);
 
@@ -585,27 +582,17 @@ test.describe('Phase 2 reader site (blog0)', () => {
   });
 
   test('See More: with more than 5 non-featured posts, Latest shows 5, then all of them', async ({ page }, testInfo) => {
-    const base = baseUrlOf(testInfo);
-    await page.goto('/admin/login?next=%2Fadmin');
-    await signInThroughForm(page);
+    const base = originOf(testInfo);
+    await signIn(page);
     const nonFeatured = (await publishedArticles()).filter((p) => !p.is_featured).length;
     for (let i = nonFeatured; i < 7; i += 1) {
-      const created = await page.request.post('/api/admin/articles', {
-        headers: { origin: base },
-        data: {
-          title: `Feed filler ${i + 1}`,
-          topic: 'Notes',
-          dek: 'A short post that pads the Latest feed past one batch.',
-          bodyMd: `A short post that pads the Latest feed past one batch, number ${i + 1}.\n\nIt has a second paragraph so it reads like an article.\n`,
-        },
+      const article = await createArticleApi(page.request, base, {
+        title: `Feed filler ${i + 1}`,
+        topic: 'Notes',
+        dek: 'A short post that pads the Latest feed past one batch.',
+        bodyMd: `A short post that pads the Latest feed past one batch, number ${i + 1}.\n\nIt has a second paragraph so it reads like an article.\n`,
       });
-      expect(created.status(), await created.text()).toBe(201);
-      const article = (await created.json()).data.article as { id: string; currentRevision: { id: string } };
-      const published = await page.request.post(`/api/admin/articles/${article.id}/publish`, {
-        headers: { origin: base },
-        data: { revisionId: article.currentRevision.id },
-      });
-      expect(published.status(), await published.text()).toBe(200);
+      await publishApi(page.request, base, article.id, article.currentRevision.id);
     }
     const expected = (await publishedArticles()).filter((p) => !p.is_featured).map((p) => p.title);
     expect(expected.length).toBeGreaterThanOrEqual(7);

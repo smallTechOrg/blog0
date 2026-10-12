@@ -136,7 +136,6 @@ img, svg { max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
-  .reveal, .reveal.is-in { opacity: 1 !important; transform: none !important; animation: none !important; }
   .split .sw, .dekin, .sb__frag, .sb__fig {
     opacity: 1 !important; transform: none !important;
     filter: none !important; animation: none !important;
@@ -225,11 +224,6 @@ img, svg { max-width: 100%; }
 }
 .iconbtn:hover { color: var(--text); background: var(--surface-2); }
 .iconbtn.is-on { color: var(--accent-ink); }
-.searchbar { border-top: 1px solid var(--border); background: var(--surface); }
-.searchbar__in { display: flex; align-items: center; gap: 10px; max-width: var(--col); margin: 0 auto; height: 54px; padding: 0 20px; color: var(--muted); }
-.searchbar input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 18px; padding: 6px 0; }
-.searchbar input::placeholder { color: var(--faint); }
-.searchbar input:focus { outline: none; }
 
 /* ============================================================
    Shared UI bits
@@ -424,26 +418,6 @@ img, svg { max-width: 100%; }
   font-family: var(--font-head); font-size: 13.5px; color: var(--faint);
 }
 
-/* --- reactions ---------------------------------------------------------
-   One per reader, counted from zero. No comment threads yet. */
-.rx { max-width: 700px; margin: 40px auto 0; padding-top: 26px; border-top: 1px solid var(--border); }
-.rx__lbl { margin: 0 0 14px; font-family: var(--font-head); font-size: 15.5px; font-weight: 600; }
-.rx__row { display: flex; flex-wrap: wrap; gap: 8px; }
-.rxbtn {
-  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
-  border: 1px solid var(--border-strong); border-radius: 999px;
-  background: transparent; color: var(--text); font: inherit;
-  padding: 8px 15px; font-family: var(--font-head); font-size: 14.5px;
-  transition: border-color .15s ease, background .15s ease, opacity .15s ease;
-}
-.rxbtn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-softer); }
-.rxbtn__e { font-size: 16px; line-height: 1; }
-.rxbtn__n { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
-.rxbtn.is-mine { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
-.rxbtn.is-spent { opacity: .45; cursor: default; }
-.rx__note { margin: 12px 0 0; font-family: var(--font-head); font-size: 12.5px; color: var(--faint); }
-.rx__share { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); display: flex; }
-
 /* ============================================================
    Footer — v2: dark band, mono type, newsletter left, colophon right,
    an ASCII hand drawn on a canvas behind it all. Tokens are scoped
@@ -588,210 +562,10 @@ table.data td.neg { color: var(--accent-ink); }
 .verdict--signal { border-color: var(--accent); color: var(--accent-ink); background: var(--accent-softer); }
 .caption { font-family: var(--font-head); font-size: 14px; color: var(--faint); margin: 0 0 30px; max-width: 62ch; }
 
-/* margin notes — removed */
-.notegrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 48px; position: relative; align-items: start; }
-.notecol { display: none; position: relative; }
-.note { display: none; }
-.note__x { display: none; }
-.note__src { display: none; }
-.ann { display: none; }
-.prose p.ann-p, .prose li.ann-p, .prose blockquote.ann-p { display: none; }
-
-/* --- threads ----------------------------------------------------------
-   A margin note is the first comment in a thread. Replies nest one level
-   under it, and every comment carries the same three actions. The same
-   markup serves the margin column and the bottom sheet, so there is one
-   thread language on the site rather than two. */
-.cmt { padding-top: 9px; }
-.cmt + .cmt { border-top: 1px solid var(--border); margin-top: 9px; }
-.cmt__head { display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px; }
-.cmt__who { font-family: var(--font-head); font-size: 13.5px; font-weight: 600; }
-.cmt__when { font-family: var(--font-head); font-size: 12px; color: var(--faint); }
-.cmt__body { margin: 0; white-space: pre-wrap; word-wrap: break-word; }
-.cmt__acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.cmtbtn {
-  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
-  border: 0; background: transparent; border-radius: 3px; padding: 3px 7px;
-  font-family: var(--font-head); font-size: 12.5px; color: var(--muted);
-  transition: color .15s ease, background .15s ease;
-}
-.cmtbtn:hover { color: var(--text); background: var(--surface-2); }
-.cmtbtn.is-on { color: var(--accent-ink); }
-.cmtbtn__n { font-family: var(--font-mono); font-size: 11.5px; }
-.thread__replies { margin: 8px 0 0; padding-left: 11px; border-left: 2px solid var(--border); }
-.thread__replies .cmt:first-child { padding-top: 4px; }
-.thread__more { font-family: var(--font-head); font-size: 12.5px; color: var(--accent-ink); background: transparent; border: 0; padding: 6px 0 0; cursor: pointer; }
-.replybox { margin-top: 8px; }
-.replybox textarea {
-  width: 100%; min-height: 54px; resize: vertical; font: inherit; font-size: 14.5px;
-  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 7px;
-}
-.replybox textarea:focus { outline: none; border-color: var(--accent); }
-.replybox__row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
-
 /* the compose surface: same tokens as the menu it opens from */
 .popover { position: fixed; z-index: 92; width: 288px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 5px; box-shadow: var(--shadow); padding: 10px; }
-.popover__src { margin: 0 0 8px; font-size: 13.5px; font-style: italic; color: var(--muted); line-height: 1.45; }
 .popover textarea { width: 100%; min-height: 72px; resize: vertical; font: inherit; font-size: 15px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 8px; }
 .popover textarea:focus { outline: none; border-color: var(--accent); }
-.popover__row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
-.btn-sm { border: 1px solid var(--border-strong); background: transparent; border-radius: 3px; padding: 5px 11px; font-family: var(--font-head); font-size: 14.5px; cursor: pointer; }
-.btn-sm:hover { border-color: var(--text); }
-.btn-sm--go { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-
-/* inline note marker (mobile) — sits right after the highlighted span so the
-   paragraph never splits or reflows vertically */
-.notemark {
-  display: none; vertical-align: super; margin-left: 2px;
-  min-width: 17px; height: 17px; padding: 0 4px;
-  border: 1px solid var(--accent); border-radius: 9px;
-  background: var(--accent-soft); color: var(--accent-ink);
-  font-family: var(--font-head); font-size: 11px; font-weight: 600; line-height: 15px;
-  cursor: pointer; -webkit-appearance: none; appearance: none;
-}
-.notemark:active { background: var(--accent); color: var(--on-accent); }
-/* first-visit tip — replaces the permanent "Select any passage…" hint lines.
-   Shown once per reader (remembered in localStorage), then never again. */
-.notetip {
-  position: fixed; z-index: 70; left: 16px; right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  display: flex; align-items: flex-start; gap: 11px;
-  background: var(--surface); color: var(--text);
-  border: 1px solid var(--border-strong); border-left: 3px solid var(--accent);
-  border-radius: 0 5px 5px 0; box-shadow: var(--shadow); padding: 13px 14px;
-  animation: tipIn 360ms cubic-bezier(.2,.75,.25,1) both;
-}
-.notetip > svg { color: var(--accent-ink); flex: none; margin-top: 2px; }
-.notetip__txt { flex: 1; min-width: 0; font-family: var(--font-head); font-size: 14.5px; line-height: 1.45; }
-.notetip__txt b { display: block; font-weight: 600; margin-bottom: 2px; }
-.notetip__txt span { color: var(--muted); }
-.notetip .btn-sm { flex: none; align-self: center; }
-@keyframes tipIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-
-/* phone: a zero-height anchor at the top of the first passage; the tip hangs
-   above it with a caret pointing down at the text, and scrolls with the page */
-.notebody { position: relative; }
-.notetip-anchor { position: absolute; left: 0; right: 0; height: 0; z-index: 70; }
-.notetip--inline { position: absolute; left: 0; right: 0; bottom: 12px; top: auto; }
-.notetip--inline::after {
-  content: ''; position: absolute; left: 22px; bottom: -7px; width: 12px; height: 12px;
-  background: var(--surface); border-right: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong);
-  transform: rotate(45deg);
-}
-.pvpage .notetip-anchor { left: 20px; right: 20px; }
-.notetip--float { display: none; }
-@media (min-width: 1240px) {
-  .notetip-anchor { display: none; }
-  .notetip--float { display: flex; left: auto; right: 24px; bottom: 24px; width: 340px; }
-}
-
-/* bottom sheet — same surface/border/shadow tokens as the .hlmenu popover */
-.notesheet__scrim { position: fixed; inset: 0; z-index: 88; background: rgba(0,0,0,.34); }
-.notesheet {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 90;
-  background: var(--surface); color: var(--text);
-  border-top: 3px solid var(--accent);
-  border-radius: 10px 10px 0 0; box-shadow: var(--shadow);
-  padding: 8px 18px calc(18px + env(safe-area-inset-bottom, 0px));
-  max-height: 72vh; overflow-y: auto;
-}
-.notesheet__grip { width: 36px; height: 4px; border-radius: 2px; background: var(--border-strong); margin: 0 auto 12px; }
-.notesheet__head { font-family: var(--font-head); font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-.notesheet__src { font-size: 14.5px; font-style: italic; color: var(--muted); margin: 0 0 12px; line-height: 1.45; }
-.notesheet__body { font-size: 16px; line-height: 1.55; margin: 0 0 14px; white-space: pre-wrap; word-wrap: break-word; }
-.notesheet textarea {
-  width: 100%; min-height: 84px; resize: vertical; font: inherit; font-size: 16px;
-  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 9px;
-}
-.notesheet textarea:focus { outline: none; border-color: var(--accent); }
-.notesheet__row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.notesheet__foot {
-  font-family: var(--font-head); font-size: 12px; color: var(--faint);
-  padding: 10px 0 0; border-top: 1px solid var(--border); margin-top: 12px;
-}
-/* The margin column needs a real gutter beside a centred 700px column, which
-   only exists past ~1240px. Below that the inline marker + bottom sheet (the
-   treatment built for mobile) takes over at every width. */
-@media (max-width: 1239px) {
-  .notemark { display: inline-block; }
-}
-.notegrid.notegrid--overlay { display: block; position: relative; }
-.notecol.notecol--overlay { display: none; }
-.pvpage .notecol.notecol--overlay { right: max(12px, calc((100% - 1124px) / 2 - 272px)); }
-
-/* ============================================================
-   Op-Ed — ToC, line nav, aside, tiers, word cloud, pull quotes
-   ============================================================ */
-.toc { max-width: 760px; margin: 26px 0 8px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0; padding: 20px 22px; }
-.toc h2 { font-family: var(--font-head); font-weight: 600; font-size: 16px; letter-spacing: 0; margin: 0 0 12px; }
-.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.toc a { font-family: var(--font-body); font-size: 15.5px; line-height: 1.4; color: var(--text); transition: color .15s ease; }
-.toc a:hover, .toc a:focus-visible { color: var(--accent-ink); }
-
-.opedlayout { display: flex; flex-direction: column; gap: 0; }
-/* clears the sticky header rather than sliding under it */
-.navcol { position: sticky; top: calc(var(--booth) + var(--headh) + 6px); z-index: 40; width: 100%; background: var(--bg-blur); padding: 10px 0; }
-.navlines { display: none; flex-direction: column; gap: 14px; padding: 4px 0; }
-.navline { position: relative; display: block; width: 24px; height: 14px; background: transparent; border: 0; padding: 0; cursor: pointer; }
-.navline::before { content: ''; position: absolute; left: 0; top: 6px; width: 24px; height: 2px; background: var(--border-strong); transition: width .18s ease, height .18s ease, background .18s ease; }
-.navline:hover::before { background: var(--muted); }
-.navline.is-on::before { background: var(--accent); height: 3px; width: 34px; }
-.navline__label {
-  position: absolute; left: 44px; top: 50%; transform: translateY(-50%); white-space: nowrap;
-  font-family: var(--font-head); font-size: 14px; color: var(--text);
-  background: var(--surface); border: 1px solid var(--border); border-radius: 3px; padding: 3px 9px; box-shadow: var(--shadow);
-  opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 30;
-}
-.navline:hover .navline__label, .navline:focus-visible .navline__label { opacity: 1; }
-.navselect { display: block; width: 100%; font-family: var(--font-head); font-size: 15px; padding: 9px 10px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 3px; }
-
-.opedbody { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 40px; }
-.opedbody > section { grid-column: 1; }
-.asidegrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 40px; align-items: start; width: 100%; }
-.godeeper { border-left: 3px solid var(--accent); background: var(--accent-softer); padding: 13px 15px; font-size: 15.5px; line-height: 1.55; border-radius: 0 3px 3px 0; margin: 6px 0 22px; }
-.godeeper h4 { font-size: 14px; font-weight: 700; color: var(--accent-ink); margin-bottom: 6px; letter-spacing: 0; }
-.godeeper p { margin: 0; }
-.reveal { opacity: 0; transform: translateY(14px); }
-.reveal.is-in { opacity: 1; transform: none; transition: opacity .45s ease, transform .45s ease; }
-@supports (animation-timeline: view()) {
-  .reveal { animation: revealin linear both; animation-timeline: view(); animation-range: cover 4% cover 34%; }
-  .reveal.is-in { transition: none; }
-}
-@keyframes revealin { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-
-.tiers { display: flex; flex-direction: column; gap: 22px; align-items: flex-start; }
-.tiers__diagram { position: static; width: 100%; }
-.tiers__prose { flex: 1 1 auto; min-width: 0; max-width: 700px; }
-.tierbox { border: 1px solid var(--border); border-radius: 3px; background: var(--surface); padding: 10px; }
-.tierbox__cap { font-family: var(--font-head); font-size: 13.5px; color: var(--faint); padding: 2px 4px 10px; line-height: 1.4; }
-.tier { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 2px; font-family: var(--font-head); font-size: 15px; border: 1px solid transparent; transition: background .25s ease, border-color .25s ease, color .25s ease; color: var(--muted); }
-.tier + .tier { margin-top: 3px; }
-.tier__bar { width: 4px; align-self: stretch; background: var(--border-strong); border-radius: 2px; transition: background .25s ease; }
-.tier.is-on { background: var(--accent-softer); border-color: var(--accent); color: var(--text); }
-.tier.is-on .tier__bar { background: var(--accent); }
-.tier__name { font-weight: 500; }
-.tier__note { display: block; font-size: 13px; color: var(--faint); }
-.tiers__prose h3 { scroll-margin-top: 100px; }
-
-.cloud { border: 1px solid var(--border); border-radius: 3px; background: var(--surface); padding: 18px; margin: 26px 0 8px; }
-.cloud__teams { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
-.teambtn { border: 1px solid var(--border-strong); background: transparent; border-radius: 999px; padding: 6px 14px; font-family: var(--font-head); font-size: 14.5px; cursor: pointer; transition: all .15s ease; }
-.teambtn:hover { border-color: var(--accent); }
-.teambtn.is-on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-.cloud__values { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; min-height: 84px; }
-.chip { font-family: var(--font-head); font-weight: 500; border: 0; background: transparent; cursor: pointer; padding: 2px 4px; border-radius: 2px; line-height: 1.2; transition: color .18s ease, opacity .18s ease; color: var(--text); }
-.chip:hover { color: var(--accent-ink); }
-.chip.is-dim { opacity: .24; }
-.chip.is-hit { color: var(--accent-ink); }
-.cloud__readout { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 15.5px; color: var(--muted); min-height: 46px; }
-.cloud__readout b { color: var(--text); font-weight: 600; }
-
-.pullquote { margin: 34px 0; border-left: 3px solid var(--accent); padding: 4px 0 4px 20px; }
-.pullquote p { font-family: var(--font-body); font-style: italic; font-weight: 400; font-size: 20px; line-height: 1.45; margin: 0; }
-.pullquote__tools { display: flex; gap: 6px; margin-top: 12px; }
-.qbtn { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: transparent; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: color .15s ease, border-color .15s ease; }
-.qbtn:hover { color: var(--text); border-color: var(--border-strong); }
-.qbtn.is-done { color: var(--accent-ink); border-color: var(--accent); }
 
 /* ============================================================
    Sentence highlighting (op-ed body) — v1, highlight only
@@ -818,16 +592,6 @@ table.data td.neg { color: var(--accent-ink); }
 }
 .hlmenu__opt:hover, .hlmenu__opt:focus-visible { background: var(--accent-softer); color: var(--text); }
 .hlmenu__foot { font-family: var(--font-head); font-size: 12px; color: var(--faint); padding: 8px 4px 0; border-top: 1px solid var(--border); margin-top: 8px; }
-/* the note action leads, because starting a thread is the point of the menu;
-   sharing sits under it as the secondary row */
-.hlmenu__note {
-  display: flex; width: 100%; align-items: center; justify-content: center; gap: 8px;
-  border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent);
-  border-radius: 3px; padding: 9px 12px; cursor: pointer;
-  font-family: var(--font-head); font-size: 14.5px; font-weight: 600;
-}
-.hlmenu__note:hover { filter: brightness(1.07); }
-.hlmenu__or { font-family: var(--font-head); font-size: 12px; color: var(--faint); padding: 10px 4px 6px; }
 
 /* ============================================================
    Entrance motion — same detection + fallback contract as .reveal,
@@ -868,156 +632,6 @@ table.data td.neg { color: var(--accent-ink); }
   from { opacity: 0; transform: translateY(8px); filter: blur(0.25em); }
   to   { opacity: 1; transform: none; filter: blur(0); }
 }
-
-/* 3. sentence builder — a display statement, not a line of body copy.
-   Set at pull-quote scale and centred so the assembly is actually legible as
-   motion; at body size the figures were too small for the pop-in to register.
-   Text fragments stay display:inline so the statement wraps as normal text.
-   The figures open vertically out of a sliver, which is how the reference
-   introduces them — distinct from the headline's blur-resolve. */
-.sb {
-  font-family: var(--font-head); font-weight: 500;
-  font-size: 25px; line-height: 1.34; letter-spacing: -0.02em;
-  text-align: center; color: var(--text);
-  max-width: 21em; margin: 38px auto;
-}
-.sb__frag { opacity: 0; }
-.sb.is-in .sb__frag { animation: sbText 520ms cubic-bezier(.2,.75,.25,1) both; }
-@keyframes sbText {
-  from { opacity: 0; filter: blur(0.18em); }
-  to   { opacity: 1; filter: blur(0); }
-}
-.sb__fig {
-  display: inline-block; width: 1.5em; height: 0.92em;
-  /* tighter on the right so a following comma does not float away */
-  vertical-align: -0.08em; margin: 0 0.06em 0 0.18em;
-  border: 1px solid var(--border-strong); border-radius: 3px;
-  background-color: var(--surface-2);
-  transform-origin: 50% 58%; transform: scaleY(0.06);
-  background-image:
-    linear-gradient(118deg, var(--thumb-b) 0 44%, transparent 44%),
-    linear-gradient(0deg, var(--accent-softer), var(--accent-softer));
-}
-.sb__fig--1 { background-image:
-  radial-gradient(95% 135% at 78% 118%, var(--accent-soft) 0 44%, transparent 45%),
-  linear-gradient(200deg, var(--thumb-b) 0 52%, transparent 52%); }
-.sb__fig--2 { background-image:
-  linear-gradient(to top, var(--thumb-b) 0 38%, transparent 38%),
-  linear-gradient(to top, var(--accent-soft) 0 20%, transparent 20%); }
-.sb.is-in .sb__fig { animation: sbFig 540ms cubic-bezier(.2,.86,.3,1.06) both; }
-@keyframes sbFig {
-  from { opacity: 0; transform: scaleY(0.06); }
-  60%  { opacity: 1; }
-  to   { opacity: 1; transform: none; }
-}
-@media (min-width: 768px) { .sb { font-size: 30px; } }
-
-/* ============================================================
-   Perspectives — same palette as the rest of the site.
-   The per-section colour blocking has been removed: every section
-   now draws from the shared background/text/accent variables, and
-   sections are separated by a hairline rule rather than a colour
-   change. Structure and interactions are untouched.
-   ============================================================ */
-.pv { background: var(--bg); color: var(--text); padding: 40px 0 48px; }
-.pv + .pv, .pvclose { border-top: 1px solid var(--border); }
-.pvin { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
-.pvgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px; align-items: center; }
-.pv a.pvlink { color: var(--text); border-bottom: 1px solid var(--accent); }
-.pv a.pvlink:hover { color: var(--accent-ink); }
-.pv .backlink { color: var(--muted); margin: 0 0 26px; }
-.pv .backlink:hover { color: var(--accent-ink); }
-.pvkicker {
-  display: inline-block; font-family: var(--font-head); font-size: 12.5px; font-weight: 600;
-  letter-spacing: .02em; color: var(--accent-ink); background: var(--accent-soft);
-  border-radius: 2px; padding: 2px 8px; margin-bottom: 18px;
-}
-.pv h1 { font-size: 32px; line-height: 1.06; letter-spacing: -0.03em; max-width: 20ch; }
-.pv h2 { font-size: 26px; letter-spacing: -0.025em; margin-bottom: 12px; }
-.pvintro { color: var(--muted); font-size: 17.5px; max-width: 60ch; margin: 18px 0 0; }
-.pvlead { color: var(--muted); max-width: 58ch; margin: 0 0 22px; }
-.pvdivider { height: 1px; background: var(--border); margin: 34px 0 30px; border: 0; }
-
-.xrow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
-.xcard {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
-  transition: background .2s ease, border-color .2s ease, color .2s ease;
-}
-.xcard__head {
-  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  text-align: left; background: transparent; border: 0; padding: 16px 18px; cursor: pointer; color: inherit;
-}
-.xcard:hover { border-color: var(--border-strong); }
-.xcard__title { font-family: var(--font-head); font-weight: 600; font-size: 17px; line-height: 1.25; }
-.xcard__plus {
-  flex: none; width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid currentColor;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--font-head); font-size: 19px; line-height: 1; transition: transform .2s ease;
-}
-.xcard.is-open { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.xcard.is-open .xcard__plus { transform: rotate(45deg); }
-.xcard__body { padding: 0 18px 18px; font-size: 16px; line-height: 1.6; }
-.xcard__body p { margin: 0; }
-
-.bignum { text-align: left; }
-.bignum__n {
-  font-family: var(--font-head); font-weight: 300; font-size: 140px; line-height: .86;
-  letter-spacing: -0.06em; color: var(--text);
-}
-.bignum__label {
-  display: inline-block; margin-top: 16px; padding-bottom: 8px;
-  border-bottom: 2px solid var(--accent); font-family: var(--font-head);
-  font-size: 16px; color: var(--muted); max-width: 30ch;
-}
-
-.circles { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 12px; margin: 6px 0 8px; }
-.circ { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 86px; background: transparent; border: 0; padding: 0; cursor: pointer; color: var(--text); }
-.circ__dot {
-  border-radius: 50%; border: 2px solid var(--accent); display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-head); font-weight: 600; font-size: 15px; color: var(--accent-ink);
-  transition: background .18s ease, color .18s ease;
-}
-.circ:hover .circ__dot { background: var(--accent-softer); }
-.circ.is-on .circ__dot { background: var(--accent); color: var(--on-accent); }
-.circ__label { font-family: var(--font-head); font-size: 12.5px; color: var(--muted); max-width: 11ch; text-align: center; line-height: 1.25; }
-.circ.is-on .circ__label { color: var(--text); font-weight: 600; }
-.pvcap { font-family: var(--font-head); font-size: 13px; color: var(--faint); margin: 10px 0 18px; }
-.detail {
-  border-left: 3px solid var(--accent); background: var(--surface);
-  border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  padding: 16px 18px; border-radius: 0 4px 4px 0; min-height: 124px;
-}
-.detail h3 { font-size: 18px; margin-bottom: 6px; }
-.detail p { margin: 0; font-size: 16px; line-height: 1.6; }
-.splitcard { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; box-shadow: var(--shadow); }
-.splitcard__art {
-  aspect-ratio: 4 / 3;
-  background:
-    radial-gradient(70% 90% at 80% 20%, var(--accent-soft) 0 30%, transparent 31%),
-    radial-gradient(50% 60% at 18% 78%, var(--accent-softer) 0 40%, transparent 41%),
-    linear-gradient(160deg, var(--surface-2) 0 45%, var(--thumb-b) 45% 100%);
-}
-.splitcard__stat { background: var(--accent); color: var(--on-accent); padding: 22px 22px 24px; }
-.splitcard__n { font-family: var(--font-head); font-weight: 300; font-size: 64px; line-height: 1; letter-spacing: -0.04em; }
-.splitcard__stat p { margin: 10px 0 0; font-size: 16px; line-height: 1.5; }
-
-.pvtabs { display: inline-flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--border); border-radius: 999px; padding: 4px; margin: 6px 0 24px; }
-.pvtab { background: transparent; border: 0; border-radius: 999px; padding: 9px 18px; font-family: var(--font-head); font-size: 15px; font-weight: 500; color: var(--muted); cursor: pointer; }
-.pvtab:hover { color: var(--text); }
-.pvtab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
-.pvpanel h3 { font-size: 22px; margin-bottom: 10px; }
-.pvpanel p { color: var(--muted); font-size: 17.5px; max-width: 62ch; }
-.callout { background: var(--accent); color: var(--on-accent); border-radius: 4px; padding: 20px 22px; margin-top: 8px; max-width: 760px; }
-.callout__k { font-family: var(--font-head); font-size: 12.5px; font-weight: 600; letter-spacing: .02em; opacity: .8; display: block; margin-bottom: 6px; }
-.callout p { margin: 0; font-size: 17px; line-height: 1.55; }
-
-.pvclose { padding: 44px 0 20px; }
-.pvclose .pvin { max-width: 760px; }
-.pvclose h2 { font-size: 26px; margin-bottom: 12px; }
-.pvclose .conclusion { font-size: 18px; margin: 30px 0 0; }
-.attrib { margin-top: 28px; padding: 16px 0 0; border-top: 1px solid var(--border); font-family: var(--font-head); font-size: 14.5px; color: var(--muted); }
-.attrib a { color: var(--accent-ink); border-bottom: 1px solid var(--accent-soft); }
-
 
 /* ============================================================
    Brand mark, article modes, summary overlay, rotator
@@ -1069,30 +683,6 @@ table.data td.neg { color: var(--accent-ink); }
   .modes--timed .mode__d { font-size: 11px; }
   .modes--timed .mode svg { display: none; }
 }
-
-/* --- TLDR slides --- */
-.tldr {
-  max-width: 700px; margin: 0 auto 26px; padding: 20px 22px;
-  border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: 0 4px 4px 0; background: var(--surface);
-}
-.tldr__bar { display: flex; gap: 4px; margin-bottom: 16px; }
-.tldr__seg { flex: 1; height: 3px; border-radius: 2px; background: var(--border); }
-.tldr__seg.is-done { background: var(--accent-soft); }
-.tldr__seg.is-on { background: var(--accent); }
-.tldr__slide {
-  font-family: var(--font-head); font-size: 19px; line-height: 1.42; font-weight: 500;
-  margin: 0 0 16px; min-height: 3.2em; animation: dekIn 420ms ease both;
-}
-.tldr__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.tldr__count { font-family: var(--font-mono); font-size: 12.5px; color: var(--faint); }
-.tldr__nav { display: flex; gap: 6px; }
-.tldr__btn {
-  width: 32px; height: 32px; border-radius: 50%; cursor: pointer;
-  border: 1px solid var(--border-strong); background: transparent; color: var(--muted);
-}
-.tldr__btn:hover { color: var(--text); border-color: var(--text); }
-.tldr__note { font-family: var(--font-head); font-size: 12px; color: var(--faint); margin: 14px 0 0; }
 
 /* --- mock audio player --- */
 .audio {
@@ -1441,46 +1031,6 @@ table.data td.neg { color: var(--accent-ink); }
   font-size: clamp(15.5px, 1.8vw, 18px); line-height: 1.45;
 }
 .tdeck__intro .tdeck__note { margin-top: 18px; }
-/* a poll on a deck slide: the question and its two answers, nothing heavier */
-.tdpoll { margin: 22px 0 0; padding-top: 20px; border-top: 1px solid var(--border); }
-.tdpoll__q {
-  margin: 0 0 14px; font-family: var(--font-head); font-size: clamp(16px, 2vw, 20px);
-  font-weight: 600; letter-spacing: -0.015em;
-}
-.tdpoll__row { display: flex; flex-wrap: wrap; gap: 10px; }
-
-/* each answer describes itself, so the question can be answered without
-   having read the cards in the article */
-.tdpoll__choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.tdchoice {
-  display: flex; flex-direction: column; text-align: left; cursor: pointer;
-  border: 1px solid var(--border); border-radius: 5px; background: var(--surface);
-  padding: 13px 15px 14px; color: inherit; font: inherit;
-  transition: border-color .15s ease, background .15s ease;
-}
-.tdchoice:hover, .tdchoice:focus-visible { border-color: var(--accent); background: var(--accent-softer); }
-.tdchoice__n {
-  font-family: var(--font-head); font-size: 12px; font-weight: 600;
-  letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
-}
-.tdchoice__q { font-size: 14px; font-style: italic; color: var(--muted); margin-top: 7px; }
-.tdchoice__t {
-  font-family: var(--font-head); font-size: 17px; font-weight: 600;
-  letter-spacing: -0.015em; color: var(--accent-ink); margin-top: 2px;
-}
-.tdchoice__ls { display: block; margin-top: 9px; }
-.tdchoice__l { display: block; font-family: var(--font-head); font-size: 13px; line-height: 1.45; color: var(--text); }
-
-.tdpoll__said { animation: crUp 380ms cubic-bezier(.2,.75,.25,1) both; }
-.tdpoll__said b {
-  display: block; font-family: var(--font-head); font-size: clamp(18px, 2.4vw, 23px);
-  font-weight: 600; letter-spacing: -0.02em; margin-bottom: 5px;
-}
-.tdpoll__said > span { display: block; color: var(--muted); font-size: 16px; margin-bottom: 10px; }
-.tdpoll__lines { margin: 0 0 12px; }
-.tdpoll__lines p { margin: 0 0 3px; font-family: var(--font-head); font-size: 13.5px; color: var(--text); }
-.tdeck__card--hero .tdpoll { text-align: center; }
-.tdeck__card--hero .tdpoll__row { justify-content: center; }
 
 .tdeck__end { margin: 20px 0 0; display: flex; flex-wrap: wrap; gap: 10px; }
 .tdeck__note { margin: 14px 0 0; font-family: var(--font-head); font-size: 12.5px; color: var(--faint); }
@@ -1537,12 +1087,6 @@ table.data td.neg { color: var(--accent-ink); }
 
 @media (max-width: 560px) {
   .tdeck__bar { gap: 3px; }
-  /* side by side at this width the two answers were 167px each and their
-     titles broke mid-phrase. Stacked, with the supporting lines held back
-     until after the choice — the quote and the headline still describe it. */
-  .tdpoll__choices { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .tdchoice { padding: 11px 14px 12px; }
-  .tdchoice__ls { display: none; }
 }
 @media (min-width: 720px) {
   .tdeck__bar { padding: 0 20px 16px; }
@@ -1686,17 +1230,6 @@ table.data td.neg { color: var(--accent-ink); }
   .readhead { padding-top: 26px; }
 }
 
-/* --- featured rotator --- */
-.rotator { position: relative; }
-.rotator__slot { min-height: 232px; }
-.rotator__slot .hit { border-bottom: 0; animation: dekIn 420ms ease both; }
-.rotator__dots { display: flex; gap: 8px; justify-content: center; padding: 6px 0 2px; }
-.rdot {
-  width: 8px; height: 8px; border-radius: 50%; padding: 0; cursor: pointer;
-  border: 1px solid var(--border-strong); background: transparent;
-}
-.rdot.is-on { background: var(--accent); border-color: var(--accent); }
-
 /* --- markdown body --- */
 .prose blockquote {
   margin: 24px 0; padding: 4px 0 4px 20px; border-left: 3px solid var(--accent);
@@ -1755,47 +1288,9 @@ table.data td.neg { color: var(--accent-ink); }
   .dek { font-size: 20px; }
   .prose { font-size: 18.5px; }
   .prose h2 { font-size: 27px; }
-  .pullquote p { font-size: 23px; }
 
-  /* the reading column is centred on the page; notes live in the gutter */
-  .notegrid { display: block; position: relative; max-width: 700px; margin: 0 auto; }
   .arthead, .byline, .artfoot { max-width: 700px; margin-left: auto; margin-right: auto; }
-
-  .opedlayout { flex-direction: row; gap: 40px; align-items: flex-start; }
-  .navcol { flex: 0 0 56px; width: auto; top: calc(var(--booth) + var(--headh) + 24px); z-index: auto; background: transparent; padding: 0; align-self: flex-start; }
-  .navlines { display: flex; }
-  .navselect { display: none; }
-  .opedbody, .asidegrid { grid-template-columns: minmax(0, 660px) 240px; gap: 0 28px; }
-  .opedbody > section.wide { grid-column: 1 / -1; }
-  .asidegrid { width: calc(100% + 268px); }
-  .godeeper { margin: 6px 0 0; }
-  .tiers { flex-direction: row-reverse; gap: 28px; }
-  .tiers__diagram { flex: 0 0 240px; width: auto; position: sticky; top: calc(var(--booth) + var(--headh) + 36px); }
-
-  .pv { padding: 58px 0 68px; }
-  .pv h1 { font-size: 46px; }
-  .pv h2 { font-size: 32px; }
-  .xrow { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-  .bignum__n { font-size: 220px; }
-}
-@media (min-width: 960px) {
-  .pvgrid { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 64px; }
-  .pvgrid--top { align-items: start; }
-  .bignum { padding-left: 24px; }
 }
 @media (min-width: 1240px) {
   .arthead h1 { font-size: 44px; }
-  .notecol, .notecol.notecol--overlay {
-    display: block; position: absolute; top: 0; left: calc(100% + 24px);
-    width: 230px; z-index: 45; pointer-events: none;
-  }
-  .notecol .note { pointer-events: auto; }
-}
-@media (min-width: 1440px) {
-  /* a thread needs more room than a one-line note did */
-  .notecol, .notecol.notecol--overlay { width: 280px; }
-  .opedbody, .asidegrid { grid-template-columns: minmax(0, 700px) 280px; gap: 0 40px; }
-  .asidegrid { width: calc(100% + 320px); }
-  .tiers { gap: 40px; }
-  .tiers__diagram { flex-basis: 280px; }
 }

@@ -8,12 +8,11 @@ import { LatestFeed } from '@/components/site/home/LatestFeed';
 import { LegacyHashRedirect } from '@/components/site/LegacyHashRedirect';
 import { siteViewModelFrom } from '@/lib/view-models';
 import { SESSION_COOKIE_NAME } from '@/server/auth/session';
-import { getConfig } from '@/server/config';
 import { getHomeSections } from '@/server/public/home';
-import { sitePageMetadata } from '@/server/public/metadata';
+import { sitePageRouteMetadata } from '@/server/public/metadata';
 import { getCurrentSite } from '@/server/site/current';
 
-// Home (spec/ui.md §3 "Home", Phase 2): exactly the design's Home — About (site record texts,
+// Home (spec/ui.md §3 "Home"): exactly the design's Home — About (site record texts,
 // typed on the shared clock), the Featured Editorial pinned head + scroll stack, and Latest with
 // See More / View all articles. Nothing published → the Latest head with an empty state.
 // Old design hash links (`/#<slug>`, `/#<slug>/tldr`, …) are mapped to real routes client-side
@@ -21,14 +20,8 @@ import { getCurrentSite } from '@/server/site/current';
 
 export const dynamic = 'force-dynamic';
 
-export async function generateMetadata(): Promise<Metadata> {
-  const site = await getCurrentSite();
-  return sitePageMetadata({
-    title: site.wordmark,
-    description: site.tagline,
-    url: getConfig().publicBaseUrl.replace(/\/+$/, '') + '/',
-    siteName: site.wordmark,
-  });
+export function generateMetadata(): Promise<Metadata> {
+  return sitePageRouteMetadata('/', (site) => ({ title: site.wordmark, description: site.tagline }));
 }
 
 export default async function HomePage() {

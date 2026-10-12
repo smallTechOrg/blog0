@@ -29,7 +29,7 @@ html[data-printing] #blog0-root { visibility: hidden; }
 
 /* --- paragraphs (the pipeline's .para replaces the design's .sent; div. 2) --- */
 .para { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-/* A reader's paragraph is tappable (paragraph share, S2.4): the article page
+/* A reader's paragraph is tappable (paragraph share): the article page
    (.artwrap) and any host that opts in with [data-para-share]. The editor's
    live preview is neither, so its paragraphs stay inert. */
 .artwrap .para, [data-para-share] .para { position: relative; cursor: pointer; }
@@ -43,7 +43,7 @@ html[data-printing] #blog0-root { visibility: hidden; }
 }
 /* same fill as the design's .sent.is-hl, without the underline */
 .para.is-hl { background: var(--accent-soft); border-radius: 2px; }
-/* Listen (Phase 3 fix): the paragraph being read — a SOFT highlight, deliberately subtler than
+/* Listen: the paragraph being read — a SOFT highlight, deliberately subtler than
    the share highlight above (half its fill, a faint rule instead of the solid accent one). The
    tokens are scoped to the Listen view so they resolve per theme. */
 .listenview { --listen-live-bg: var(--accent-softer); --listen-live-rule: var(--accent-soft); }
@@ -135,7 +135,7 @@ html[data-printing] #blog0-root { visibility: hidden; }
    the deck's own strips so closing the menu never means closing the deck. */
 .tdeck .hlmenu { z-index: 47; }
 
-/* --- Listen (Phase 3, S3.5; spec/ui.md §3 Listen + §5) -----------------
+/* --- Listen (spec/ui.md §3 Listen + §5) ---------------------------------
    The article's Listen view puts the player beside the text (divergence 28):
    two columns at ≥ 960 px with the lead (tag, title, player) sticky under the
    strip; one column below, the lead pinned at the top with the title capped
@@ -171,6 +171,6 @@ html[data-printing] #blog0-root { visibility: hidden; }
   }
 }
 .audio__play:disabled { opacity: .45; cursor: not-allowed; }
-/* "Follow audio" (Phase 3 fix): in the sticky lead, shown only while auto-follow is paused */
+/* "Follow audio": in the sticky lead, shown only while auto-follow is paused */
 .listenview__follow { margin-top: 12px; }
 .listenview__follow[hidden] { display: none; }

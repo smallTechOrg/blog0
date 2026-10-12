@@ -1,4 +1,4 @@
-// Global setup for playwright.design.config.ts (S2.10, capability designer-mode).
+// Global setup for playwright.design.config.ts (capability designer-mode).
 //
 // Playwright starts the web server (`pnpm dev:design` on 3413, after wiping var/pglite-e2e*) BEFORE
 // this runs, so by now the designer setup has migrated + seeded the throwaway PGlite dir. This step:
