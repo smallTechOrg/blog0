@@ -1,6 +1,7 @@
 # blog0 — Data model
 
-PostgreSQL 18. All tables are created by the scaffold migration `0000_init` (Phases 1–4 need no
+PostgreSQL 18 in production and in every gate; the identical schema also runs on embedded PGlite
+(PG 17 WASM) in designer mode (`spec/architecture.md` §11). All tables are created by the scaffold migration `0000_init` (Phases 1–4 need no
 further migration; Phase 5 and 6 add their own, each owned by one named slice). Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
@@ -18,8 +19,8 @@ One row per tenant; v0.1 has one (`slug = BLOG0_SITE_SLUG`, default `blog0`).
 |---|---|---|
 | id | uuid pk | |
 | slug | text unique not null | `blog0` |
-| brand_name | text not null | engine/product name, `blog0` |
-| wordmark | text not null | public wordmark, `log0` (last char spins) |
+| brand_name | text not null | `blog0` |
+| wordmark | text not null | public wordmark, `blog0` (last char — the nought — spins; user decision: brand is blog0, not the design's log0) |
 | publisher_name | text not null | `smallTech` |
 | tagline | text not null | `the meaning of life, universe, and everything` |
 | contact_email | text not null | `hello@logzero.blog` (design value; divergence #13) |
@@ -248,5 +249,21 @@ lazily at login).
   `published` articles (slug = design id; topic = design tag; byline `Sai Krishna V`; dek =
   design excerpt; `first_published_at` = design date 09:00 site timezone; `in_progress` for
   `ai-is-expensive`; featured ranks 1–3 for `ai-will-destroy-the-world`, `tech-company-first`,
-  `humans-are-software`); one revision each; no TLDR, no audio. Idempotent by slug (existing
-  slugs are left untouched).
+  `humans-are-software`); `created_by` = the first admin of the site (seed order: `db:seed`
+  first); one revision each; no TLDR, no audio. Idempotent by slug (existing slugs are left
+  untouched). Prints `5 posts: N created`.
+- `pnpm seed:tldr` (Phase 2): for every seeded slug whose `article_format(kind='tldr')` has no
+  `published_payload`: with a real OpenRouter key, run the normal Generate path once (an
+  `ai_generation` row with `requested_by` = the seeding admin, cost recorded) and publish the
+  draft deck (`published_payload` = draft, `published_revision_id` = the article's published
+  revision); without a real key, build the deck from the committed fixture
+  `src/server/seed/decks/<slug>.json` (`source: 'writer'`, `reason: null`, `generationId: null`,
+  texts matched by exact string to the published revision's eligible sentences; unmatched lines
+  dropped with a warning; < 1 matched line → skip with a warning). Idempotent: a published deck
+  is never touched; second run prints `decks: 0 seeded (0 calls)`. `--write-fixture` (real key
+  required) rewrites each `<slug>.json` from the deck just generated (or already published).
+  Fixture shape: `{ "slug": string, "model": string, "promptVersion": string, "capturedAt": ISO,
+  "lines": Array<{ "text": string, "reason": string }> }`.
+- Designer mode (`pglite://`, Phase 2): `pnpm dev:design` runs `db:seed` with the generated
+  designer admin `designer@blog0.local` (display name `Designer`) instead of `BLOG0_ADMIN_*`
+  when those are unset, then `db:seed:posts`, then `seed:tldr` (fixture path when no key).

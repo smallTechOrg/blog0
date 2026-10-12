@@ -18,7 +18,7 @@ One Next.js (App Router) process serves everything on a single origin (default
                     │      route handlers ──► withApi (envelope, auth, origin check, request log)         │
                     │                    ──► services: articles, formats, jev, users, site                │
                     │      jev ──► llm/openrouter adapter ──► https://openrouter.ai/api/v1 (one call/click)│
-                    │      services ──► drizzle ──► Postgres (blog0_dev / blog0_test)                      │
+                    │      services ──► drizzle ──► Postgres (blog0_dev / blog0_test) | PGlite (var/pglite, §11)│
                     │      (Phase 3) storage interface ──► local disk BLOG0_STORAGE_DIR                    │
                     └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -38,7 +38,7 @@ One Next.js (App Router) process serves everything on a single origin (default
 |---|---|---|
 | Config | `src/server/config.ts` | Typed, validated env (`BLOG0_*`), resettable singleton, secrets redacted on serialisation. |
 | Logger | `src/server/log.ts` | JSON-lines structured logger to stdout (+ optional `BLOG0_LOG_FILE`); test sink. |
-| DB | `src/server/db/*` | postgres.js client + drizzle, schema, programmatic migrator. |
+| DB | `src/server/db/*` | Drizzle over either engine (postgres.js for `postgres://`, PGlite for `pglite://` — §11), schema, programmatic migrator. |
 | HTTP kit | `src/server/http/api.ts` | `withApi()` wrapper: request id, auth guard, origin check, zod body parsing, envelope, error mapping, request/response log line. |
 | Auth | `src/server/auth/*` | Sessions (scaffold), password hashing + login + rate limit (S1.1), guards for route handlers and pages. |
 | Site | `src/server/site/*` | Resolve the current site (`BLOG0_SITE_SLUG`), cache it, admin edits (Phase 2). |
@@ -311,14 +311,15 @@ rejects `..` and absolute keys.
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `BLOG0_DATABASE_URL` | yes | — | `postgres://sai@localhost:5432/blog0_dev` |
-| `BLOG0_TEST_DATABASE_URL` | tests | — | `postgres://sai@localhost:5432/blog0_test`; must differ from the dev URL (tests refuse otherwise) |
+| `BLOG0_DATABASE_URL` | no (Phase 2+) | `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (server engine) or `pglite://<dir>` (embedded, §11). Absent ⇒ PGlite default with an `app.boot` notice. Phase 1 behaviour (required, `postgres://` only) ends with S2.8. |
+| `BLOG0_TEST_DATABASE_URL` | tests | — | `postgres://sai@localhost:5432/blog0_test`; must differ from the dev URL (tests refuse otherwise); must be `postgres://` (the integration gate runs on real Postgres) |
 | `BLOG0_PORT` | no | `3410` | read by `scripts/serve.mjs` (after loading `.env`) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | integer 0–10: reverse proxies appending to `X-Forwarded-For`; 0 = ignore forwarding headers (§6) |
-| `BLOG0_SESSION_SECRET` | yes | — | ≥ 32 chars (`openssl rand -base64 48`) |
-| `BLOG0_OPENROUTER_API_KEY` | yes | — | validated at boot for presence; liveness by `pnpm check:openrouter` |
+| `BLOG0_SESSION_SECRET` | yes on `postgres://`; no on `pglite://` | — | ≥ 32 chars (`openssl rand -base64 48`). PGlite mode without it: generated once and persisted to `var/pglite-session-secret` (0600) — §11 |
+| `BLOG0_OPENROUTER_API_KEY` | yes on `postgres://`; no on `pglite://` | — | validated at boot for presence (placeholder rejected); liveness by `pnpm check:openrouter`. PGlite mode without a real key: Jev disabled with a visible notice (§11) |
+| `BLOG0_DB_ENGINE` | read-only | derived | not an env var — `getConfig().dbEngine` is `'postgres' \| 'pglite'`, derived from the URL scheme; listed here because every log line and `/api/health` may report it |
 | `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | |
 | `BLOG0_JEV_MODEL` | no | `google/gemini-2.5-flash` | see `spec/agent.md` §3 |
 | `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per model attempt |
@@ -347,6 +348,107 @@ server-side (`error` event with `request_id`) and the response is the generic en
 > (`BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME`), sourced into the shell when
 > `.env` lacks them; values in `.env` take precedence over it.
 
+## 11. Designer mode (embedded Postgres via PGlite) — Phase 2, binding
+
+Requirement (`spec/capabilities/designer-mode.md`): the app runs with nothing installed beyond
+Node 22 + pnpm — no Postgres, no Docker, no `.env`. Postgres remains the production engine and
+the integration/E2E gates still run on real Postgres; designer mode is an additional engine behind
+the same Drizzle API.
+
+### 11.1 Engine selection
+
+`src/server/db/url.ts` → `parseDatabaseUrl(raw: string | undefined): { engine: 'postgres', url }
+| { engine: 'pglite', dir }`:
+- `postgres://` / `postgresql://` → server engine (unchanged behaviour).
+- `pglite://<path>` → embedded; `<path>` is a directory relative to `process.cwd()` (repo root) or
+  absolute; `pglite://memory` is reserved for the spike/unit use (in-memory, nothing persisted).
+- absent/empty → `{ engine: 'pglite', dir: './var/pglite' }` and `instrumentation.ts` logs
+  `app.boot` with `db_engine:'pglite', db_dir, notice:'BLOG0_DATABASE_URL not set — using embedded PGlite at ./var/pglite'`.
+- anything else → `ConfigError` ("must be postgres:// or pglite://").
+`loadConfig` gains `dbEngine` and relaxes two requirements **only when** `dbEngine === 'pglite'`:
+`BLOG0_SESSION_SECRET` may be absent (→ `src/server/designer/secret.ts` generates 48 random bytes
+base64url, writes `var/pglite-session-secret` with mode `0o600`, reads it back on later boots) and
+`BLOG0_OPENROUTER_API_KEY` may be absent/placeholder (→ `config.openrouterApiKey = null`;
+`getLlmClient()` throws `ApiError('LLM_NOT_CONFIGURED', 503, 'No OpenRouter key configured — add BLOG0_OPENROUTER_API_KEY to .env to generate with Jev.')`;
+`TldrStateDto` gains `jevAvailable: boolean` so the TLDR tab shows the notice and disables
+Generate). On `postgres://` both stay required exactly as before. `BLOG0_TEST_DATABASE_URL` must
+stay `postgres://`.
+
+### 11.2 DB abstraction (`src/server/db/client.ts`, taken over by S2.8)
+
+```ts
+export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;     // engine-neutral drizzle type (both drivers extend it)
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+export interface DbHandle { db: Db; engine: 'postgres' | 'pglite'; ping(): Promise<void>; close(): Promise<void> }
+export function getDb(): Db;                                        // unchanged signature — every service keeps working
+export function getDbHandle(): DbHandle;                            // health check, scripts
+export function createDbHandle(target: ParsedDatabaseUrl, opts?: { max?: number }): Promise<DbHandle>;  // scripts/tests; caller closes
+export async function closeDb(): Promise<void>;
+```
+- `src/server/db/postgres.ts`: `postgres(url, {...})` + `drizzle(sql, { schema })` (today's code).
+- `src/server/db/pglite.ts`: `new PGlite(dir)` (or `new PGlite()` for `memory`) +
+  `drizzle(client, { schema })` from `drizzle-orm/pglite`. One PGlite instance per process (PGlite
+  is single-connection; it serialises queries internally). `ping()` = `select 1`.
+- `getSql()` (raw postgres.js handle) is **removed**; its only caller, `/api/health`, switches to
+  `getDbHandle().ping()`. Scripts that call `createSqlClient` + `drizzle(sql)` (`db-seed.ts`,
+  `create-admin.ts`, `db-migrate.ts`, `db-verify.ts`) switch to `createDbHandle`.
+- `src/server/db/migrate.ts`: `runMigrations(target)` uses `drizzle-orm/postgres-js/migrator` or
+  `drizzle-orm/pglite/migrator` per engine, same folder, same `migrationsSchema`/`migrationsTable`;
+  `getMigrationStatus` runs its three queries through `db.execute(sql\`…\`)` instead of the
+  postgres.js tag (the `${sql(ident)}` identifier helper becomes `sql.identifier(...)`).
+- `scripts/db-create.ts` on `pglite://`: `mkdir -p <dir>` and print `created`/`exists`.
+- `tests/helpers/db.ts` stays Postgres-only (`prepareTestDatabase` needs `create database`); the
+  designer E2E global setup uses `createDbHandle` + `runMigrations` on a fresh dir instead.
+
+### 11.3 PGlite compatibility audit (known risk points, from `grep` of `src/server/**`, `scripts/**`, `tests/**`)
+
+| # | Site | Construct | Risk | Plan |
+|---|---|---|---|---|
+| 1 | `src/server/db/migrations/0000_init.sql` | `gen_random_uuid()` defaults | low — built into PG ≥ 13 core (no `pgcrypto`); PGlite ships PG 17 | spike asserts an insert without an explicit id |
+| 2 | same | `now()`, `timestamptz`, `jsonb`, `numeric(12,6)`, `bigint`, `text[]` with `'{}'::text[]` default, `CHECK` constraints (4), `DESC NULLS LAST` indexes, FKs with `cascade`/`set null` | low — core SQL | spike runs the migration verbatim and inserts an `ai_generation` row with `provider_generation_ids` |
+| 3 | `src/server/articles/repo.ts:46` `lockArticle` | `.for('update')` (`SELECT … FOR UPDATE`) | medium — syntax is supported; with a single connection there is no second session to block, so the lock is a no-op but harmless | spike proves it parses and returns the row inside a transaction; document that the double-click guard in designer mode relies on the `running` row check alone |
+| 4 | `src/server/articles/tldr.ts:106,197,236,285`, `service.ts:150,200,298` | `db.transaction(async (tx) => …)` | medium — supported by `drizzle-orm/pglite`; PGlite runs transactions on its one connection | spike performs the Generate-lock transaction (lock → insert `ai_generation` → commit) and a rollback |
+| 5 | `src/server/articles/tldr.ts:232` | `onConflictDoUpdate({ target, set, setWhere })` → `ON CONFLICT … DO UPDATE … WHERE` | low — core SQL | spike exercises `upsertDraft` twice |
+| 6 | `src/server/users/repo.ts:57`, `seed/site.ts:18` | `onConflictDoNothing({ target })` | low | covered by seed run |
+| 7 | `src/server/db/migrate.ts:59-66` | postgres.js tagged template + `sql(identifier)` helper, `current_setting('server_version')` | high (API difference, not SQL) | rewrite via `db.execute` (§11.2); `server_version` prints e.g. `17.x (PGlite)` in `db:verify` |
+| 8 | `src/app/api/health/route.ts:20` | `getSql()\`select 1\`` | high (API) | `getDbHandle().ping()` |
+| 9 | `tests/helpers/db.ts`, `tests/e2e/helpers/db.ts`, `scripts/db-create.ts` | `create database`, `drop schema … cascade`, `pg_database` | n/a — Postgres-only paths stay Postgres-only | not used in designer mode |
+| 10 | `next.config.ts` | bundling of `@electric-sql/pglite` (WASM + data files) under Turbopack | medium | `serverExternalPackages` entry; spike boots `next build && next start` with `pglite://` and hits `/api/health` |
+| 11 | `scripts/serve.mjs` / `instrumentation.ts` | Next dev spawns workers; PGlite dir lock when two processes open the same dir | medium | one PGlite instance per process (globalThis cache, already the pattern); `dev:design` runs migrate/seed to completion and closes before spawning the dev server |
+| 12 | `drizzle.config.ts` | `dialect: 'postgresql'` + `dbCredentials.url` | low — `drizzle-kit generate` needs no DB; `pglite://` URL would break `studio` only | leave; document that drizzle-kit commands use Postgres |
+| 13 | `src/server/db/schema.ts` | `numeric(..., { mode: 'number' })`, `.array()` | low — driver-level parsing; PGlite returns arrays/numerics as JS values via its own parsers | spike asserts `cost_usd` round-trips as a number and `provider_generation_ids` as `string[]` |
+
+No `CREATE EXTENSION`, `pg_trgm`, listen/notify, advisory locks, `COPY`, or server-side functions
+exist in the codebase today; adding any later requires re-running the spike.
+
+### 11.4 The spike (S2.0) and its verdict
+
+`scripts/spike-pglite.ts` (`pnpm tsx scripts/spike-pglite.ts`): opens `pglite://./var/pglite-spike`
+from a clean dir, runs `runMigrations`, `seedSite`, `seedAdmin`, `seedPosts` (5), then three
+representative queries: (a) the Generate-lock transaction from `tldr.ts` steps 2 and 4b (lock →
+insert `ai_generation` running → commit; then update to succeeded + `upsertDraft` twice to hit
+`setWhere`); (b) `getPublishedArticle('humans-are-software')` via `src/server/public/articles.ts`
+(joins, ordering, `next` wrap); (c) `getMigrationStatus` + `/api/health`-equivalent ping. It also
+runs `pnpm build && BLOG0_DATABASE_URL=pglite://./var/pglite-spike pnpm start` (port 3414) and curls
+`/api/health` and `/p/humans-are-software`. Prints one `PASS`/`FAIL` line per step and writes the
+verdict to **`spec/spikes/pglite.md`** (PGlite version, PG version reported, each step's result,
+wall time of migrate + seed, any workaround applied, and the final verdict `GO` / `NO-GO`).
+
+### 11.5 Fallback if the spike is NO-GO
+
+Designer mode becomes a **file-backed read-only content adapter** for the reader site only:
+- `BLOG0_DATABASE_URL=file://./content` (or absent) selects `src/server/public/file-source.ts`,
+  which implements the `src/server/public/*` read functions (`getHomeData`, `getPublishedArticle`,
+  `listArchive`, `getSiteViewModel`, `getPublishedDeck`) from `content/posts/<slug>.md` (front
+  matter: title, dek, topic, date, byline, featured_rank, in_progress) + `content/decks/<slug>.json`
+  (the same fixture format as `src/server/seed/decks/*.json`) + `content/site.json` (SITE_DEFAULTS).
+- Admin, auth, Jev, newsletter are disabled: `/admin/*` renders a `StubNotice` "Admin needs a
+  database — designer mode is read-only; see README", `/api/admin/*` and `/api/auth/*` answer 503
+  `DB_UNAVAILABLE`, the footer form posts to a no-op that shows the success copy.
+- README states exactly this limitation in the designer section; everything else (one-liner,
+  hot reload, 5 articles + decks, boot/print-in, share) is unchanged.
+The orchestrator chooses the path from `spec/spikes/pglite.md` before fanning out S2.8.
+
 ---
 
 ## Stack
@@ -362,6 +464,7 @@ the requirements.
 | Language | TypeScript 5.x, `strict: true` | Binding. |
 | DB | PostgreSQL 18 (local Homebrew, socket `/tmp:5432`, user `sai`) | Binding; production-lite, backup-friendly. |
 | DB driver | `postgres` (postgres.js) | Pure JS, no native build, fast, works in Next server runtime and scripts. |
+| Embedded DB (designer mode, Phase 2) | `@electric-sql/pglite` + `drizzle-orm/pglite` | Binding requirement: run with nothing beyond Node + pnpm. PGlite is real Postgres compiled to WASM, so the same SQL migrations, drizzle queries and seeds run unchanged; persisted to `var/pglite`. Never the production engine (§11). |
 | ORM + migrations | Drizzle ORM + drizzle-kit (generate) + drizzle-orm migrator (apply) | SQL-first migration files reviewable in diffs; no binary engine (lighter Docker image than Prisma); types inferred from the schema. Applying uses `drizzle-orm/postgres-js/migrator` (a main dependency) so deploy needs no dev tooling. |
 | Validation | zod 4 | Env, request bodies, LLM output — one library at every trust boundary. |
 | Markdown | unified 11, remark-parse, remark-gfm, remark-rehype, rehype-slug, rehype-stringify, custom plugins | GFM tables + footnotes required; AST access needed for stable paragraph ids and the sentence list; deterministic. |
@@ -383,11 +486,13 @@ the requirements.
 > **Assumed:** pnpm ≥10 blocks dependency build scripts by default; `pnpm-workspace.yaml` lists `onlyBuiltDependencies: [esbuild, sharp]`. If `pnpm install` warns about ignored builds, run `pnpm approve-builds` and commit the result.
 
 Deploy-time dependencies (must be in `dependencies`, not `devDependencies`): `next`, `react`,
-`react-dom`, `drizzle-orm`, `postgres`, `tsx`, `zod`, `@node-rs/argon2`, all unified/remark/rehype
-packages, `shiki`, `@shikijs/rehype`, `@next/env`. Dev-only: `drizzle-kit`, `vitest`,
-`@playwright/test`, `typescript`, `@types/*`, `eslint*`.
+`react-dom`, `drizzle-orm`, `postgres`, `@electric-sql/pglite` (Phase 2; a main dependency so
+`pnpm dev:design` works on a plain `pnpm install`), `tsx`, `zod`, `@node-rs/argon2`, all
+unified/remark/rehype packages, `shiki`, `@shikijs/rehype`, `@next/env`. Dev-only: `drizzle-kit`,
+`vitest`, `@playwright/test`, `typescript`, `@types/*`, `eslint*`.
 
-`next.config.ts`: `serverExternalPackages: ['@node-rs/argon2', 'shiki', 'postgres']`,
+`next.config.ts`: `serverExternalPackages: ['@node-rs/argon2', 'shiki', 'postgres',
+'@electric-sql/pglite']` (PGlite loads a WASM binary from its package dir and must not be bundled),
 `poweredByHeader: false`, `typedRoutes` off. **No** `output: 'standalone'` before Phase 5: the
 documented local run command is `next start` (via `scripts/serve.mjs`), which warns under
 standalone output. Phase 5 slice S5.1 (Dockerfile) adds `output: 'standalone'` and the container
@@ -406,11 +511,14 @@ blog0/
 ├── tsconfig.json  next.config.ts  drizzle.config.ts  vitest.config.ts  playwright.config.ts  eslint.config.mjs
 ├── spec/                                    # this spec + design reference (never edited by generators)
 ├── scripts/
-│   ├── serve.mjs                # loads .env via @next/env, runs `next <dev|start> -p ${BLOG0_PORT||3410}`, forwards signals
-│   ├── db-create.ts  db-migrate.ts  db-verify.ts  check-openrouter.ts          # scaffold
+│   ├── serve.mjs                # loads .env via @next/env, runs `next <dev|start> -p ${BLOG0_PORT||3410}`, forwards signals (S2.8 takes over: `dev` flags, pglite default)
+│   ├── db-create.ts  db-migrate.ts  db-verify.ts  check-openrouter.ts          # scaffold (db-* learn pglite:// in S2.8)
 │   ├── db-seed.ts  create-admin.ts                                              # S1.1
 │   ├── eval-jev.ts                                                              # S1.3
-│   └── db-seed-posts.ts                                                         # S2.6
+│   ├── db-seed-posts.ts                                                         # S2.6
+│   ├── seed-tldr.ts                                                             # S2.7 (`seed:tldr`, `--write-fixture`)
+│   ├── spike-pglite.ts                                                          # S2.0 (kept; re-runnable proof)
+│   └── dev-design.mjs                                                           # S2.8 (`dev:design`: ensure dir, migrate, seed, dev server)
 ├── src/
 │   ├── instrumentation.ts       # register(): getConfig() (fail fast) + app.boot log
 │   ├── proxy.ts                 # Next 16 proxy: /p/:slug(/tldr) unknown/unpublished → rewrite to root 404 (§8); no auth
@@ -454,7 +562,8 @@ blog0/
 │   │   └── format-date.ts       # fmtDate(iso, timeZone) "8 Sep 2026"
 │   ├── server/                  # server-only (each file starts with `import 'server-only'`)
 │   │   ├── config.ts  log.ts
-│   │   ├── db/{client,schema,migrate}.ts  db/migrations/
+│   │   ├── db/{client,schema,migrate}.ts  db/migrations/   db/{url,pglite,postgres}.ts (S2.8: URL parse + per-engine factories)
+│   │   ├── designer/{secret,admin}.ts   # S2.8: persisted session secret, generated designer admin
 │   │   ├── http/api.ts
 │   │   ├── auth/{session,guard,password,login,rate-limit}.ts
 │   │   ├── users/repo.ts  site/{current,defaults,service}.ts
@@ -464,7 +573,7 @@ blog0/
 │   │   ├── llm/{types,openrouter,index}.ts
 │   │   ├── jev/{state,bounds,build-input,validate,run,prompt}.ts  jev/prompts/select-v1.md
 │   │   ├── public/{articles,home,metadata}.ts
-│   │   ├── seed/{site,admin,seed-posts}.ts  seed/posts/{index.ts,*.md}
+│   │   ├── seed/{site,admin,seed-posts,seed-tldr}.ts  seed/posts/{index.ts,*.md}  seed/decks/{index.ts,<slug>.json}  (decks = committed Jev fixture, S2.7)
 │   │   └── storage/ media/ listen/ newsletter/ ai-usage/ (later phases)
 │   └── styles/
 │       ├── index.css            # @import design.css, additions.css (admin.css imported by admin layout)
@@ -476,8 +585,10 @@ blog0/
 │   ├── setup/integration-env.ts # loads .env, sets BLOG0_DATABASE_URL = BLOG0_TEST_DATABASE_URL, resets singletons
 │   ├── helpers/{db,session,env,logs}.ts   # resetDb() truncates all tables + seeds site; loginAs(); captureLogs()
 │   ├── unit/**  integration/**  e2e/**
+│   ├── e2e/designer-mode.spec.ts  e2e/designer.global-setup.ts   # S2.9: own Playwright config `playwright.design.config.ts` (root), port 3413
 │   └── fixtures/articles/{hard-cases.md,e2e-article.md}  fixtures/audio/ (P3)
-└── var/                         # gitignored runtime data (storage, backups)
+├── spec/spikes/pglite.md        # S2.0 verdict (the only spec file a slice writes)
+└── var/                         # gitignored runtime data (storage, backups, pglite/, pglite-e2e/, pglite-session-secret, designer-admin.txt)
 ```
 
 Test wiring: `vitest.config.ts` defines projects `unit` (`tests/unit/**/*.test.ts(x)`, env node)
@@ -491,6 +602,15 @@ BLOG0_LOG_FILE: 'test-results/e2e-server.log' }, reuseExistingServer: false, tim
 `use.baseURL` = `BLOG0_E2E_BASE_URL ?? 'http://localhost:3411'`, one project `chromium`,
 `workers: 1`. E2E runs the **same** `pnpm start` command as production (test path = run path);
 `pnpm build` must have run first (the gate does).
+
+Designer-mode E2E (S2.9) is a second Playwright config, `playwright.design.config.ts`:
+`testMatch: 'designer-mode.spec.ts'`, `globalSetup: tests/e2e/designer.global-setup.ts` (which
+runs `rm -rf var/pglite-e2e` and then the same steps as `scripts/dev-design.mjs` minus the server:
+migrate + seed into `pglite://./var/pglite-e2e`), `webServer: { command: 'pnpm start', port: 3413,
+env: { BLOG0_PORT: '3413', BLOG0_DATABASE_URL: 'pglite://./var/pglite-e2e', BLOG0_PUBLIC_BASE_URL:
+'http://localhost:3413', BLOG0_SESSION_SECRET: '', BLOG0_OPENROUTER_API_KEY: '', BLOG0_LOG_FILE:
+'test-results/e2e-design-server.log' } }`. It deliberately blanks the secret and key so the test
+proves the generated-secret and no-key paths. Script: `test:e2e:design`.
 
 ## Conventions
 
@@ -561,23 +681,36 @@ the question for the user.
    tappable span; deep link `#hl=<sentence>`. v0.1 (per brief): the paragraph is the unit — hover
    shows a faint accent rule in the left margin, click/tap (not on a link) or a text selection
    inside it highlights the whole paragraph (`.para.is-hl`, same `--accent-soft` fill), copies
-   `“text” — log0\n<link>#p-…`, opens the `.hlmenu` popover. *Ask:* confirm paragraph-level and
+   `“text” — blog0\n<link>#p-…`, opens the `.hlmenu` popover. *Ask:* confirm paragraph-level and
    the hover affordance (no dotted underline).
-3. **Share menu options.** Design: Notes (mailto), Notion, WhatsApp, X. v0.1: **LinkedIn**, **X**,
-   **Copy link** (+ the automatic clipboard copy and status line kept). *Ask:* keep WhatsApp /
-   Notes / Notion too?
+3. **Share menu options — DECIDED (user, Phase 1 gate).** Every target, everywhere a share
+   exists (paragraph/selection menu, "Share article" at the article foot, deck end slide):
+   **LinkedIn, X, WhatsApp, Notes (mailto), Notion, Copy link**. Touch/narrow (`navigator.share`
+   present AND (`(pointer: coarse)` OR viewport < 720 px)): the native share sheet with
+   `{ title, text, url }` first, falling back to the menu if `navigator.share` is missing or
+   rejects for any reason other than `AbortError`. Desktop: the expandable `.hlmenu` listing the
+   options plus the visible "Copied…" status (text + link auto-copied on highlight, as in the
+   design). Exact share texts per target: `spec/capabilities/paragraph-share.md`.
 4. **Search removed.** Masthead search icon and search bar are not rendered (search dropped).
    *Ask:* confirm the tools area holds only the theme toggle.
 5. **Reactions removed.** The reactions row is dropped; its trailing **Share article** button is
    kept at the top of `.artfoot` (copies the article link). *Ask:* keep that button?
-6. **Boot strip.** The design ships `Boot` ("> start of log0", typed commands per route) but its
-   App does not render it (`--booth: 0px`, "no strip above the header any more"). The brief lists
-   it. v0.1 ports `Boot` behind `SHOW_BOOT_STRIP = false` (pixel-identical to the design) and keeps
-   `usePrintIn` + the footer "> end of log0". *Ask:* turn the strip on?
-7. **TLDR selection.** Design: client heuristic `tldrPickRepresentative` (6 bands, scoring).
-   v0.1: Jev picks 4–8 lines by length (server, one LLM call per click), writer may hand-edit and
-   **reorder** (design is document order only). The heuristic is not ported. *Ask:* allow
-   reordering or force document order?
+6. **Boot strip — DECIDED ON (user, Phase 1 gate).** The design ships `Boot` but its App does not
+   render it (`--booth: 0px`). v0.1 renders it: `SHOW_BOOT_STRIP = true` in
+   `src/components/site/Boot.tsx`, `additions.css` sets `:root { --booth: 28px }` (the strip's
+   natural height: 13px/1.4 mono + 7px top padding + 1px border; > **Assumed:** 28 px — adjust to
+   the measured height once rendered) so the sticky header, mode bar and featured stack offsets
+   follow. Lines typed exactly as the design's `bootCommand` (design-app.js 3422–3428): the first
+   paint of the session types `> start of blog0`; every later client navigation types the route
+   command — home `> cd ~`, archive `> ls archive`, about `> cat about`, article `> open <slug>`
+   (`/p/<slug>` and `/p/<slug>/tldr` both type the slug). Timings verbatim: `BOOT_TYPE_MS = 45`,
+   `BOOT_LINE_MS = 70`, `BOOT_HOLD_MS = 420`; reduced motion sets the text instantly. A full
+   reload is a new session (`> start of blog0` again). `usePrintIn` and the footer
+   "> end of blog0" stay.
+7. **TLDR selection — DECIDED (user, Phase 1 gate).** Design: client heuristic
+   `tldrPickRepresentative` (6 bands, scoring). v0.1: Jev picks 4–8 lines by length (server, one
+   LLM call per click), writer may hand-edit and **reorder** (confirmed; design is document order
+   only). The heuristic is not ported. Article URLs stay `/p/<slug>`.
 8. **AI disclosure (new element).** Intro slide shows a `.tdeck__note` line: "Lines selected by
    Jev (AI), verbatim from the article." / "…by Jev (AI) and the editors…" (hand-edited) /
    "Lines selected by the editors, verbatim from the article." (no Jev picks). *Ask:* wording and
@@ -594,16 +727,13 @@ the question for the user.
     Shiki code blocks, footnotes rendered as a "Notes" section, strikethrough, task lists — new
     CSS in `additions.css` built only from existing tokens. *Ask:* review the styling of these
     three elements once Phase 1 is up.
-12. **Footer links.** Design's X / LinkedIn / RSS icons are dead links. v0.1: X and LinkedIn
-    render only when the site record has their URLs; RSS is hidden (no feed in v0.1). *Ask:*
-    provide the URLs; want an RSS feed?
-13. **Contact mail.** Design `hello@logzero.blog`. v0.1 seeds the site record with that value
-    (editable later in Admin → Site). *Ask:* correct address?
-14. **About copy.** Design renders a "Placeholder —" paragraph and keeps a fuller
-    `ABOUT_BODY_FULL`. v0.1 seeds `ABOUT_BODY_FULL` (no "Placeholder" text in public). *Ask:*
-    confirm or send final copy.
-15. **Newsletter success copy** "You’re in. First issue lands Thursday." is kept although sending
-    is not built. *Ask:* keep the Thursday promise?
+12. **Footer links — DECIDED.** Design's X / LinkedIn / RSS icons are dead links. v0.1: X and
+    LinkedIn render only when the site record has their URLs; **no RSS** (icon hidden, no feed —
+    confirmed by the user).
+13. **Contact mail — DECIDED.** `hello@logzero.blog` stays (seeded; editable in Admin → Site).
+14. **About copy — DECIDED.** The design's full `ABOUT_BODY_FULL` is seeded (already in
+    `SITE_DEFAULTS`); no "Placeholder" text in public.
+15. **Newsletter success copy — DECIDED.** "You’re in. First issue lands Thursday." is kept.
 16. **Theme persistence.** Design follows the OS each load and does not persist the toggle.
     v0.1 persists the reader's choice in `localStorage['blog0.theme']`; with no stored choice it
     follows the OS like the design. *Ask:* OK?
@@ -616,10 +746,13 @@ the question for the user.
 19. **Featured.** Design hard-codes `FEATURED_HITS`, mode `stack`, max 4. v0.1: per-article
     `is_featured` + `featured_rank`, same stack treatment and cap. Seed: `ai-will-destroy-the-world`,
     `tech-company-first`, `humans-are-software` in that order.
-20. **Seeded TLDR decks.** Design's per-post `tldr` arrays are paraphrases, not verbatim lines,
-    so they are not seeded; seeded posts start with TLDR **missing** until a writer clicks
-    Generate (AI only on explicit click). *Ask:* want a one-off "generate for all seeded posts"
-    command (≈5 calls, < $0.05)?
+20. **Seeded TLDR decks — DECIDED (user, Phase 1 gate).** Design's per-post `tldr` arrays are
+    paraphrases and are never seeded. `pnpm db:seed:posts` imports the 5 articles as published
+    with TLDR **missing**; the separate, explicit `pnpm seed:tldr` runs Jev once per seeded post
+    that has no deck (≈5 real calls, < $0.05, each a normal `ai_generation` row), publishes the
+    deck, and is idempotent (second run: 0 calls). Without a real key it publishes decks from the
+    committed fixture `src/server/seed/decks/<slug>.json` instead (0 calls; see
+    `spec/capabilities/reader-site.md` → Seeding). Readers never trigger a call.
 21. **In-deck poll.** `DeckPoll` exists in the design but is never rendered; not ported.
 22. **Retired design code not ported:** margin notes/threads, `AnnotationLayerLegacy`,
     `TldrPanel` (design already routes TLDR into the deck), `FeaturedRotator`, `SentenceBuilder`,
@@ -630,9 +763,16 @@ the question for the user.
     `"JetBrains Mono"` name. Pixel-identical intent.
 24. **"Next:" link** at the article foot: design cycles the `POSTS` array (oldest → newest,
     wrapping). v0.1: next newer published article by first-published date, wrapping to the oldest.
-25. **Brand values from the site record.** `WORDMARK` 'log0', tagline, contact mail, About texts,
-    publisher 'smallTech' come from the `site` row (seeded with the design's values), not code
-    constants.
+25. **Brand values from the site record — DECIDED: the brand is `blog0`, not `log0`.** The
+    design's `WORDMARK = 'log0'` is replaced by **`blog0`** everywhere the design uses `BRAND`:
+    masthead wordmark (typed in; the spinning final "0" treatment stays — the idle spin targets the
+    last character, so it still turns the nought), boot line `> start of blog0`, footer
+    `> end of blog0` and `© <year> blog0 | smallTech`, `About blog0` h1, page titles
+    (`<Title> — blog0`, home `blog0`, `About — blog0`, `Archive — blog0`), share copy
+    (`— blog0`, mail subject `Saved from blog0`), native share title, the admin header
+    "blog0 · desk". `SITE_DEFAULTS.wordmark` and `brandName` are both `'blog0'`; tagline, contact
+    mail, About texts, publisher 'smallTech' come from the `site` row, not code constants.
+    `spec/design/*` is left untouched (it says `log0`; the port substitutes the brand value).
 26. **TLDR deck stacking order.** Design: `.tdeck { position: fixed; inset: 0; z-index: 40; }`
     (`spec/design/design-app.css` line 1287), below the sticky `.modebar` (mode capsule strip,
     `z-index: 45`) and `.sitehead` (`z-index: 50`). v0.1: `.tdeck { z-index: 46 }` (override in

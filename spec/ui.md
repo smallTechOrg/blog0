@@ -43,7 +43,7 @@ only those in `spec/architecture.md` → `## Design divergences (ask user)`. Qua
 | `Wordmark` | `components/design/Wordmark.tsx` | 1 | nought spin; `plain` variant |
 | `Masthead` | `components/site/Masthead.tsx` | 1 (2 final) | nav Archive + Subscribe; theme toggle; **no search** (div. 4); compact-on-scroll |
 | `Footer`, `NewsletterForm`, `useAsciiHand`, `useEof` | `components/site/Footer.tsx`, `NewsletterForm.tsx`, `AsciiHand.ts` | 1 (form stub) / 2 real | |
-| `Boot`, `bootCommand` | `components/site/Boot.tsx` | 2 | behind `SHOW_BOOT_STRIP=false` (div. 6) |
+| `Boot`, `bootCommand` | `components/site/Boot.tsx` | 2 | **rendered** (`SHOW_BOOT_STRIP = true`, div. 6): `> start of blog0` on first paint, then `> cd ~` / `> ls archive` / `> cat about` / `> open <slug>` per client navigation; `--booth: 28px` in `additions.css` |
 | `usePrintIn` | `components/site/PrintIn.tsx` (client hook component keyed by pathname) | 1 | selector list verbatim, root `#blog0-root` |
 | `PostCard` (+ quick TLDR/Listen) | `components/site/PostCard.tsx` | 1 (nav to `/p/<slug>/tldr`) / 2 (overlay) | variants `post`, `card`, `card-lead` |
 | `Home` (About, Featured stack, Latest, See More) | `app/(site)/page.tsx` + `components/site/home/*` | 1 (Latest only + stubs) / 2 | `FEATURED_MAX=4`, `FEED_BATCH=5`, stack observer |
@@ -55,24 +55,26 @@ only those in `spec/architecture.md` → `## Design divergences (ask user)`. Qua
 | `ArticleProse` | `ArticleBody.tsx` (memoised html block) | 1 | |
 | `FigSlide47`, `FigAB`, `FIGURES` | `components/figures/FigSlide47.tsx`, `FigAB.tsx`, `registry.ts` | 1 | data constants verbatim |
 | `TldrDeck`, `tldrDwell`, `tldrType`, `tldrMinutes`, `tdeckSlide` | `components/reader/TldrDeck.tsx`, `lib/deck/timing.ts` | 1 | slides from the published deck; layout `column` |
-| `ShareLinkButton` | `components/reader/ShareLinkButton.tsx` | 1 | |
+| `ShareLinkButton` | `components/reader/ShareLinkButton.tsx` | 1 (copy) / 2 (opens the full `ShareMenu`, div. 3) | |
 | `ArticlePage` (modebar strip, readhead, readbody, capsule, artfoot) | `components/reader/ArticleView.tsx`, `ModeBar.tsx`, `ModeCapsule.tsx`, `ReadHead.tsx`, `ArticleFoot.tsx` | 1 | modes read/tldr/listen |
 | `AudioPanel` | `components/reader/ListenStub.tsx` (1–2) → `ListenView.tsx` (3) | 1 / 3 | |
 | `SummaryOverlay` | `components/site/SummaryHost.tsx` | 2 (TLDR deck) / 3 (Listen) | |
 | `parseHash`, `App` hash routing | Next routes + `components/site/LegacyHashRedirect.tsx` | 1 / 2 | div. 1 |
 | `fmtDate` | `lib/format-date.ts` | 1 | site timezone |
 | `nextArticle` | `server/public/articles.ts` | 1 | div. 24 |
-| `titleFor` | `generateMetadata` (`<Title> — log0`, home = `log0`) | 1 / 2 (OG) | |
+| `titleFor` | `generateMetadata` (`<Title> — blog0`, home = `blog0`, `About — blog0`, `Archive — blog0`) | 1 / 2 (OG) | |
 | Retired: margin notes, `AnnotationLayerLegacy`, `Reactions`, `TldrPanel`, `FeaturedRotator`, `SentenceBuilder`, `GoDeeper`, `PullQuote`, `WordCloud`, `Tiers`, `ExpandCard`, `Thumb`, `DeckPoll`, search | not ported | — | div. 5, 21, 22 |
 
 ## 3. Public screens
 
 ### Chrome (`app/(site)/layout.tsx`) — Phase 1
-`<div id="blog0-root">` → `Masthead` (wordmark types in on the page clock, last char spins
+`<div id="blog0-root">` → `Boot` strip (Phase 2, div. 6: sticky one-line terminal above the
+header, `aria-hidden`, types `> start of blog0` on first paint and the route command on every
+client navigation) → `Masthead` (wordmark **blog0** types in on the page clock, last char spins
 forever unless reduced motion; tagline types after 480 ms; compacts after 56 px scroll with
-hysteresis) → page → `Footer` (ASCII canvas, newsletter, topics, contact mail, icons,
-"> end of log0" typed on view, `© <year> log0 | smallTech`). `PrintIn` runs on every pathname
-change. Theme toggle flips `data-theme` and (Phase 2) persists.
+hysteresis) → page → `Footer` (ASCII canvas, newsletter, topics, contact mail, X/LinkedIn icons
+only when the site has URLs, no RSS, "> end of blog0" typed on view, `© <year> blog0 | smallTech`).
+`PrintIn` runs on every pathname change. Theme toggle flips `data-theme` and (Phase 2) persists.
 
 ### Home `/`
 - Phase 1: `.col` with `StubNotice` ("Featured and About arrive in Phase 2") then the **Latest**
@@ -98,8 +100,10 @@ yet" when no published deck), Listen ("—", opens `ListenStub` in Phase 1–2).
   Read) returns to `/p/<slug>`; loading `/p/<slug>/tldr` directly opens it. Slides =
   `[{kind:'intro', text: title, sub: dek}]` + one per published line. Intro slide adds
   `<p class="tdeck__note">` with the disclosure (div. 8). Eyebrow = `topic · date · N min read`.
-  End slide: **Read the full article** + `ShareLinkButton` (copies the absolute `/p/<slug>/tldr`
-  URL). All gestures/timings exactly as design (auto-advance with dwell, pause/play, segment
+  End slide: **Read the full article** + `ShareLinkButton` (Phase 1: copies the absolute
+  `/p/<slug>/tldr` URL; Phase 2: copies then opens the full `ShareMenu` anchored to the button —
+  native sheet on touch/narrow — with the deck share text, §3 *Share*). All gestures/timings
+  exactly as design (auto-advance with dwell, pause/play, segment
   click, wheel accumulation + rubber band, touch drag + snap, keys ←/→/↑/↓/PgUp/PgDn/Home/End/Esc,
   body scroll lock + scroll restore, deck starts under the measured header).
 - Unknown/unpublished slug → `not-found.tsx` in the site chrome: "That article isn’t here." +
@@ -109,16 +113,37 @@ yet" when no published deck), Listen ("—", opens `ListenStub` in Phase 1–2).
 Phase 1: page header + `StubNotice`. Phase 2: design `Archive` (month groups, topic pills, empty
 "Nothing filed under that topic yet.") and `About` (`About <wordmark>` h1, stand, strap, body).
 
-### Paragraph share (Phase 2)
-Hover on `.para` (pointer devices) → `additions.css` shows a 2 px `--accent` rule in the left
-gutter. Click/tap on a paragraph (ignoring clicks on `a`, `button`, figures) or a selection of
-≥ 3 chars inside one paragraph → `.para.is-hl` + `.hlmenu` placed like the design's `placeFor`;
-status line "Copying…" → "Copied, with a link to this passage" / "Clipboard unavailable here —
-share below instead"; grid: LinkedIn (`https://www.linkedin.com/sharing/share-offsite/?url=<link>`),
-X (`https://x.com/intent/tweet?text=<“quote”>&url=<link>`), Copy link; foot "No sign-in needed."
-Link = `<publicBase>/p/<slug>#<pid>`; URL updated with `replaceState`. Loading a URL with
-`#p-…` scrolls the paragraph to centre and highlights it (menu closed). Close on outside click,
-Esc, scroll (highlight stays).
+### Share — paragraph, article, deck (Phase 2; div. 3)
+One component, `components/reader/ShareMenu.tsx`, serves three entry points with one
+`ShareSubject = { kind: 'paragraph' | 'selection' | 'article' | 'deck'; text: string; link: string }`
+(texts and links per target: `spec/capabilities/paragraph-share.md`):
+
+- **Paragraph** (`ParagraphShare.tsx`): hover on `.para` (pointer devices) → `additions.css`
+  shows a 2 px `--accent` rule in the left gutter. Click/tap on a paragraph (ignoring clicks on
+  `a`, `button`, figures) or a selection of ≥ 3 chars inside one paragraph → `.para.is-hl`; the
+  clipboard text is written immediately; then the menu opens placed like the design's `placeFor`.
+  Link = `<publicBase>/p/<slug>#<pid>`; URL updated with `replaceState`. Loading a URL with
+  `#p-…` scrolls the paragraph to centre and highlights it (menu closed). Clicking the
+  highlighted paragraph again clears it.
+- **Article**: the **Share article** `.btn-outline` at the top of `.artfoot` (div. 5) → copies
+  the article text + link, opens the menu anchored below the button.
+- **Deck**: the end slide's `ShareLinkButton` → copies the deck text + link, opens the menu
+  inside the `.tdeck` end slide (menu `z-index` above the deck; closing the menu does not close
+  the deck).
+
+Surface selection (same for all three): if `navigator.share` exists AND
+(`matchMedia('(pointer: coarse)').matches` OR `innerWidth < 720`) → `navigator.share({ title:
+'blog0', text, url })`; on `AbortError` nothing else happens; on any other rejection or when the
+API is absent → the `.hlmenu` popover. Desktop always gets the popover:
+`role=dialog aria-label="Share this passage|article|summary"`, status line (`aria-live=polite`)
+"Copying…" → "Copied, with a link to this passage" (paragraph/selection) / "Copied — title and
+link" (article/deck) / "Clipboard unavailable here — share below instead"; `.hlmenu__grid` of
+`.hlmenu__opt` anchors in this order: **LinkedIn** (`icon: linkedin`), **X** (`x`), **WhatsApp**
+(`chat`), **Notes** (`note`, `mailto:`), **Notion** (`notion`, new tab; the text is already on the
+clipboard), **Copy link** (`copy`; a `<button>` — copies the bare link, label flips to "Link
+copied" for 1.8 s). External targets open in a new tab (`rel="noopener noreferrer"`). Foot "No
+sign-in needed." Close on outside click, Esc, scroll (the paragraph highlight stays). Keyboard:
+Tab cycles the options; Enter/Space on a `.para` opens it (design behaviour).
 
 ### Listen (Phase 3)
 Design `listenview` frame: tag, h1, player (`.audio` styles: play/pause, range seek, times) on
@@ -130,7 +155,7 @@ seek to its cue.
 ## 4. Admin screens
 
 All admin pages import `src/styles/admin.css` and reuse design tokens/components. Header bar
-(`DeskHeader`): small wordmark "log0 · desk", links Desk (Phase 2 + Site, Subscribers; Phase 4 +
+(`DeskHeader`): small wordmark "blog0 · desk", links Desk (Phase 2 + Site, Subscribers; Phase 4 +
 AI usage, Team), user name, **Sign out**.
 
 ### Sign in `/admin/login` (S1.1)
@@ -173,7 +198,10 @@ to the editor.
   - Header: status chip, bounds hint "Jev will pick 5–7 lines for this length", primary
     **Generate with Jev** (or **Regenerate**; confirm "Replace your current deck with Jev's new
     picks?" when a draft exists). Unsaved changes → button label "Save & generate" (saves then
-    generates). Disabled with reason when 0 eligible sentences.
+    generates). Disabled with reason when 0 eligible sentences. Phase 2 (designer mode): when
+    `TldrStateDto.jevAvailable` is false the button is disabled and a `.stub`-styled notice reads
+    "No OpenRouter key configured — add `BLOG0_OPENROUTER_API_KEY` to `.env` to generate with Jev.
+    You can still pick lines yourself from the article on the right."
   - Saving first (unsaved changes): button disabled, label "Saving…" while the editor saves;
     then the Running state.
   - Running: button disabled, spinner "Jev is reading… Ns" (N = elapsed seconds); panel keeps
@@ -206,6 +234,7 @@ highlights next paragraph, **Space**/big button records its cue; **Undo last tap
 ## 5. CSS additions (`src/styles/additions.css`) — only new rules, tokens only
 
 - Font variable wiring (porting rule 5).
+- `:root { --booth: 28px }` (boot strip on, div. 6); `.hlmenu` inside `.tdeck` gets `z-index: 47`.
 - `.para` hover gutter rule; `.para.is-hl` (same as `.sent.is-hl`); `.para.is-live` (Listen).
 - `.prose table` (wrap in `.tablewrap`-like overflow container via `.prose .table-scroll`;
   cells styled like `table.data`), `.prose code` inline (mono 0.9em, `--surface-2` bg, 2 px

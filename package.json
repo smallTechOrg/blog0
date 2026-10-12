@@ -31,9 +31,15 @@
     "test:e2e": "playwright test",
     "db:seed": "tsx scripts/db-seed.ts",
     "admin:create": "tsx scripts/create-admin.ts",
-    "eval:jev": "tsx scripts/eval-jev.ts"
+    "eval:jev": "tsx scripts/eval-jev.ts",
+    "spike:pglite": "tsx scripts/spike-pglite.ts",
+    "db:seed:posts": "tsx scripts/db-seed-posts.ts",
+    "seed:tldr": "tsx scripts/seed-tldr.ts",
+    "dev:design": "node scripts/dev-design.mjs",
+    "test:e2e:design": "playwright test -c playwright.design.config.ts"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.3.16",
     "@next/env": "16.4.0",
     "@node-rs/argon2": "2.2.2",
     "@shikijs/rehype": "4.5.0",

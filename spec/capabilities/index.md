@@ -8,9 +8,10 @@
 | Article reading | `article-reading.md` | 1 | Public Read view + TLDR deck exactly like the design, `/p/<slug>/tldr` deep link, capsule |
 | Format lifecycle | `format-lifecycle.md` | 1 (computed status) → 4 (full) | Extensible formats with computed status; stale + explicit Regenerate/Re-sync |
 | AI cost ledger | `ai-cost-ledger.md` | 1 (recording) → 4 (dashboard) | Per-generation cost and month-to-date total |
-| Reader site | `reader-site.md` | 2 | Home (About, Featured, Latest), Archive + topics, About page, theme, OG, seed posts |
+| Reader site | `reader-site.md` | 2 | Home (About, Featured, Latest), Archive + topics, About page, boot strip, theme, OG, seed posts + seeded decks (`seed:tldr`) |
 | Newsletter signup | `newsletter-signup.md` | 2 | Footer signup stored server-side, admin list + CSV |
-| Paragraph share | `paragraph-share.md` | 2 | Highlight a paragraph → copy quote + deep link, share to LinkedIn / X |
+| Share (paragraph, article, deck) | `paragraph-share.md` | 2 | Highlight a paragraph → copy quote + deep link; share paragraph/article/deck to LinkedIn, X, WhatsApp, Notes, Notion, Copy link; native sheet on touch |
+| Designer mode | `designer-mode.md` | 2 | Zero-install run (Node + pnpm only) on embedded PGlite with the same migrations + seeds; `pnpm dev:design` |
 | Listen audio | `listen-audio.md` | 3 | Upload mp3/m4a, local storage interface, range streaming, player |
 | Listen sync | `listen-sync.md` | 3 | Tap-along paragraph cues, reader highlight + auto-scroll, stale handling |
 | Media images | `media-images.md` | 3 | Inline image upload from the editor |

@@ -37,6 +37,7 @@ S4.1), and other slices of that phase code against the shapes written here.
 | LLM_AUTH / LLM_INSUFFICIENT_CREDITS / LLM_MODEL_NOT_FOUND | 502 | Provider config problems (message points at `.env`) |
 | LLM_RATE_LIMITED / LLM_UNAVAILABLE / LLM_TIMEOUT | 503 | Transient provider failure |
 | LLM_INVALID_OUTPUT | 502 | Model output invalid twice |
+| LLM_NOT_CONFIGURED | 503 | Phase 2, designer mode only: no OpenRouter key; Generate refused before any row is written |
 | RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header |
 | PAYLOAD_TOO_LARGE / UNSUPPORTED_MEDIA | 413 / 415 | Uploads (Phase 3) |
 | DB_UNAVAILABLE | 503 | Health check only |
@@ -92,6 +93,7 @@ interface TldrStateDto {
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
+  jevAvailable: boolean;                                          // Phase 2: false only when no OpenRouter key is configured (designer mode)
 }
 ```
 
@@ -99,7 +101,7 @@ interface TldrStateDto {
 
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
-| GET `/api/health` | none | — | `{ status: 'ok', db: 'ok', dbLatencyMs: number, version: string, uptimeSec: number }`; DB down → 503 `DB_UNAVAILABLE` (generic envelope; fixed message, no `details`, never the raw driver error — that is logged server-side) |
+| GET `/api/health` | none | — | `{ status: 'ok', db: 'ok', dbLatencyMs: number, version: string, uptimeSec: number, dbEngine?: 'postgres' \| 'pglite' }` (`dbEngine` added in Phase 2, S2.8); DB down → 503 `DB_UNAVAILABLE` (generic envelope; fixed message, no `details`, never the raw driver error — that is logged server-side) |
 
 ## Endpoints — Phase 1
 

@@ -21,7 +21,7 @@ TLDR deck, switchable through the design's mode capsule, with a shareable deck l
 |---|---|---|
 | Read view | header (topic, byline, date, title, dek), body, foot with "Next" link | browser |
 | TLDR deck | intro slide (title, dek, eyebrow, AI disclosure) + one slide per published line + end actions | browser |
-| Page metadata | `<title>` "<Title> — log0", meta description = dek | browser / crawlers |
+| Page metadata | `<title>` "<Title> — blog0", meta description = dek | browser / crawlers |
 | Home Latest list | published articles newest first | browser |
 
 ## External Calls

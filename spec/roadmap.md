@@ -2,7 +2,8 @@
 
 ## What
 
-blog0 is smallTech's official blog (public wordmark **log0**; engine/product name **blog0**) — an
+blog0 is smallTech's official blog (brand and wordmark **blog0** — the design's `log0` is
+replaced everywhere, the spinning final "0" stays; user decision at the Phase 1 gate) — an
 AI-native, multi-format publishing platform. Writers author articles in Markdown; every article
 is consumed by readers in three formats through one mode capsule:
 
@@ -46,7 +47,12 @@ explicit click, cached forever, never per reader view).
    published deck keeps serving until the writer acts.
 6. Every gate runs against real Postgres and the real OpenRouter key from `.env`. Without a key,
    real-key tests skip as `PENDING KEY` (never a pass); in CI or with a real key present a key
-   problem fails — see `spec/architecture.md` → `## Conventions` → Real-key tests.
+   problem fails — see `spec/architecture.md` → `## Conventions` → Real-key tests. From Phase 2
+   an additional designer-mode gate boots the app from a clean state with no Postgres and no
+   `.env` values (embedded engine) and smokes home, one article and its deck.
+7. A designer with only Node + pnpm runs `pnpm install && pnpm dev:design` and sees the full site
+   (5 articles with decks) at `http://localhost:3410` with hot reload, nothing else installed or
+   configured (`spec/capabilities/designer-mode.md`).
 
 ## In scope (whole roadmap) / Out of scope
 
@@ -70,7 +76,10 @@ rotator, sentence builder, in-deck poll).
 > **Assumed:** Paragraph bookmark ids are content-hashes of the paragraph text (stable across edits elsewhere; a link to an edited paragraph falls back to the article).
 > **Assumed:** Read time uses 230 words/minute.
 > **Assumed:** If Jev fails, the writer hand-picks lines; there is no heuristic fallback (user has not chosen one).
-> **Assumed:** Seeded posts have no TLDR deck until a writer clicks Generate (design TLDR arrays are paraphrases, not verbatim).
+> **Decided (user):** seeded posts get their decks from the explicit `pnpm seed:tldr` (Jev once per post with a real key; the committed fixture `src/server/seed/decks/*.json` without one); the design's paraphrased TLDR arrays are never seeded.
+> **Assumed:** `pnpm seed:tldr -- --write-fixture` is the mechanism that keeps the committed fixture equal to real Jev output (run by the orchestrator once with a real key before the Phase 2 gate and committed); the fixture is validated by a unit test against the seed articles.
+> **Assumed:** designer mode uses embedded PGlite behind the same Drizzle API (spike S2.0 decides GO/NO-GO; the NO-GO fallback is a read-only file-backed reader site — `spec/architecture.md` §11.5).
+> **Assumed:** the boot strip's height is 28 px (`--booth`), adjusted to the measured height once rendered.
 > **Assumed:** Phase 1 login throttling is in-memory per process (single instance); Phase 5 moves it to Postgres.
 > **Assumed:** Hand-edited decks allow 1–12 lines and reordering (Jev itself picks 4–8 in document order).
 > **Assumed:** A published deck whose lines vanished from the text blocks publishing of new changes until fixed (the old deck keeps serving meanwhile); publishing without any deck is allowed.
@@ -84,7 +93,9 @@ Conventions for every phase below:
 
 - All commands run from the repo root `/Users/sai/Workspace/Code/blog0` (written as `.` below).
 - `.env` must contain real values for every key in `.env.example` (OpenRouter key, admin
-  credentials, session secret, both DB URLs). Gates load it programmatically.
+  credentials, session secret, both DB URLs) for the Postgres gates; gates load it
+  programmatically. Designer mode (Phase 2+) is the one exception: with no `.env` the app runs on
+  embedded PGlite with generated secrets (`spec/architecture.md` §11).
 - Integration + E2E tests use the dedicated Postgres database `blog0_test` (created and migrated
   automatically by the test harness); the dev server uses `blog0_dev`.
 - "Boot check" = start `pnpm start` with the terminal tool's **background mechanism** (never `&`,
@@ -98,8 +109,9 @@ Conventions for every phase below:
   every Phase 1 dependency (`spec/architecture.md` → `## Stack`) and declares every Phase 1
   script (including `db:seed`, `admin:create`, `eval:jev`, whose target files Phase 1 slices
   create). Before fanning out Phase N ≥ 2, the orchestrator adds that phase's new dependencies and
-  scripts in one commit (Phase 2: `db:seed:posts`; Phase 3: `music-metadata`, `image-size`).
-  A slice that discovers it needs another dependency reports it instead of installing it.
+  scripts in one commit (Phase 2: the block in the Phase 2 section; Phase 3: `music-metadata`,
+  `image-size`). A slice that discovers it needs another dependency reports it instead of
+  installing it.
 
 ### Scaffold — minimal runnable skeleton + shared contracts
 
@@ -286,50 +298,133 @@ fetches every `<link rel="stylesheet">` on `/p/<slug>` and asserts 200 + non-emp
 
 ---
 
-### Phase 2 — Reader site
+### Phase 2 — Reader site + designer mode
 
-**Goal:** the public site is complete and pixel-close to the design: home (masthead with typed
-spinning-nought wordmark, print-in, About, Featured stack, Latest feed with See More), Archive
-with topic filter, About page (admin-editable), newsletter signup stored server-side, paragraph
-highlight + share (LinkedIn / X / copy link with deep link), light/dark theme (persisted), OG
-tags, legacy hash-link redirects, TLDR deck straight from cards, and the 5 design articles seeded
-as real published posts.
+**Goal:** the public site is complete and pixel-close to the design under the brand **blog0**:
+boot strip on (`> start of blog0`, per-route commands), home (typed spinning-nought wordmark,
+print-in, About, Featured stack, Latest feed with See More), Archive with topic filter, About page
+(admin-editable), newsletter signup stored server-side, share for paragraph / article / deck
+(LinkedIn, X, WhatsApp, Notes, Notion, Copy link; native sheet on touch), light/dark theme
+(persisted), OG tags, legacy hash-link redirects, TLDR deck straight from cards, the 5 design
+articles seeded as real published posts **with decks** (`seed:tldr`), and **designer mode**: the
+whole app runs on embedded PGlite with nothing installed beyond Node + pnpm
+(`pnpm install && pnpm dev:design`).
 
-Capabilities: `reader-site`, `newsletter-signup`, `paragraph-share` (+ seeding inside
-`reader-site`).
+Binding user decisions applied (Phase 1 gate): brand `blog0` (`spec/architecture.md` div. 25),
+boot strip on (div. 6), seeded decks via `seed:tldr` (div. 20), reordering allowed + `/p/<slug>`
+(div. 7), all share options + native sheet (div. 3), no RSS / contact mail / About copy /
+Thursday copy confirmed (div. 12–15), designer mode (`spec/architecture.md` §11,
+`spec/capabilities/designer-mode.md`).
 
-| Wave | Slice | Owns | Depends on |
+Capabilities: `reader-site`, `newsletter-signup`, `paragraph-share`, `designer-mode`.
+
+Real vs stubbed after Phase 2: everything public is real; the only remaining labelled stubs are
+Listen (capsule, card button hidden, editor tab) and the editor History tab.
+
+**Orchestrator-only `package.json` / `pnpm-lock.yaml` edits — one commit before fanning out
+(the slices never touch these two files):**
+
+```jsonc
+// dependencies (deploy-time; main deps)
+"@electric-sql/pglite": "<latest 0.3.x>"          // embedded Postgres (WASM); drizzle-orm 0.45 already ships drizzle-orm/pglite + drizzle-orm/pglite/migrator
+// scripts (exact names; target files created by the named slices)
+"spike:pglite":    "tsx scripts/spike-pglite.ts",                 // S2.0
+"db:seed:posts":   "tsx scripts/db-seed-posts.ts",                // S2.6
+"seed:tldr":       "tsx scripts/seed-tldr.ts",                    // S2.7  (`pnpm seed:tldr -- --write-fixture`)
+"dev:design":      "node scripts/dev-design.mjs",                 // S2.8
+"test:e2e:design": "playwright test -c playwright.design.config.ts"   // S2.10
+```
+`next.config.ts` (`serverExternalPackages` + `@electric-sql/pglite`) is edited by S2.8, not by
+the orchestrator. If `pnpm install` reports an ignored build script for `@electric-sql/pglite`,
+the orchestrator runs `pnpm approve-builds` and commits `pnpm-workspace.yaml`.
+
+**Independent slices** (disjoint files; "takes over" = owns a Phase 1 file for this phase)
+
+| Wave | Slice | Owns (files) | Depends on |
 |---|---|---|---|
-| A | **S2.1 Home + chrome** | `src/app/(site)/page.tsx` (takes over), `src/components/site/home/**`, `src/components/site/Masthead.tsx` (takes over: no search, theme persistence), `src/components/site/Boot.tsx`, `src/components/site/PrintIn.tsx`, `src/server/public/home.ts` | Phase 1 |
-| A | **S2.2 Archive, About, site settings** | `src/app/(site)/archive/page.tsx`, `src/app/(site)/about/page.tsx` (take over), `src/components/site/archive/**`, `src/components/site/about/**`, `src/server/site/service.ts`, `src/app/api/admin/site/route.ts`, `src/app/admin/(authed)/site/page.tsx`, `src/components/admin/site/**`, `tests/integration/site-settings.test.ts` | Phase 1 |
-| A | **S2.3 Newsletter** | `src/server/newsletter/**`, `src/app/api/newsletter/route.ts`, `src/app/api/admin/subscribers/route.ts`, `src/app/admin/(authed)/subscribers/page.tsx`, `src/components/site/NewsletterForm.tsx` (takes over), `src/components/site/Footer.tsx` (takes over: real topics, social links from site), `tests/integration/newsletter.test.ts` | Phase 1 |
-| A | **S2.4 Paragraph share** | `src/components/reader/ParagraphShare.tsx`, `src/components/reader/ShareMenu.tsx`, `src/components/reader/ArticleView.tsx` + `ArticleFoot.tsx` (take over: share provider, "Share article" button), `src/lib/share-links.ts`, `tests/unit/reader/share-links.test.ts` | Phase 1 |
-| A | **S2.5 Cards → deck, metadata, redirects** | `src/components/site/PostCard.tsx` (takes over), `src/components/site/SummaryHost.tsx`, `src/components/site/LegacyHashRedirect.tsx`, `src/app/api/public/articles/[slug]/tldr/route.ts`, `src/app/(site)/p/[slug]/page.tsx` + `tldr/page.tsx` (take over: `generateMetadata`), `src/app/sitemap.ts`, `src/app/robots.ts`, `src/server/public/metadata.ts`, `tests/integration/public-api.test.ts` | Phase 1 |
-| A | **S2.6 Seed posts** | `scripts/db-seed-posts.ts` (+ `db:seed:posts` script), `src/server/seed/seed-posts.ts`, `tests/integration/seed-posts.test.ts` | Phase 1 |
-| B | **S2.7 Reader E2E** | `tests/e2e/phase2-reader.spec.ts` | S2.1–S2.6 |
+| 0 | **S2.0 PGlite spike** | `scripts/spike-pglite.ts`, `spec/spikes/pglite.md` (verdict — the only spec file a slice writes) | the dependency commit. Runs alone first (≈ 1 h cap); its verdict picks the S2.8 path. |
+| A | **S2.1 Home + chrome + boot strip** | `src/app/(site)/page.tsx` (takes over), `src/app/(site)/layout.tsx` (takes over: `Boot` above `Masthead`), `src/components/site/home/**`, `src/components/site/Masthead.tsx` (takes over: no search, theme persistence), `src/components/site/Boot.tsx` (`SHOW_BOOT_STRIP = true`, `bootCommand` per div. 6), `src/components/site/PrintIn.tsx` (takes over), `src/styles/additions.css` (takes over: `--booth: 28px`, `.para` hover/`.is-hl`, `.stub`, `.hlmenu` in-deck z-index — every rule in `spec/ui.md` §5, so S2.4 adds no CSS), `src/server/public/home.ts` (takes over), `tests/unit/site/boot-command.test.ts` | S2.0 verdict only for scheduling; no code dependency |
+| A | **S2.2 Brand, Archive, About, site settings** | `src/server/site/defaults.ts` (takes over: `wordmark: 'blog0'`), `tests/unit/seed-content.test.ts` (takes over), `src/app/layout.tsx` (takes over: default `title: 'blog0'`), `src/app/admin/login/page.tsx` (takes over: fallback wordmark), `src/app/admin/(authed)/{page,articles/new/page,articles/[id]/page}.tsx` (take over: `· blog0` titles), `src/components/admin/DeskHeader.tsx` (takes over: "blog0 · desk", + Site / Subscribers links), `src/app/(site)/archive/page.tsx`, `src/app/(site)/about/page.tsx` (take over), `src/components/site/archive/**`, `src/components/site/about/**`, `src/server/site/service.ts`, `src/app/api/admin/site/route.ts`, `src/app/admin/(authed)/site/page.tsx`, `src/components/admin/site/**`, `src/lib/api/dto-phase2.ts` (Phase 2 DTOs from `spec/api.md`, incl. `jevAvailable` on `TldrStateDto` — S2.8 codes against it), `tests/integration/site-settings.test.ts` | — |
+| A | **S2.3 Newsletter + footer** | `src/server/newsletter/**`, `src/app/api/newsletter/route.ts`, `src/app/api/admin/subscribers/route.ts`, `src/app/admin/(authed)/subscribers/page.tsx`, `src/components/admin/subscribers/**`, `src/components/site/NewsletterForm.tsx` (takes over), `src/components/site/Footer.tsx` (takes over: real topics, X/LinkedIn only with URLs, **no RSS**, "> end of <wordmark>"), `src/components/site/AsciiHand.ts` (takes over if needed), `tests/integration/newsletter.test.ts` | — |
+| A | **S2.4 Share (paragraph, article, deck)** | `src/components/reader/ParagraphShare.tsx`, `src/components/reader/ShareMenu.tsx`, `src/components/reader/ShareLinkButton.tsx` (takes over: opens the menu), `src/components/reader/TldrDeck.tsx` (takes over: end-slide menu host), `src/components/reader/ArticleView.tsx` + `ArticleFoot.tsx` (take over: share provider, **Share article** button), `src/components/design/Icon.tsx` (takes over: `linkedin`, `chat`, `note`, `notion`, `copy`, `check`, `share` paths from the design), `src/lib/share-links.ts`, `src/lib/share-surface.ts` (native-sheet decision, pure), `tests/unit/reader/share-links.test.ts`, `tests/unit/reader/share-surface.test.ts` | — (CSS comes from S2.1's `additions.css`; S2.4 codes against the class names in `spec/ui.md` §3 *Share*) |
+| A | **S2.5 Cards → deck, metadata, redirects** | `src/components/site/PostCard.tsx` (takes over), `src/components/site/SummaryHost.tsx`, `src/components/site/LegacyHashRedirect.tsx`, `src/app/api/public/articles/[slug]/tldr/route.ts`, `src/app/(site)/p/[slug]/page.tsx` + `tldr/page.tsx` (take over: `generateMetadata`), `src/app/sitemap.ts`, `src/app/robots.ts`, `src/server/public/metadata.ts` (takes over: titles `<Title> — blog0`), `tests/integration/public-api.test.ts`, `tests/integration/public-queries.test.ts` (takes over: brand literals) | — |
+| A | **S2.6 Seed posts** | `scripts/db-seed-posts.ts`, `src/server/seed/seed-posts.ts` (`seedPosts(db, siteId, userId): Promise<{ created: string[]; skipped: string[] }>`), `tests/integration/seed-posts.test.ts` | codes the script against the §11.2 `createDbHandle` contract (`spec/architecture.md`); **gate S2.6 after S2.8 lands** |
+| A | **S2.8 Designer mode + dev server fix** | `src/server/db/{client,migrate}.ts` (take over), `src/server/db/{url,postgres,pglite}.ts`, `src/server/config.ts` (takes over: `dbEngine`, relaxed secret/key on pglite), `src/instrumentation.ts` (takes over: boot notice), `src/app/api/health/route.ts` (takes over: `ping()`, `dbEngine`), `src/server/designer/{secret,admin}.ts`, `src/server/llm/index.ts` (takes over: `LLM_NOT_CONFIGURED`), `src/server/articles/tldr.ts` (takes over: `jevAvailable`, refuse Generate before any row), `src/components/admin/editor/TldrTab.tsx` (takes over: no-key notice), `scripts/{serve.mjs,dev-design.mjs,db-create.ts,db-migrate.ts,db-verify.ts,db-seed.ts,create-admin.ts}` (take over), `next.config.ts` (takes over), `.env.example` (takes over: DB URL optional, pglite docs), `README.md` (takes over: designer one-liner, brand, dev command), `tests/unit/config.test.ts` (takes over), `tests/unit/db/url.test.ts`, `tests/integration/health.test.ts` (takes over), `tests/integration/designer-mode.test.ts` (pglite in-memory: migrate + seed + generated secret + admin file + `LLM_NOT_CONFIGURED`) | **S2.0 verdict** (GO → PGlite as specified; NO-GO → the §11.5 file-backed fallback with the same slice owning `src/server/public/file-source.ts` and `content/**`). Also owns the **`pnpm dev` hot-reload investigation**: reproduce the Next 16.4 reload loop, fix it (candidate causes to check in order: `BLOG0_LOG_FILE` / `var/` / `test-results/` writes inside the watched tree, `instrumentation.ts` re-running on each compile, `globalThis` DB cache being torn down by HMR, Turbopack vs `--webpack`), and document the working command in README; `dev:design` must use that working hot-reload server. If no fix is found in the slice's budget, README documents the exact symptom + workaround and `dev:design` falls back to `next dev --webpack` (> **Assumed:** acceptable interim) — never to `build && start`. |
+| B | **S2.7 Seed decks (`seed:tldr`) + fixture** | `scripts/seed-tldr.ts`, `src/server/seed/seed-tldr.ts` (`seedTldr(db, siteId, userId, { source: 'auto' \| 'fixture' \| 'jev', writeFixture?: boolean })`), `src/server/seed/decks/index.ts` + `src/server/seed/decks/<slug>.json` (5 files; initial content generated by the slice with the real key via `--write-fixture`, committed), `tests/unit/seed/decks-fixture.test.ts`, `tests/integration/seed-tldr.test.ts` (real key: 5 calls once, then 0; no key: fixture path with a mangled line) | S2.6 (`seedPosts`), S2.8 (`createDbHandle`), Phase 1 `generateTldr` + `publishArticle` |
+| B | **S2.9 Reader E2E** | `tests/e2e/phase2-reader.spec.ts`, `tests/e2e/global-setup.ts` (takes over: after the admin, `seedPosts` + `seedTldr(…, { source: 'fixture' })` so the reader walk needs 0 LLM calls), `tests/e2e/helpers/share.ts` | S2.1–S2.8 |
+| C | **S2.10 Designer-mode E2E** | `playwright.design.config.ts` (repo root), `tests/e2e/designer.global-setup.ts`, `tests/e2e/designer-mode.spec.ts` | S2.7, S2.8 |
 
-**Gate (exact):**
+Contracts the Wave A slices code against without waiting: `spec/architecture.md` §11.2
+(`createDbHandle`, `getDbHandle`), `spec/api.md` Phase 2 DTOs (written into `dto-phase2.ts` by
+S2.2; others import the shapes from the spec until it lands), `spec/ui.md` §3 *Share* class
+names, and `SITE_DEFAULTS.wordmark === 'blog0'`.
+
+**Gate 1 — real Postgres (exact, in order):**
 ```bash
-# cwd: /Users/sai/Workspace/Code/blog0
-pnpm db:migrate && pnpm db:verify        # no new migration expected (all Phase 2 tables exist since 0000_init); prints 0 pending
-pnpm db:seed && pnpm db:seed:posts       # idempotent; first run prints "5 posts: 5 created", re-run "5 posts: 0 created"
-pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration
-pnpm build && pnpm test:e2e              # smoke + phase1 + phase2 specs; phase2 generates a real deck for one seeded post via the admin API before walking the reader
-# Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
-curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"   # >= 1
+# cwd: /Users/sai/Workspace/Code/blog0   (.env filled; Postgres 18 running; real OpenRouter key)
+pnpm install                              # picks up @electric-sql/pglite from the orchestrator commit
+pnpm spike:pglite                         # S2.0: prints PASS per step; writes spec/spikes/pglite.md with GO|NO-GO (run once, before Wave A)
+pnpm db:migrate && pnpm db:verify         # no new migration; prints "0 pending"
+pnpm db:seed && pnpm db:seed:posts        # "5 posts: 5 created" first run; re-run "5 posts: 0 created"
+pnpm seed:tldr                            # real key: "decks: 5 seeded (5 calls, $0.0xxx)"; re-run: "decks: 0 seeded (0 calls)"
+pnpm typecheck && pnpm lint
+pnpm test:unit                            # incl. share-links, boot-command, decks-fixture (fixture lines verbatim in the seed articles), db url parsing
+pnpm test:integration                     # real blog0_test + real OpenRouter: site-settings, newsletter, public-api, seed-posts, seed-tldr (5 real calls once), designer-mode (pglite in-memory), health (both engines)
+pnpm build && pnpm test:e2e               # smoke + phase1-tldr + phase2-reader on port 3411 (blog0_test; decks from the fixture; phase1 still does one real Generate)
+# Boot check (background tool): pnpm start   then:
+curl -fsS http://localhost:3410/api/health                                 # "db":"ok","dbEngine":"postgres"
+curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"             # >= 1
+curl -fsS http://localhost:3410/ | grep -ow "log0" | wc -l                  # 0  (whole-word: the brand is blog0 everywhere; "blog0" itself does not match -w)
+curl -fsS http://localhost:3410/p/humans-are-software/tldr | grep -c "tdeck" # >= 1
 ```
 
-**How the user tests it:** `pnpm db:seed:posts`, open `http://localhost:3410/`: wordmark types
-in and its nought spins; About, Featured stack (3 seeded featured posts pile as you scroll; the
-pinned head returns to the top), Latest with See More / View all. Archive groups by month and
-filters by topic (footer topics land pre-filtered). Click any paragraph in an article → it
-highlights, the passage + link is copied, and LinkedIn / X share options appear; open the copied
-link → page scrolls to and highlights that paragraph. Toggle dark mode, reload → it persists.
-Subscribe in the footer → "You're in…"; the address appears in **Admin → Subscribers**. Edit the
-About text in **Admin → Site** → home and `/about` change. Paste an article URL into a link-preview
-tool (or view source) → OG title/description present. Generate a TLDR for a seeded post, then on
-the home card click **TLDR** → the deck opens over the list. Old links `/#<id>/tldr` redirect to
-`/p/<id>/tldr`. Stub still: Listen.
+**Gate 2 — designer mode, clean state, no Postgres, no `.env` values (exact):**
+```bash
+# cwd: /Users/sai/Workspace/Code/blog0
+rm -rf var/pglite var/pglite-e2e var/pglite-session-secret var/designer-admin.txt
+pnpm test:e2e:design                      # S2.10: own global setup migrates+seeds pglite://./var/pglite-e2e with key + secret blanked; `pnpm start` on 3413; smokes /, /p/humans-are-software, the deck (4–8 verbatim lines), admin sign-in with the generated designer admin, and the "No OpenRouter key configured" notice
+env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design   # background tool; prints the designer admin email + password ONCE, then the dev server on 3410
+curl -fsS http://localhost:3410/api/health                                  # "db":"ok","dbEngine":"pglite"
+curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"             # >= 1
+curl -fsS http://localhost:3410/p/humans-are-software | grep -c "readhead"  # >= 1
+# stop it; re-run the same dev:design command → "5 posts: 0 created", "decks: 0 seeded (0 calls)", no new password printed
+# hot reload proof: edit a string in src/components/site/home/HomeAbout.tsx while dev:design runs → the page updates without a restart (no reload loop in the server log for 60 s)
+BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify                     # "… @ PostgreSQL 17.x (PGlite) — 1 applied (latest 0000_init), 0 pending: OK"
+```
+If S2.0 returned NO-GO, Gate 2 runs the §11.5 fallback instead: the same commands minus the
+admin/health-engine assertions, and `/admin` must answer 200 with the "Admin needs a database"
+notice.
+
+**The designer one-liner (README, S2.8):**
+```bash
+pnpm install && pnpm dev:design      # → http://localhost:3410 with the 5 articles + decks; admin at /admin (email + password printed once, kept in var/designer-admin.txt)
+```
+It runs, in order: ensure `var/pglite` exists → migrate → seed site + designer admin
+(`designer@blog0.local`, generated password) → seed posts → seed decks (fixture when no key) →
+start the hot-reload dev server. Re-running is safe. Start over: `rm -rf var/pglite var/designer-admin.txt var/pglite-session-secret`.
+
+**How the user tests it:**
+1. *Designer path* (any machine with Node + pnpm): `pnpm install && pnpm dev:design`, open
+   `http://localhost:3410/`. The strip types `> start of blog0`, the wordmark **blog0** types in
+   and its nought spins, the page prints in. Click **Archive** → the strip types `> ls archive`;
+   open a card → `> open <slug>`. Every one of the 5 articles has a working TLDR deck. Sign in at
+   `/admin/login` with the printed credentials; open an article → TLDR tab shows "No OpenRouter
+   key configured" (add a key to `.env` and restart to see Jev work). Edit a component file → the
+   browser updates without restarting.
+2. *Full path* (Postgres + `.env`): `pnpm db:seed && pnpm db:seed:posts && pnpm seed:tldr`, then
+   `pnpm build && pnpm start`. Home: About, Featured stack (3 seeded featured posts pile as you
+   scroll; the pinned head returns to the top), Latest with See More / View all; on a card click
+   **TLDR** → the deck opens over the list. Archive groups by month and filters by topic (footer
+   topics land pre-filtered). Click any paragraph in an article → it highlights, the passage +
+   link is copied, and the menu offers LinkedIn, X, WhatsApp, Notes, Notion, Copy link; open the
+   copied link in a new tab → the page scrolls to and highlights that paragraph. On a phone (or
+   Chrome device emulation) tapping a paragraph opens the native share sheet instead. **Share
+   article** at the foot and **Share** on the deck's last slide open the same menu. Toggle dark
+   mode, reload → it persists. Subscribe in the footer → "You're in. First issue lands Thursday.";
+   the address appears in **Admin → Subscribers** (Export CSV). Edit the About text in **Admin →
+   Site** → home and `/about` change. View source of an article → `<title>… — blog0</title>` and
+   OG tags. Old links `/#<id>/tldr` land on `/p/<id>/tldr`. Footer: no RSS icon; X/LinkedIn only
+   once their URLs are set in Admin → Site. Stub still: Listen.
 
 ---
 
