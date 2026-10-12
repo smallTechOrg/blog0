@@ -11,6 +11,8 @@ import { loadTestEnv, pointAtTestDatabase } from '../helpers/env';
 
 loadTestEnv();
 pointAtTestDatabase();
+// Uploaded files land on a dedicated disk dir (wiped by tests/helpers/storage.ts resetStorage()).
+process.env.BLOG0_STORAGE_DIR = 'var/storage-test';
 // Keep test output readable: info lines still reach captureLogs() sinks, just not stdout.
 if ((process.env.BLOG0_LOG_LEVEL ?? '').trim() === '') process.env.BLOG0_LOG_LEVEL = 'warn';
 

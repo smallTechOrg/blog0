@@ -29,3 +29,41 @@ export function readTldrPayload(value: unknown): TldrPayload | null {
   const parsed = tldrPayloadSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
+
+// ---------------------------------------------------------------------------------------------
+// listen (Phase 3, spec/data.md → ListenPayload). A row exists from the first upload; draft null
+// after Remove audio. `marks` is [] until synced, else one per paragraph of the synced revision.
+// Phase 6 adds optional `sentenceMarks` beside `marks` (unknown keys are stripped, not refused).
+// ---------------------------------------------------------------------------------------------
+
+export const AUDIO_MIMES = ['audio/mpeg', 'audio/mp4'] as const;
+
+export const listenAudioSchema = z.object({
+  assetId: z.string().uuid(),
+  key: z.string().min(1).max(160),
+  mimeType: z.enum(AUDIO_MIMES),
+  bytes: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+});
+
+export const listenMarkSchema = z.object({
+  pid: z.string().min(1).max(64),
+  tMs: z.number().int().nonnegative(),
+});
+
+export const listenPayloadSchema = z.object({
+  audio: listenAudioSchema,
+  marks: z.array(listenMarkSchema),
+  syncFingerprint: z.string().min(1).nullable(),
+});
+
+export type ListenAudio = z.infer<typeof listenAudioSchema>;
+export type ListenMark = z.infer<typeof listenMarkSchema>;
+export type ListenPayload = z.infer<typeof listenPayloadSchema>;
+
+/** Parses a stored Listen payload; a corrupt/unknown payload reads as "no draft" (never crashes a page). */
+export function readListenPayload(value: unknown): ListenPayload | null {
+  if (value === null || value === undefined) return null;
+  const parsed = listenPayloadSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}

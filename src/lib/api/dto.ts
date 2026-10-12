@@ -129,7 +129,9 @@ export interface PublishRequest { revisionId: string }
 export type PublishResponse = ArticleResponse;
 /** 422 PUBLISH_BLOCKED → error.details */
 export type PublishBlockedReasonCode = 'TITLE_REQUIRED' | 'TOPIC_REQUIRED' | 'BODY_REQUIRED' | 'TLDR_DECK_STALE' | 'LISTEN_STALE';
-export interface PublishBlockedDetails { reasons: Array<{ code: PublishBlockedReasonCode; message: string; sids?: string[] }> }
+/** `sids` for TLDR_DECK_STALE; `missingPids` / `orphanPids` for LISTEN_STALE (Phase 3). */
+export interface PublishBlockedReason { code: PublishBlockedReasonCode; message: string; sids?: string[]; missingPids?: string[]; orphanPids?: string[] }
+export interface PublishBlockedDetails { reasons: PublishBlockedReason[] }
 
 /** 422 DECK_INVALID → error.details */
 export interface DeckInvalidDetails { sids: string[] }

@@ -187,7 +187,7 @@ describe('create and save', () => {
     expect(created.revisionCount).toBe(1);
     expect(created.publicUrl).toBeNull();
     expect(created.formats.map((f) => f.kind)).toEqual(['read', 'tldr', 'listen']);
-    expect(created.formats.map((f) => f.status)).toEqual(['ready', 'missing', 'unavailable']);
+    expect(created.formats.map((f) => f.status)).toEqual(['ready', 'missing', 'missing']);
   });
 
   it('suffixes -2 and -3 when the derived slug is taken', async () => {
@@ -456,7 +456,7 @@ describe('GET /api/admin/articles (desk)', () => {
     expect(list[1].formats).toEqual([
       { kind: 'read', status: 'missing', published: false, hasUnpublishedChanges: false },
       { kind: 'tldr', status: 'missing', published: false, hasUnpublishedChanges: false },
-      { kind: 'listen', status: 'unavailable', published: false, hasUnpublishedChanges: false },
+      { kind: 'listen', status: 'missing', published: false, hasUnpublishedChanges: false },
     ]);
   });
 });

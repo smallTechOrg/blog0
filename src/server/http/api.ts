@@ -50,28 +50,62 @@ export interface RouteContext {
 
 type AuthMode = 'admin' | 'none';
 type Summary = Record<string, unknown>;
+/** `body: 'multipart'` — the handler receives the parsed `FormData` (uploads, spec/api.md Phase 3). */
+export type BodySpec = z.ZodType | 'multipart' | undefined;
+export type BodyOf<S extends BodySpec> = S extends 'multipart' ? FormData : S extends z.ZodType ? z.infer<S> : undefined;
 
-export interface ApiOptions<S extends z.ZodType | undefined, A extends AuthMode> {
+export interface ApiOptions<S extends BodySpec, A extends AuthMode> {
   auth: A;
   /** Same-origin check; defaults to true for POST/PUT/PATCH/DELETE. */
   csrf?: boolean;
   body?: S;
+  /** Multipart only: the declared `Content-Length` may not exceed this + MULTIPART_OVERHEAD_BYTES,
+   *  else 413 PAYLOAD_TOO_LARGE before the body is read. Read at request time (config limits). */
+  maxBytes?: number | (() => number);
   /** Counts/ids only — never article text, passwords, tokens, keys or full emails. */
-  summarizeInput?: (body: S extends z.ZodType ? z.infer<S> : undefined) => Summary;
+  summarizeInput?: (body: BodyOf<S>) => Summary;
   summarizeOutput?: (data: unknown) => Summary;
 }
 
-export interface ApiContext<S extends z.ZodType | undefined, A extends AuthMode> {
+export interface ApiContext<S extends BodySpec, A extends AuthMode> {
   request: Request;
   requestId: string;
   params: Params;
-  body: S extends z.ZodType ? z.infer<S> : undefined;
+  body: BodyOf<S>;
   auth: A extends 'admin' ? AdminAuth : null;
 }
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{8,80}$/;
 const INTERNAL_MESSAGE = 'Something went wrong on our side. Try again; if it keeps happening, check the server log.';
+/** Form framing allowance on top of the file limit for the Content-Length pre-check (§9.3). */
+export const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+
+export function payloadTooLarge(limitBytes: number): ApiError {
+  const mb = Math.round((limitBytes / (1024 * 1024)) * 10) / 10;
+  return new ApiError('PAYLOAD_TOO_LARGE', 413, `That file is too big; the limit is ${mb} MB.`, { limitBytes });
+}
+
+/** Content-Length pre-check: a declared size over `maxBytes + 64 KiB` is refused before reading. */
+export function precheckContentLength(request: Request, maxBytes: number): void {
+  const raw = request.headers.get('content-length');
+  if (raw === null) return;
+  const declared = Number(raw.trim());
+  if (!Number.isFinite(declared)) return;
+  if (declared > maxBytes + MULTIPART_OVERHEAD_BYTES) throw payloadTooLarge(maxBytes);
+}
+
+async function parseMultipart(request: Request): Promise<FormData> {
+  const type = (request.headers.get('content-type') ?? '').toLowerCase();
+  if (!type.startsWith('multipart/form-data')) {
+    throw new ApiError('VALIDATION_FAILED', 400, 'Send the upload as multipart/form-data.');
+  }
+  try {
+    return await request.formData();
+  } catch {
+    throw new ApiError('VALIDATION_FAILED', 400, 'The upload form could not be read.');
+  }
+}
 
 function requestIdFor(request: Request): string {
   const incoming = request.headers.get('x-request-id');
@@ -118,7 +152,7 @@ async function parseBody(request: Request, schema: z.ZodType): Promise<unknown> 
   return parsed.data;
 }
 
-export function withApi<S extends z.ZodType | undefined = undefined, A extends AuthMode = AuthMode>(
+export function withApi<S extends BodySpec = undefined, A extends AuthMode = AuthMode>(
   options: ApiOptions<S, A>,
   handler: (ctx: ApiContext<S, A>) => Promise<unknown>,
 ): (request: Request, context: RouteContext) => Promise<Response> {
@@ -154,9 +188,17 @@ export function withApi<S extends z.ZodType | undefined = undefined, A extends A
       }
 
       const params = context?.params ? await context.params : {};
-      const body = options.body ? await parseBody(request, options.body) : undefined;
+      let body: unknown;
+      if (options.body === 'multipart') {
+        if (options.maxBytes !== undefined) {
+          precheckContentLength(request, typeof options.maxBytes === 'function' ? options.maxBytes() : options.maxBytes);
+        }
+        body = await parseMultipart(request);
+      } else if (options.body) {
+        body = await parseBody(request, options.body);
+      }
       if (options.summarizeInput) {
-        inputSummary = options.summarizeInput(body as S extends z.ZodType ? z.infer<S> : undefined);
+        inputSummary = options.summarizeInput(body as BodyOf<S>);
       }
 
       const result = await handler({

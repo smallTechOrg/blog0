@@ -287,8 +287,14 @@ async function publishReasons(
   for (const adapter of formatAdapters()) {
     const check = adapter.validateForPublish({ row: rows.find((r) => r.kind === adapter.kind) ?? null, revision, rendered });
     if (!check.ok) {
-      const sids = (check.details as { sids?: string[] } | undefined)?.sids;
-      reasons.push({ code: check.code as PublishBlockedReasonCode, message: check.message, ...(sids ? { sids } : {}) });
+      const details = (check.details ?? {}) as { sids?: string[]; missingPids?: string[]; orphanPids?: string[] };
+      reasons.push({
+        code: check.code as PublishBlockedReasonCode,
+        message: check.message,
+        ...(details.sids ? { sids: details.sids } : {}),
+        ...(details.missingPids ? { missingPids: details.missingPids } : {}),
+        ...(details.orphanPids ? { orphanPids: details.orphanPids } : {}),
+      });
     }
   }
   return reasons;
