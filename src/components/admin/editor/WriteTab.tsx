@@ -1,16 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import type { ArticleDetailDto } from '@/lib/api/dto';
 
 import type { EditorFields } from './fields';
 import { LivePreview } from './LivePreview';
-import { MarkdownEditor } from './MarkdownEditor';
+import { ImageUploadButton, type ImageUploadHandle } from './ImageUploadButton';
+import { MarkdownEditor, type MarkdownEditorHandle } from './MarkdownEditor';
 
 // Write tab (spec/ui.md §4): Title, Dek, Topic; Settings disclosure (slug, byline, featured,
 // in-progress badge); Markdown left + live preview right at ≥ 1100 px, a Write/Preview toggle
-// below that (admin.css switches on `data-pane`).
+// below that (admin.css switches on `data-pane`). Phase 3: the Image button in the editor's
+// toolbar slot; files dropped on the textarea go to the same queue.
 
 export const LIMITS = { title: 200, dek: 400, topic: 40, slug: 80, byline: 80, body: 200_000 } as const;
 
@@ -24,6 +26,8 @@ export interface WriteTabProps {
 export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps) {
   const [pane, setPane] = useState<'write' | 'preview'>('write');
   const id = article.id;
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+  const imageRef = useRef<ImageUploadHandle>(null);
 
   return (
     <div className="writetab">
@@ -141,7 +145,15 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
           </button>
         </div>
         <div className="split__write">
-          <MarkdownEditor id={`md-${id}`} value={fields.bodyMd} onChange={(v) => onField('bodyMd', v)} maxLength={LIMITS.body} />
+          <MarkdownEditor
+            ref={editorRef}
+            id={`md-${id}`}
+            value={fields.bodyMd}
+            onChange={(v) => onField('bodyMd', v)}
+            maxLength={LIMITS.body}
+            onDropFiles={(files) => imageRef.current?.addFiles(files)}
+            tools={<ImageUploadButton ref={imageRef} articleId={id} onInsert={(snippet) => editorRef.current?.insertAtCursor(snippet)} />}
+          />
         </div>
         <div className="split__preview">
           <LivePreview

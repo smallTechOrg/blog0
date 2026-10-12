@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type DragEvent, type ReactNode, type RefObject } from 'react';
+import { useRef, useState, type DragEvent, type ReactNode, type RefObject } from 'react';
 
 import type { ListenAudioDto, ListenResponse } from '@/lib/api/dto-phase3';
 import { fmtClock } from '@/lib/listen/marks';
@@ -26,6 +26,8 @@ export interface AudioUploaderProps {
   /** Anything else to show under the player (file line, etc. are built in). */
   children?: ReactNode;
   timeZone: string;
+  /** Reference time for "uploaded <relative time>" (the tab refreshes it with each server state). */
+  now: Date;
   disabled?: boolean;
   /** Focus the dropzone / picker (stale banner's "Upload a new recording"). */
   focusRef?: RefObject<HTMLButtonElement | null>;
@@ -47,18 +49,13 @@ function looksLikeAudio(file: File): boolean {
 }
 
 export function AudioUploader(props: AudioUploaderProps) {
-  const { articleId, audio, limits, markCount, audioRef, timeZone, disabled, onUploaded, onRemove, onRemoved } = props;
+  const { articleId, audio, limits, markCount, audioRef, timeZone, now, disabled, focusRef, playerEvents, onUploaded, onRemove, onRemoved } = props;
   const inputRef = useRef<HTMLInputElement>(null);
   const [upload, setUpload] = useState<Upload | null>(null);
   const [error, setError] = useState<{ message: string; file: File | null } | null>(null);
   const [dropping, setDropping] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [now, setNow] = useState(() => new Date());
   const inFlight = useRef(false);
-
-  useEffect(() => {
-    setNow(new Date());
-  }, [audio]);
 
   async function send(file: File): Promise<void> {
     if (inFlight.current) return;
@@ -144,10 +141,10 @@ export function AudioUploader(props: AudioUploaderProps) {
             preload="metadata"
             src={audio.url}
             data-testid="listen-audio"
-            onPlay={props.playerEvents?.onPlay}
-            onPause={props.playerEvents?.onPause}
-            onEnded={props.playerEvents?.onEnded}
-            onSeeked={props.playerEvents?.onSeeked}
+            onPlay={playerEvents?.onPlay}
+            onPause={playerEvents?.onPause}
+            onEnded={playerEvents?.onEnded}
+            onSeeked={playerEvents?.onSeeked}
           >
             Your browser can’t play this recording here.
           </audio>
@@ -158,7 +155,7 @@ export function AudioUploader(props: AudioUploaderProps) {
             · {fmtMb(audio.bytes)} · {fmtClock(audio.durationMs)} · uploaded {relativeTime(audio.uploadedAt, now, timeZone)} by {audio.uploadedBy}
           </p>
           <div className="recording__actions">
-            <button type="button" className="admin-btn admin-btn--small" ref={props.focusRef} disabled={disabled || removing} onClick={() => inputRef.current?.click()}>
+            <button type="button" className="admin-btn admin-btn--small" ref={focusRef} disabled={disabled || removing} onClick={() => inputRef.current?.click()}>
               Replace…
             </button>
             <button type="button" className="admin-btn admin-btn--small admin-btn--ghost" disabled={disabled || removing} onClick={() => void remove()}>
@@ -179,7 +176,7 @@ export function AudioUploader(props: AudioUploaderProps) {
         >
           <p className="dropzone__text">
             Drop an mp3 or m4a here, or{' '}
-            <button type="button" className="linkbtn" ref={props.focusRef} disabled={disabled} onClick={() => inputRef.current?.click()}>
+            <button type="button" className="linkbtn" ref={focusRef} disabled={disabled} onClick={() => inputRef.current?.click()}>
               choose a file
             </button>
           </p>

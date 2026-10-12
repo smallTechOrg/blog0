@@ -28,6 +28,8 @@ export interface PublishBarProps {
   onUnpublish: () => void;
   onDelete: () => void;
   onDismissBlocked: () => void;
+  /** LISTEN_STALE reason → "Go to Listen" selects the Listen tab (and closes the popover). */
+  onGoToListen?: () => void;
 }
 
 export function hasThingsToPublish(article: ArticleDetailDto): boolean {
@@ -131,6 +133,14 @@ export function PublishBar(props: PublishBarProps) {
                           {' '}
                           ({r.sids.length} {r.sids.length === 1 ? 'line' : 'lines'} — see the TLDR tab)
                         </span>
+                      ) : null}
+                      {r.code === 'LISTEN_STALE' && props.onGoToListen ? (
+                        <>
+                          {' '}
+                          <button type="button" className="linkbtn" onClick={props.onGoToListen}>
+                            Go to Listen
+                          </button>
+                        </>
                       ) : null}
                     </li>
                   ))}

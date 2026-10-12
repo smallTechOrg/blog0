@@ -1,12 +1,20 @@
 'use client';
 
-import { useLayoutEffect, useRef, type KeyboardEvent } from 'react';
+import { useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 
 import { wordCount } from './fields';
+import { insertAtCursor } from './insert-image';
 
 // Plain monospace Markdown textarea (spec/architecture.md: swap for CodeMirror later behind this
 // component). Tab inserts two spaces; Esc then Tab leaves the field, so keyboard users are never
-// trapped.
+// trapped. Phase 3: a `.mdedit__tools` slot right of the label (the Image button), file drops on
+// the textarea (handed to `onDropFiles`), and an imperative `insertAtCursor` for the snippet.
+
+export interface MarkdownEditorHandle {
+  /** Inserts `snippet` at the caret (replacing a selection) on its own lines; focuses the textarea with the caret after it. */
+  insertAtCursor: (snippet: string) => void;
+  focus: () => void;
+}
 
 export interface MarkdownEditorProps {
   id: string;
@@ -14,16 +22,51 @@ export interface MarkdownEditorProps {
   onChange: (next: string) => void;
   maxLength: number;
   disabled?: boolean;
+  /** Toolbar controls rendered right of the "Markdown" label (`.mdedit__tools`). */
+  tools?: ReactNode;
+  /** Files dropped on the textarea (when set, file drags show the `.is-dropping` outline). */
+  onDropFiles?: (files: File[]) => void;
+  ref?: Ref<MarkdownEditorHandle>;
 }
 
-export function MarkdownEditor({ id, value, onChange, maxLength, disabled }: MarkdownEditorProps) {
+function hasFiles(e: DragEvent<HTMLTextAreaElement>): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files');
+}
+
+export function MarkdownEditor({ id, value, onChange, maxLength, disabled, tools, onDropFiles, ref: handleRef }: MarkdownEditorProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const caret = useRef<number | null>(null);
   const escaped = useRef(false);
+  const [dropping, setDropping] = useState(false);
+  const latest = useRef({ value, onChange });
+  useLayoutEffect(() => {
+    latest.current = { value, onChange };
+  });
+
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      insertAtCursor(snippet: string) {
+        const el = ref.current;
+        const { value: current, onChange: change } = latest.current;
+        const start = el ? el.selectionStart : current.length;
+        const end = el ? el.selectionEnd : current.length;
+        const next = insertAtCursor(current, start, end, snippet);
+        caret.current = next.caret;
+        change(next.value);
+        el?.focus();
+      },
+      focus() {
+        ref.current?.focus();
+      },
+    }),
+    [],
+  );
 
   useLayoutEffect(() => {
     if (caret.current !== null && ref.current) {
       ref.current.setSelectionRange(caret.current, caret.current);
+      if (document.activeElement !== ref.current) ref.current.focus();
       caret.current = null;
     }
   }, [value]);
@@ -50,13 +93,33 @@ export function MarkdownEditor({ id, value, onChange, maxLength, disabled }: Mar
 
   return (
     <div className="mdedit">
-      <label className="admin-label" htmlFor={id}>
-        Markdown
-      </label>
+      <div className="mdedit__bar">
+        <label className="admin-label" htmlFor={id}>
+          Markdown
+        </label>
+        {tools ? <div className="mdedit__tools">{tools}</div> : null}
+      </div>
       <textarea
         ref={ref}
         id={id}
-        className="admin-input mdedit__area"
+        className={dropping ? 'admin-input mdedit__area is-dropping' : 'admin-input mdedit__area'}
+        onDragEnter={(e) => {
+          if (onDropFiles && hasFiles(e)) setDropping(true);
+        }}
+        onDragOver={(e) => {
+          if (!onDropFiles || !hasFiles(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          if (!dropping) setDropping(true);
+        }}
+        onDragLeave={() => setDropping(false)}
+        onDrop={(e) => {
+          setDropping(false);
+          if (!onDropFiles || !hasFiles(e)) return;
+          e.preventDefault();
+          const files = Array.from(e.dataTransfer.files);
+          if (files.length) onDropFiles(files);
+        }}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}

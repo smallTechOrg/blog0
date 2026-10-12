@@ -157,8 +157,8 @@ export interface TapSyncApi {
   ended: () => void;
   nudge: (index: number, deltaMs: 250 | -250) => void;
   discard: () => void;
-  /** Adopt new server marks (after a save or an audio change). */
-  load: (marks: readonly Mark[]) => void;
+  /** Adopt new server marks (after a save or an audio change); `pids` = the paragraphs they belong to when they just changed. */
+  load: (marks: readonly Mark[], pids?: readonly string[]) => void;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -172,11 +172,13 @@ export function useTapSync({ pids, durationMs, serverMarks, audioRef }: UseTapSy
   useLayoutEffect(() => {
     ctxRef.current = { pids, durationMs };
   });
-  const [state, dispatch] = useReducer(
-    (s: TapState, a: TapAction) => tapSyncReducer(s, a, ctxRef.current),
+  // The context travels with each action (captured at dispatch), so the reducer stays pure.
+  const [state, send] = useReducer(
+    (s: TapState, e: { a: TapAction; ctx: TapContext }) => tapSyncReducer(s, e.a, e.ctx),
     { pids, marks: serverMarks },
     ({ pids: p, marks }) => initialTapState(p, marks),
   );
+  const dispatch = useCallback((a: TapAction, override?: Partial<TapContext>) => send({ a, ctx: { ...ctxRef.current, ...override } }), []);
   const stateRef = useRef(state);
   useLayoutEffect(() => {
     stateRef.current = state;
@@ -205,12 +207,12 @@ export function useTapSync({ pids, durationMs, serverMarks, audioRef }: UseTapSy
   const start = useCallback(() => {
     dispatch({ type: 'start' });
     seekAndPlay(0);
-  }, [seekAndPlay]);
+  }, [dispatch, seekAndPlay]);
 
   const restart = useCallback(() => {
     dispatch({ type: 'restart' });
     seekAndPlay(0);
-  }, [seekAndPlay]);
+  }, [dispatch, seekAndPlay]);
 
   const tap = useCallback(() => {
     const el = audio();
@@ -220,14 +222,14 @@ export function useTapSync({ pids, durationMs, serverMarks, audioRef }: UseTapSy
     if (next === before) return;
     dispatch({ type: 'tap', tMs: el.currentTime * 1000, now: Date.now() });
     if (next.phase === 'complete') el.pause();
-  }, [audio]);
+  }, [audio, dispatch]);
 
   const undo = useCallback(() => {
     const seek = undoSeekMs(stateRef.current);
     if (seek === null) return;
     dispatch({ type: 'undo' });
     seekAndPlay(seek);
-  }, [seekAndPlay]);
+  }, [dispatch, seekAndPlay]);
 
   const redoFrom = useCallback(
     (index: number) => {
@@ -235,23 +237,26 @@ export function useTapSync({ pids, durationMs, serverMarks, audioRef }: UseTapSy
       dispatch({ type: 'redoFrom', index });
       seekAndPlay(seek);
     },
-    [seekAndPlay],
+    [dispatch, seekAndPlay],
   );
 
   const stop = useCallback(() => {
     dispatch({ type: 'stop' });
     pause();
-  }, [pause]);
+  }, [dispatch, pause]);
 
-  const nudge = useCallback((index: number, deltaMs: 250 | -250) => dispatch({ type: 'nudge', index, deltaMs }), []);
-  const load = useCallback((marks: readonly Mark[]) => dispatch({ type: 'load', marks }), []);
+  const nudge = useCallback((index: number, deltaMs: 250 | -250) => dispatch({ type: 'nudge', index, deltaMs }), [dispatch]);
+  const load = useCallback(
+    (marks: readonly Mark[], loadPids?: readonly string[]) => dispatch({ type: 'load', marks }, loadPids ? { pids: loadPids } : undefined),
+    [dispatch],
+  );
   const discard = useCallback(() => {
     dispatch({ type: 'load', marks: serverMarks });
     pause();
-  }, [serverMarks, pause]);
+  }, [dispatch, serverMarks, pause]);
 
   // The recording ran out before every paragraph was marked (wired to the player's `ended`).
-  const ended = useCallback(() => dispatch({ type: 'ended' }), []);
+  const ended = useCallback(() => dispatch({ type: 'ended' }), [dispatch]);
 
   // Space = tap, Backspace = undo, anywhere on the page while syncing (not inside form fields).
   const syncing = state.phase === 'syncing';

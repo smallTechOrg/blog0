@@ -78,14 +78,13 @@ export function MarkList(props: MarkListProps) {
     return <p className="admin-muted">The saved article has no paragraphs yet — write some text and save.</p>;
   }
 
-  let lastHeading = '';
   return (
     <ol className="marklist" ref={listRef} aria-label="Paragraphs">
       {paragraphs.map((p, i) => {
         const t = state.times[i] ?? null;
         const heading = p.headingPath.join(' › ');
-        const showHeading = heading !== lastHeading;
-        lastHeading = heading;
+        const prevHeading = i === 0 ? '' : paragraphs[i - 1].headingPath.join(' › ');
+        const showHeading = heading !== prevHeading;
         const isNext = syncing && i === state.nextIndex;
         const isMissing = t === null && (missingPids.has(p.pid) || state.phase === 'idle');
         const rowIssues = issues.get(p.pid) ?? [];

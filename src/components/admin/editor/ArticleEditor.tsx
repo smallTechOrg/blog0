@@ -42,6 +42,8 @@ type Load =
   | { kind: 'error'; message: string; signIn: boolean }
   | { kind: 'ready'; article: ArticleDetailDto; fields: EditorFields };
 
+const LEAVE_MARKS_CONFIRM = 'You have unsaved Listen marks. Leave the Listen tab anyway? They stay here until you reload.';
+
 type Conflict = { number: number; by: string } | null;
 
 export interface ArticleEditorProps {
@@ -60,6 +62,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
   const [tab, setTab] = useState<TabId>('write');
   const [visited, setVisited] = useState<ReadonlySet<TabId>>(() => new Set<TabId>(['write']));
   const [reloadTick, setReloadTick] = useState(0);
+  const [marksDirty, setMarksDirty] = useState(false);
 
   const loadRef = useRef(load);
   const savingRef = useRef(false);
@@ -148,16 +151,17 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Unsaved work → the browser asks before leaving.
+  // Unsaved work (text or Listen marks) → the browser asks before leaving.
+  const leaveGuard = dirty || marksDirty;
   useEffect(() => {
-    if (!dirty) return;
+    if (!leaveGuard) return;
     function onBeforeUnload(e: BeforeUnloadEvent) {
       e.preventDefault();
       e.returnValue = '';
     }
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
+  }, [leaveGuard]);
 
   const onField = useCallback(<K extends keyof EditorFields>(key: K, value: EditorFields[K]) => {
     setLoad((prev) => (prev.kind === 'ready' ? { ...prev, fields: { ...prev.fields, [key]: value } } : prev));
@@ -219,6 +223,8 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
   }
 
   function selectTab(next: TabId): void {
+    if (next === tab) return;
+    if (tab === 'listen' && marksDirty && !window.confirm(LEAVE_MARKS_CONFIRM)) return;
     setTab(next);
     setVisited((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
   }
@@ -230,7 +236,9 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     if (e.key === 'ArrowLeft') j = (i - 1 + TABS.length) % TABS.length;
     if (j < 0) return;
     e.preventDefault();
-    selectTab(TABS[j].id);
+    if (tab === 'listen' && marksDirty && !window.confirm(LEAVE_MARKS_CONFIRM)) return;
+    setTab(TABS[j].id);
+    setVisited((prev) => (prev.has(TABS[j].id) ? prev : new Set(prev).add(TABS[j].id)));
     document.getElementById(`tab-${TABS[j].id}`)?.focus();
   }
 
@@ -284,6 +292,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
     dateLabel = fmtDate(dateIso, 'UTC');
   }
   const tldrChip = article.formats.find((f) => f.kind === 'tldr');
+  const listenChip = article.formats.find((f) => f.kind === 'listen');
 
   return (
     <main className="editor">
@@ -301,6 +310,10 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
         onUnpublish={() => void unpublish()}
         onDelete={() => void deleteDraft()}
         onDismissBlocked={() => setBlocked(null)}
+        onGoToListen={() => {
+          setBlocked(null);
+          selectTab('listen');
+        }}
       />
 
       {conflict ? (
@@ -332,6 +345,11 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
               {t.id === 'tldr' && tldrChip ? (
                 <span className={`tabchip tabchip--${tldrChip.status}`}>{FORMAT_STATUS_LABEL[tldrChip.status]}</span>
               ) : null}
+              {t.id === 'listen' && listenChip && listenChip.status !== 'unavailable' ? (
+                <span className={`tabchip tabchip--${listenChip.status}`} data-testid="listen-tabchip">
+                  {FORMAT_STATUS_LABEL[listenChip.status]}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -355,7 +373,17 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
           ) : null}
         </section>
         <section id="panel-listen" role="tabpanel" aria-labelledby="tab-listen" hidden={tab !== 'listen'}>
-          <ListenTab />
+          {visited.has('listen') ? (
+            <ListenTab
+              article={article}
+              editorDirty={dirty}
+              timeZone={timeZone}
+              saveFirst={save}
+              onArticleChanged={() => void refreshArticle()}
+              onSelectTab={selectTab}
+              onMarksDirty={setMarksDirty}
+            />
+          ) : null}
         </section>
         <section id="panel-history" role="tabpanel" aria-labelledby="tab-history" hidden={tab !== 'history'}>
           <HistoryTab revisionCount={article.revisionCount} />
