@@ -22,7 +22,7 @@ machine that has only Node and pnpm, from one command, with nothing to configure
 | Running site | `http://localhost:3410` with home, archive, about, 5 articles, 5 TLDR decks | browser |
 | Embedded database | `var/pglite/` (gitignored) | disk |
 | Session secret | `var/pglite-session-secret` (mode 0600) | disk |
-| Designer admin | `designer@blog0.local` + generated password, printed once at first boot and kept in `var/designer-admin.txt` (0600) | console + disk |
+| Designer admin | `designer@blog0.local` + generated password, printed once at first boot and kept in `var/designer-admin.txt` (0600; for a non-default PGlite dir `<dir>`: `<dir>.designer-admin.txt`) | console + disk |
 | Boot notice | one log line stating the engine (`pglite`), the data dir, and whether an OpenRouter key is configured | console |
 | Jev notice (no key) | "No OpenRouter key configured — add `BLOG0_OPENROUTER_API_KEY` to `.env` to generate with Jev" in the TLDR tab; Generate disabled | admin UI |
 
@@ -39,6 +39,14 @@ machine that has only Node and pnpm, from one command, with nothing to configure
 - `pnpm dev:design` is idempotent: it creates the data dir if missing, migrates, seeds site +
   designer admin + 5 posts + decks, then starts a hot-reloading dev server. Re-running it changes
   nothing already present (no duplicate posts, no second admin, password unchanged).
+- `pnpm dev:design` always runs on the embedded engine: a `postgres://` database URL in `.env` is
+  ignored (the URL-based selection above applies to the other commands).
+- The designer admin `designer@blog0.local` is always created; if `BLOG0_ADMIN_*` are set, that
+  admin is seeded as well (both can sign in).
+- Hot reload works when the site is opened via loopback, a LAN IPv4 address of the machine, or the
+  public base URL's host (the dev server allows exactly those dev origins). To avoid an
+  intermittent reload loop (HMR hash mismatch), the dev server's persistent file-system cache is
+  off; if a reload loop still occurs, the README's fix is `rm -rf .next/dev` and restart.
 - Secrets are generated, never hard-coded: the session secret is 48 random bytes persisted at
   `var/pglite-session-secret`; the admin password is generated once, printed once, persisted at
   `var/designer-admin.txt` ("re-run with `--reset-designer-password` to rotate it").

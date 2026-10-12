@@ -16,6 +16,7 @@ import {
 import { menuPlacement, nativeShareFallback, prefersNativeShare } from '@/lib/share-surface';
 
 import { copyToClipboard } from './clipboard';
+import { shareScrollDecision, type ScrollPoint } from './share-scroll';
 
 /* ============================================================
    Share — one menu for a paragraph, the article and the deck
@@ -153,7 +154,7 @@ function nativeShareWanted(): boolean {
 }
 
 /** One share surface: state, clipboard, native sheet, and the close rules (outside pointer,
- *  Escape — which stops there, so a host deck stays open — and scroll). */
+ *  Escape — which stops there, so a host deck stays open — and a real scroll: see share-scroll.ts). */
 export function useShare(brand: string): ShareController {
   const [open, setOpen] = useState<OpenMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -201,9 +202,11 @@ export function useShare(brand: string): ShareController {
     }
   }, [isOpen]);
 
-  /* close on outside pointer, Escape or scroll — a paragraph highlight stays */
+  /* close on outside pointer, Escape or a real scroll — a paragraph highlight stays */
   useEffect(() => {
     if (!isOpen) return;
+    const openedAt = performance.now();
+    let anchor: ScrollPoint = { x: window.scrollX, y: window.scrollY };
     function onDown(e: Event) {
       const t = e.target as Element | null;
       if (!t || !(t instanceof Element)) return;
@@ -220,7 +223,10 @@ export function useShare(brand: string): ShareController {
       optsRef.current?.returnFocus?.focus({ preventScroll: true });
     }
     function onScroll() {
-      setOpen(null);
+      const current = { x: window.scrollX, y: window.scrollY };
+      const decision = shareScrollDecision({ openedAt, now: performance.now(), anchor, current });
+      if (decision === 'rebase') anchor = current;
+      else if (decision === 'close') setOpen(null);
     }
     document.addEventListener('mousedown', onDown);
     document.addEventListener('touchstart', onDown, { passive: true });

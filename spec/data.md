@@ -264,6 +264,10 @@ lazily at login).
   required) rewrites each `<slug>.json` from the deck just generated (or already published).
   Fixture shape: `{ "slug": string, "model": string, "promptVersion": string, "capturedAt": ISO,
   "lines": Array<{ "text": string, "reason": string }> }`.
-- Designer mode (`pglite://`, Phase 2): `pnpm dev:design` runs `db:seed` with the generated
-  designer admin `designer@blog0.local` (display name `Designer`) instead of `BLOG0_ADMIN_*`
-  when those are unset, then `db:seed:posts`, then `seed:tldr` (fixture path when no key).
+- Designer mode (`pglite://`, Phase 2): `pnpm dev:design` runs `db:seed`, which ALWAYS creates
+  the generated designer admin `designer@blog0.local` (display name `Designer`) and, when
+  `BLOG0_ADMIN_*` are set, also seeds that admin in addition; then `db:seed:posts`, then
+  `seed:tldr` (fixture path when no key). Designer credentials go to `var/designer-admin.txt` for
+  the default dir, or `<dir>.designer-admin.txt` for a non-default PGlite dir.
+- Seed slug collision: `db:seed:posts` never overwrites an existing article on a seed slug (e.g.
+  a writer's own article); it skips it, so that slug keeps its own featured state (divergence 27).

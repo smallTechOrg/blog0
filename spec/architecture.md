@@ -245,9 +245,16 @@ fingerprint changed). Status is computed, never stored.
   the limit; a correct password clears the (email, IP) count and refunds its reservation on the
   per-email count. Client IP: `BLOG0_TRUSTED_PROXY_HOPS` = 0 (default, no proxy) ignores
   `X-Forwarded-For` and `X-Real-IP` (client-controlled) and uses the constant `direct`, so the
-  limit is effectively per email; N > 0 takes the Nth entry from the right of `X-Forwarded-For`
+  login limit is effectively per email (and the newsletter per-IP bucket is skipped — next
+  bullet); N > 0 takes the Nth entry from the right of `X-Forwarded-For`
   (fewer entries → `unknown`); `X-Real-IP` is never trusted. Sessions store the IP only when it
   is a real address. Phase 5 moves limits to Postgres.
+- Newsletter throttling (Phase 2, same in-memory limiter, same client-IP derivation): body
+  validated first (invalid → 400, never counted); then 3 per lower-cased email per hour and 300
+  per site per hour, always; plus 10 per client IP per hour only when the IP is a real address —
+  with `direct`/`unknown` the per-IP bucket is skipped (a shared constant would otherwise let one
+  caller exhaust it for everyone). Any cap → 429 `RATE_LIMITED` with `Retry-After`. Production
+  behind a reverse proxy MUST set `BLOG0_TRUSTED_PROXY_HOPS`, or the per-IP cap is inert.
 - Raw HTML in Markdown is never rendered. Uploaded files (Phase 3) are served with their stored
   MIME type, `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`.
 - Tenancy: every table has `site_id`; every query filters by the current site id from
@@ -373,6 +380,15 @@ base64url, writes `var/pglite-session-secret` with mode `0o600`, reads it back o
 `TldrStateDto` gains `jevAvailable: boolean` so the TLDR tab shows the notice and disables
 Generate). On `postgres://` both stay required exactly as before. `BLOG0_TEST_DATABASE_URL` must
 stay `postgres://`.
+
+`scripts/dev-design.mjs` always forces PGlite: a `postgres://` `BLOG0_DATABASE_URL` from `.env` is
+ignored (only a `pglite://` value is honoured for the dir). Seeding always creates the designer
+admin `designer@blog0.local`; `BLOG0_ADMIN_*`, if set, is seeded in addition. Credentials file:
+`var/designer-admin.txt` for the default dir, `<dir>.designer-admin.txt` for any other PGlite dir.
+Hot reload: `next.config.ts` sets `allowedDevOrigins` = loopback (`localhost`, `127.0.0.1`) + every
+LAN IPv4 of the machine + the `BLOG0_PUBLIC_BASE_URL` host, and
+`experimental.turbopackFileSystemCacheForDev: false` (mitigates an intermittent HMR-hash-mismatch
+reload loop); the README says `rm -rf .next/dev` if the loop recurs.
 
 ### 11.2 DB abstraction (`src/server/db/client.ts`, taken over by S2.8)
 
@@ -779,3 +795,7 @@ the question for the user.
     `additions.css`) so the open deck sits above the docked mode capsule/modebar chrome instead
     of the capsule showing through it. Default = keep 46. *Ask:* confirm the deck should cover the
     docked mode capsule.
+27. **Seed slug collision.** An existing writer article on a seed slug is never overwritten;
+    `db:seed:posts` skips that slug (`spec/data.md` → Seed data). Consequence: a dev DB that
+    already had such an article shows 2 featured instead of 3. Default = keep (never clobber
+    writer content). *Ask:* OK, or should seeding take over the slug / pick a substitute?

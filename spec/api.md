@@ -128,7 +128,7 @@ interface TldrStateDto {
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
 | GET `/api/public/articles/:slug/tldr` | none | — | `{ slug, title, topic, dek, meta: string, slides: Array<{ text: string }>, disclosure: string, times: { read: number, tldr: number, listen: number \| null }, shareUrl: string }` — published only, else 404. `Cache-Control: public, max-age=60`. |
-| POST `/api/newsletter` | none | `{ email: string, name?: string }` | `{ subscribed: true }` (also for an already-subscribed address — no enumeration). `RATE_LIMITED` (10 per IP per hour). |
+| POST `/api/newsletter` | none | `{ email: string, name?: string }` | `{ subscribed: true }` (also for an already-subscribed address — no enumeration). Invalid bodies → 400 `VALIDATION_FAILED` before any rate-limit counting. `RATE_LIMITED` (429 + `Retry-After`) when any cap is hit: 3 per lower-cased email per hour, 300 per site per hour, and 10 per client IP per hour — the per-IP cap applies only when a real client IP is derived (`BLOG0_TRUSTED_PROXY_HOPS` > 0); with `direct`/`unknown` it is skipped (`spec/architecture.md` §6). Production behind a proxy must set `BLOG0_TRUSTED_PROXY_HOPS`. |
 | GET `/api/admin/subscribers` | admin | `?format=csv` optional | `{ subscribers: Array<{ email, name, createdAt, status }>, total }` or CSV download |
 | GET `/api/admin/site` | admin | — | `{ site: { tagline, contactEmail, aboutStrap, aboutStand, aboutBodyMd, socialXUrl, socialLinkedinUrl } }` |
 | PATCH `/api/admin/site` | admin | any subset of the above | `{ site: … }` |

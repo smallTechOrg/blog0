@@ -10,9 +10,12 @@ import { resetConfigForTests } from '@/server/config';
 import { closeDb, getDb } from '@/server/db/client';
 import { newsletterSubscriber, site, type SiteRow } from '@/server/db/schema';
 import {
+  isKnownClientIp,
+  NEWSLETTER_MAX_PER_EMAIL,
   NEWSLETTER_MAX_PER_WINDOW,
   NEWSLETTER_WINDOW_MS,
   NewsletterRateLimiter,
+  NewsletterThrottle,
   resetNewsletterRateLimiterForTests,
 } from '@/server/newsletter/rate-limit';
 import { subscribersToCsv } from '@/server/newsletter/service';
@@ -163,7 +166,42 @@ describe('POST /api/newsletter — validation and guards', () => {
 });
 
 describe('POST /api/newsletter — rate limit', () => {
-  it('answers the 11th submission from one client within the hour with 429 RATE_LIMITED + Retry-After', async () => {
+  function expect429(res: Response, env: Envelope<NewsletterSubscribeResponse>) {
+    expect(res.status).toBe(429);
+    expect(env.ok).toBe(false);
+    if (!env.ok) expect(env.error.code).toBe('RATE_LIMITED');
+    const retry = Number(res.headers.get('retry-after'));
+    expect(retry).toBeGreaterThan(0);
+    expect(retry).toBeLessThanOrEqual(3600);
+  }
+
+  it('with BLOG0_TRUSTED_PROXY_HOPS=0 the IP is unknown: no shared per-IP bucket, the 11th distinct signup succeeds', async () => {
+    setHops('0');
+    for (let i = 0; i < NEWSLETTER_MAX_PER_WINDOW + 2; i += 1) {
+      const { res } = await post({ email: `visitor${i}@example.com` }, { 'x-forwarded-for': '203.0.113.7' });
+      expect(res.status).toBe(200);
+    }
+    expect(await rows()).toHaveLength(NEWSLETTER_MAX_PER_WINDOW + 2);
+  });
+
+  it('caps one address at 3 signups per hour regardless of client (4th → 429), counting normalised emails', async () => {
+    setHops('0');
+    for (const email of ['same@example.com', ' SAME@example.com ', 'Same@Example.com']) {
+      expect((await post({ email })).res.status).toBe(200);
+    }
+    expect(NEWSLETTER_MAX_PER_EMAIL).toBe(3);
+
+    const { res, env } = await post({ email: 'same@example.com', name: 'Fourth' });
+
+    expect429(res, env);
+    const stored = await rows();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].name).toBeNull();
+    // a different address is unaffected
+    expect((await post({ email: 'different@example.com' })).res.status).toBe(200);
+  });
+
+  it('with hops=1 and X-Forwarded-For, the 11th signup from one IP within the hour → 429 + Retry-After', async () => {
     setHops('1');
     for (let i = 0; i < NEWSLETTER_MAX_PER_WINDOW; i += 1) {
       const { res } = await post({ email: `r${i}@example.com` }, { 'x-forwarded-for': '203.0.113.7' });
@@ -172,16 +210,38 @@ describe('POST /api/newsletter — rate limit', () => {
 
     const { res, env } = await post({ email: 'eleventh@example.com' }, { 'x-forwarded-for': '203.0.113.7' });
 
-    expect(res.status).toBe(429);
-    if (!env.ok) expect(env.error.code).toBe('RATE_LIMITED');
-    const retry = Number(res.headers.get('retry-after'));
-    expect(retry).toBeGreaterThan(0);
-    expect(retry).toBeLessThanOrEqual(3600);
+    expect429(res, env);
     expect(await rows()).toHaveLength(NEWSLETTER_MAX_PER_WINDOW);
 
-    // another client is unaffected
-    const other = await post({ email: 'other@example.com' }, { 'x-forwarded-for': '198.51.100.2' });
+    // another client is unaffected, and the refused address was not counted against itself
+    const other = await post({ email: 'eleventh@example.com' }, { 'x-forwarded-for': '198.51.100.2' });
     expect(other.res.status).toBe(200);
+  });
+
+  it('applies the site-wide cap across clients and addresses (cap injected small for the test)', async () => {
+    resetNewsletterRateLimiterForTests({ siteWide: 5 });
+    setHops('1');
+    for (let i = 0; i < 5; i += 1) {
+      const { res } = await post({ email: `s${i}@example.com` }, { 'x-forwarded-for': `198.51.100.${i + 1}` });
+      expect(res.status).toBe(200);
+    }
+
+    const { res, env } = await post({ email: 'late@example.com' }, { 'x-forwarded-for': '198.51.100.99' });
+
+    expect429(res, env);
+    expect(await rows()).toHaveLength(5);
+  });
+
+  it('requests rejected before validation do not consume any budget', async () => {
+    resetNewsletterRateLimiterForTests({ siteWide: 2 });
+    setHops('0');
+    for (let i = 0; i < 5; i += 1) {
+      expect((await post({ email: 'not-an-email' })).res.status).toBe(400);
+      expect((await post({ email: 'v@example.com' }, { origin: 'https://evil.example' })).res.status).toBe(403);
+    }
+    expect((await post({ email: 'v@example.com' })).res.status).toBe(200);
+    expect((await post({ email: 'w@example.com' })).res.status).toBe(200);
+    expect((await post({ email: 'x@example.com' })).res.status).toBe(429);
   });
 
   it('counts per window: the window resets after an hour', () => {
@@ -191,6 +251,30 @@ describe('POST /api/newsletter — rate limit', () => {
     const blocked = limiter.attempt('ip', t0 + 60_000);
     expect(blocked).toEqual({ limited: true, retryAfterSec: (NEWSLETTER_WINDOW_MS - 60_000) / 1000 });
     expect(limiter.attempt('ip', t0 + NEWSLETTER_WINDOW_MS).limited).toBe(false);
+  });
+
+  it('throttle: unknown IPs skip the per-IP bucket; a refusal in one bucket counts in none; windows reset', () => {
+    const throttle = new NewsletterThrottle({ perIp: 2, perEmail: 2, siteWide: 100 });
+    const t0 = 5_000_000;
+    for (const ip of ['direct', 'unknown']) {
+      for (let i = 0; i < 5; i += 1) expect(throttle.attempt({ ip, email: `${ip}${i}@x.io`, siteId: 's' }, t0).limited).toBe(false);
+    }
+    expect(isKnownClientIp('direct')).toBe(false);
+    expect(isKnownClientIp('unknown')).toBe(false);
+    expect(isKnownClientIp('203.0.113.7')).toBe(true);
+
+    expect(throttle.attempt({ ip: '1.1.1.1', email: 'a@x.io', siteId: 's' }, t0).limited).toBe(false);
+    expect(throttle.attempt({ ip: '1.1.1.1', email: 'b@x.io', siteId: 's' }, t0).limited).toBe(false);
+    const ipBlocked = throttle.attempt({ ip: '1.1.1.1', email: 'c@x.io', siteId: 's' }, t0 + 1000);
+    expect(ipBlocked).toEqual({ limited: true, retryAfterSec: NEWSLETTER_WINDOW_MS / 1000 - 1, bucket: 'ip' });
+    // c@x.io was not counted by the refused attempt: two more from another IP still pass
+    expect(throttle.attempt({ ip: '2.2.2.2', email: 'c@x.io', siteId: 's' }, t0).limited).toBe(false);
+    expect(throttle.attempt({ ip: '3.3.3.3', email: 'c@x.io', siteId: 's' }, t0).limited).toBe(false);
+    expect(throttle.attempt({ ip: '4.4.4.4', email: 'c@x.io', siteId: 's' }, t0)).toMatchObject({ limited: true, bucket: 'email' });
+    // per-email buckets are per site
+    expect(throttle.attempt({ ip: '4.4.4.4', email: 'c@x.io', siteId: 'other' }, t0).limited).toBe(false);
+    // after the window everything resets
+    expect(throttle.attempt({ ip: '1.1.1.1', email: 'c@x.io', siteId: 's' }, t0 + NEWSLETTER_WINDOW_MS).limited).toBe(false);
   });
 });
 
