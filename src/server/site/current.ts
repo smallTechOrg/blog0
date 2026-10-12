@@ -22,24 +22,39 @@ export class SiteNotFoundError extends Error {
 // several server chunks (route handlers and pages each get their own instance), so a module-level
 // variable would let PATCH /api/admin/site invalidate only its own copy while the pages kept
 // serving the old About text for up to SITE_CACHE_MS.
+// `generation` is bumped on every invalidation: a read captures it before its SELECT and stores the
+// row only if no invalidation happened meanwhile, so a read that started before a site save can never
+// re-store the pre-save row after invalidateCurrentSite().
 const CACHE_KEY = Symbol.for('blog0.currentSiteCache');
-type SiteCacheHolder = typeof globalThis & { [CACHE_KEY]?: { row: SiteRow; at: number } | null };
+interface SiteCache {
+  entry: { row: SiteRow; at: number } | null;
+  generation: number;
+}
+type SiteCacheHolder = typeof globalThis & { [CACHE_KEY]?: SiteCache };
 const holder = globalThis as SiteCacheHolder;
+
+function cache(): SiteCache {
+  return (holder[CACHE_KEY] ??= { entry: null, generation: 0 });
+}
 
 export async function getCurrentSite(now: number = Date.now()): Promise<SiteRow> {
   const slug = getConfig().siteSlug;
-  const cached = holder[CACHE_KEY];
+  const state = cache();
+  const cached = state.entry;
   if (cached && cached.row.slug === slug && now - cached.at < SITE_CACHE_MS) return cached.row;
+  const generation = state.generation;
   const [row] = await getDb().select().from(site).where(eq(site.slug, slug)).limit(1);
   if (!row) throw new SiteNotFoundError(slug);
-  holder[CACHE_KEY] = { row, at: now };
+  if (state.generation === generation) state.entry = { row, at: now };
   return row;
 }
 
 export function invalidateCurrentSite(): void {
-  holder[CACHE_KEY] = null;
+  const state = cache();
+  state.entry = null;
+  state.generation += 1;
 }
 
 export function resetCurrentSiteForTests(): void {
-  holder[CACHE_KEY] = null;
+  invalidateCurrentSite();
 }

@@ -208,6 +208,9 @@ export function loadDatabaseUrl(env: Env, name = 'BLOG0_DATABASE_URL'): string {
   return value;
 }
 
+export const PRODUCTION_DATABASE_URL_REQUIRED =
+  'BLOG0_DATABASE_URL is required in production; set postgres://… or explicitly pglite://… to opt in';
+
 export interface LoadConfigOptions {
   /**
    * Supplies the session secret on the pglite engine when BLOG0_SESSION_SECRET is absent.
@@ -231,6 +234,14 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
   } catch (error) {
     if (!(error instanceof DatabaseUrlError)) throw error;
     problems.push(error.message);
+  }
+  // Production never falls back to the embedded default silently: `pnpm start` with no database URL
+  // must not quietly serve an empty PGlite site. An explicit pglite:// URL is an opt-in and still boots.
+  // `next build` (NODE_ENV=production too) is exempt so the build stays env-free.
+  const isProduction = env.NODE_ENV === 'production';
+  if (isProduction && rawDatabaseUrl === undefined && env.NEXT_PHASE !== 'phase-production-build') {
+    problems.push(PRODUCTION_DATABASE_URL_REQUIRED);
+    database = null;
   }
   const isPglite = database?.engine === 'pglite';
 
@@ -346,7 +357,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     maxImageMb,
     e2eBaseUrl,
     trustedProxyHops,
-    isProduction: env.NODE_ENV === 'production',
+    isProduction,
   };
 }
 

@@ -36,6 +36,12 @@ machine that has only Node and pnpm, from one command, with nothing to configure
 - Engine selection is by the database URL: `pglite://<dir>` ⇒ embedded; `postgres://…` ⇒ server
   Postgres; absent ⇒ embedded at `./var/pglite` with a logged notice. The same migrations and the
   same seeds run in both engines; behaviour visible in the browser is identical.
+- The absent-URL ⇒ embedded default applies **only to non-production processes** (dev,
+  `dev:design`, scripts, tests). The production server (`pnpm start`) with an absent/empty database
+  URL refuses to boot with "BLOG0_DATABASE_URL is required in production; set postgres://… or
+  explicitly pglite://… to opt in" — a production host with a leftover `var/pglite` must never
+  silently serve designer data, including the designer admin. An explicit `pglite://` URL is still
+  allowed in production (deliberate opt-in) and logs the designer-mode boot notice.
 - `pnpm dev:design` is idempotent: it creates the data dir if missing, migrates, seeds site +
   designer admin + 5 posts + decks, then starts a hot-reloading dev server. Re-running it changes
   nothing already present (no duplicate posts, no second admin, password unchanged).
@@ -70,3 +76,4 @@ machine that has only Node and pnpm, from one command, with nothing to configure
 - [ ] Running `pnpm dev:design` a second time prints "5 posts: 0 created", "decks: 0 seeded", and no new admin password.
 - [ ] `tests/e2e/designer-mode.spec.ts` (own port 3413, PGlite dir `var/pglite-e2e`, no `.env` values for DB/secret/key) passes: home + one article + the deck, and the Jev notice when no key.
 - [ ] `pnpm db:verify` against `BLOG0_DATABASE_URL=pglite://./var/pglite` prints "0 pending".
+- [ ] Config loading with production mode and no database URL fails with exactly "BLOG0_DATABASE_URL is required in production; set postgres://… or explicitly pglite://… to opt in"; the same with `pglite://./var/pglite` succeeds with engine `pglite`; non-production with no URL selects `./var/pglite`.

@@ -318,7 +318,7 @@ rejects `..` and absolute keys.
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `BLOG0_DATABASE_URL` | no (Phase 2+) | `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (server engine) or `pglite://<dir>` (embedded, §11). Absent ⇒ PGlite default with an `app.boot` notice. Phase 1 behaviour (required, `postgres://` only) ends with S2.8. |
+| `BLOG0_DATABASE_URL` | **yes in production** (`NODE_ENV=production`, i.e. `pnpm start`); no otherwise (Phase 2+) | non-production only: `pglite://./var/pglite` | `postgres://sai@localhost:5432/blog0_dev` (server engine) or `pglite://<dir>` (embedded, §11). Absent/empty ⇒ in a non-production process (dev, `dev:design`, scripts, tests) PGlite default with an `app.boot` notice; in production a boot error (§11.1). An explicit `pglite://` URL is allowed in production (designer-mode notice logged). Phase 1 behaviour (required, `postgres://` only) ends with S2.8. |
 | `BLOG0_TEST_DATABASE_URL` | tests | — | `postgres://sai@localhost:5432/blog0_test`; must differ from the dev URL (tests refuse otherwise); must be `postgres://` (the integration gate runs on real Postgres) |
 | `BLOG0_PORT` | no | `3410` | read by `scripts/serve.mjs` (after loading `.env`) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
@@ -345,7 +345,12 @@ fields are wrapped so `JSON.stringify`/`util.inspect` print `[redacted]`; a secr
 (`BLOG0_SESSION_SECRET`, `BLOG0_OPENROUTER_API_KEY`, `BLOG0_ADMIN_PASSWORD`,
 `BLOG0_NEW_ADMIN_PASSWORD`) whose value starts with `replace-with-` (the `.env.example`
 placeholder prefix) is rejected at boot as unset, listed in the same aggregated error. Scripts and
-tests load `.env` with `@next/env`'s `loadEnvConfig(process.cwd())`.
+tests load `.env` with `@next/env`'s `loadEnvConfig(process.cwd())`. `BLOG0_DATABASE_URL`
+absent/empty while `NODE_ENV === 'production'` is a required-value error in that same aggregated
+error, worded `BLOG0_DATABASE_URL is required in production; set postgres://… or explicitly
+pglite://… to opt in` — never a silent PGlite fallback (a production host with a leftover
+`var/pglite` would otherwise serve designer data, including the designer admin). Selection rules:
+§11.1.
 
 `/api/health` never returns raw DB driver errors: on DB failure the driver error is logged
 server-side (`error` event with `request_id`) and the response is the generic envelope 503
@@ -369,8 +374,16 @@ the same Drizzle API.
 - `postgres://` / `postgresql://` → server engine (unchanged behaviour).
 - `pglite://<path>` → embedded; `<path>` is a directory relative to `process.cwd()` (repo root) or
   absolute; `pglite://memory` is reserved for the spike/unit use (in-memory, nothing persisted).
-- absent/empty → `{ engine: 'pglite', dir: './var/pglite' }` and `instrumentation.ts` logs
-  `app.boot` with `db_engine:'pglite', db_dir, notice:'BLOG0_DATABASE_URL not set — using embedded PGlite at ./var/pglite'`.
+- absent/empty, **non-production process only** (`NODE_ENV !== 'production'`: `pnpm dev`,
+  `dev:design`, scripts, tests) → `{ engine: 'pglite', dir: './var/pglite' }` and
+  `instrumentation.ts` logs `app.boot` with `db_engine:'pglite', db_dir, notice:'BLOG0_DATABASE_URL not set — using embedded PGlite at ./var/pglite'`.
+- absent/empty with `NODE_ENV === 'production'` (`pnpm start`) → `ConfigError` ("BLOG0_DATABASE_URL
+  is required in production; set postgres://… or explicitly pglite://… to opt in"); the process
+  does not boot. Reason: a production host with a leftover `var/pglite` must never silently serve
+  designer data (including the designer admin). The production check lives in `loadConfig` (which
+  receives `env` incl. `NODE_ENV`), so `parseDatabaseUrl` stays a pure scheme parser.
+- explicit `pglite://<path>` in production → allowed (deliberate opt-in); `app.boot` carries the
+  designer-mode notice (`db_engine:'pglite'`, `db_dir`).
 - anything else → `ConfigError` ("must be postgres:// or pglite://").
 `loadConfig` gains `dbEngine` and relaxes two requirements **only when** `dbEngine === 'pglite'`:
 `BLOG0_SESSION_SECRET` may be absent (→ `src/server/designer/secret.ts` generates 48 random bytes
@@ -464,6 +477,17 @@ Designer mode becomes a **file-backed read-only content adapter** for the reader
 - README states exactly this limitation in the designer section; everything else (one-liner,
   hot reload, 5 articles + decks, boot/print-in, share) is unchanged.
 The orchestrator chooses the path from `spec/spikes/pglite.md` before fanning out S2.8.
+
+### 11.6 Current-site cache (`src/server/site/current.ts`)
+
+`next build` duplicates server modules across server bundles (route handlers, server components,
+`instrumentation.ts`), so a module-level cache would exist once per bundle and an admin site-settings
+save in one bundle would leave stale copies in the others. The site-row cache therefore lives on
+`globalThis[Symbol.for('blog0.currentSiteCache')]` (one per process, shared by every bundle) and
+holds `{ row, expiresAt, generation }`, TTL **60 s**. Every save (and `resetCurrentSiteCacheForTests()`)
+increments `generation` and clears/replaces `row`; a read captures `generation` before its DB query
+and stores its result only if `generation` is unchanged afterwards — so a read racing a save never
+re-stores the old row.
 
 ---
 
@@ -620,12 +644,16 @@ BLOG0_LOG_FILE: 'test-results/e2e-server.log' }, reuseExistingServer: false, tim
 `pnpm build` must have run first (the gate does).
 
 Designer-mode E2E (S2.9) is a second Playwright config, `playwright.design.config.ts`:
-`testMatch: 'designer-mode.spec.ts'`, `globalSetup: tests/e2e/designer.global-setup.ts` (which
-runs `rm -rf var/pglite-e2e` and then the same steps as `scripts/dev-design.mjs` minus the server:
-migrate + seed into `pglite://./var/pglite-e2e`), `webServer: { command: 'pnpm start', port: 3413,
-env: { BLOG0_PORT: '3413', BLOG0_DATABASE_URL: 'pglite://./var/pglite-e2e', BLOG0_PUBLIC_BASE_URL:
+`testMatch: 'designer-mode.spec.ts'`, `webServer: { command: 'rm -rf var/pglite-e2e
+var/pglite-e2e.designer-admin.txt && pnpm dev:design', port: 3413, …}` — Playwright starts the
+web server **before** `globalSetup`, so the wipe is the first step of the web-server command
+(explicit names, no globs); `pnpm dev:design` then migrates + seeds `pglite://./var/pglite-e2e`
+and serves it (the designer path itself is under test, not `pnpm start`).
+`globalSetup: tests/e2e/designer.global-setup.ts` never deletes the dir (the server already holds
+it); it only reads the generated credentials from `var/pglite-e2e.designer-admin.txt`. webServer
+`env: { BLOG0_PORT: '3413', BLOG0_DATABASE_URL: 'pglite://./var/pglite-e2e', BLOG0_PUBLIC_BASE_URL:
 'http://localhost:3413', BLOG0_SESSION_SECRET: '', BLOG0_OPENROUTER_API_KEY: '', BLOG0_LOG_FILE:
-'test-results/e2e-design-server.log' } }`. It deliberately blanks the secret and key so the test
+'test-results/e2e-design-server.log' }`, `reuseExistingServer: false`. It deliberately blanks the secret and key so the test
 proves the generated-secret and no-key paths. Script: `test:e2e:design`.
 
 ## Conventions

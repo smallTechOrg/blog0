@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Loads .env via @next/env, then runs `next <dev|start> -p ${BLOG0_PORT || 3410}` and forwards signals.
 // Usage (from the repo root): pnpm dev | pnpm start   (designer mode: pnpm dev:design, which ends here)
+// `start` refuses an absent/empty BLOG0_DATABASE_URL (no silent PGlite in production).
 // `pnpm dev` is the hot-reload server (Turbopack). Open it as http://localhost:<port>; 127.0.0.1 and
 // this machine's LAN addresses are allowed by next.config.ts `allowedDevOrigins` (without that, the
 // HMR socket was refused and the page fully reloaded every ~40 s — the Phase 1 "reload loop").
@@ -26,6 +27,14 @@ if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
 }
 
 if ((process.env.BLOG0_DATABASE_URL ?? '').replace(/\s+#.*$/, '').trim() === '') {
+  if (mode === 'start') {
+    // Production never defaults to the embedded database (src/server/config.ts enforces the same rule
+    // for a bare `next start`); fail here, before Next.js boots, with the same message.
+    console.error(
+      'blog0 cannot start: BLOG0_DATABASE_URL is required in production; set postgres://… or explicitly pglite://… to opt in',
+    );
+    process.exit(1);
+  }
   console.log('BLOG0_DATABASE_URL not set — using embedded PGlite at ./var/pglite (run `pnpm dev:design` once to migrate + seed it).');
 }
 

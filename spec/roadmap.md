@@ -381,8 +381,8 @@ curl -fsS http://localhost:3410/p/humans-are-software/tldr | grep -c "tdeck" # >
 **Gate 2 — designer mode, clean state, no Postgres, no `.env` values (exact):**
 ```bash
 # cwd: /Users/sai/Workspace/Code/blog0
-rm -rf var/pglite var/pglite-e2e var/pglite-session-secret var/designer-admin.txt
-pnpm test:e2e:design                      # S2.10: own global setup migrates+seeds pglite://./var/pglite-e2e with key + secret blanked; `pnpm start` on 3413; smokes /, /p/humans-are-software, the deck (4–8 verbatim lines), admin sign-in with the generated designer admin, and the "No OpenRouter key configured" notice
+rm -rf var/pglite var/pglite-e2e var/pglite-e2e.designer-admin.txt var/pglite-session-secret var/designer-admin.txt   # explicit names, no globs (zsh-safe)
+pnpm test:e2e:design                      # S2.10: webServer command = `rm -rf var/pglite-e2e var/pglite-e2e.designer-admin.txt && pnpm dev:design` on 3413 (wipe first — Playwright starts the web server BEFORE globalSetup), BLOG0_DATABASE_URL=pglite://./var/pglite-e2e, key + secret blanked; globalSetup only reads the generated credentials; smokes /, /p/humans-are-software, the deck (4–8 verbatim lines), admin sign-in with the generated designer admin, and the "No OpenRouter key configured" notice
 env -u BLOG0_DATABASE_URL -u BLOG0_SESSION_SECRET -u BLOG0_OPENROUTER_API_KEY pnpm dev:design   # background tool; prints the designer admin email + password ONCE, then the dev server on 3410
 curl -fsS http://localhost:3410/api/health                                  # "db":"ok","dbEngine":"pglite"
 curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"             # >= 1

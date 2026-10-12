@@ -50,7 +50,9 @@ export async function register(): Promise<void> {
           db_dir: engine.dir,
           notice: config.databaseUrlDefaulted
             ? `BLOG0_DATABASE_URL not set — using embedded PGlite at ${engine.dir}`
-            : `designer mode — embedded PGlite at ${engine.dir}`,
+            : config.isProduction
+              ? `designer mode (explicit pglite:// in production) — embedded PGlite at ${engine.dir}`
+              : `designer mode — embedded PGlite at ${engine.dir}`,
           session_secret: config.sessionSecretSource,
         }
       : {}),

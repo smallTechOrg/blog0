@@ -14,6 +14,8 @@ const testDatabaseUrl = (process.env.BLOG0_TEST_DATABASE_URL ?? '').trim();
 export default defineConfig({
   testDir: 'tests/e2e',
   testMatch: '**/*.spec.ts',
+  // Designer-mode E2E has its own config and server (pnpm test:e2e:design).
+  testIgnore: '**/designer-mode.spec.ts',
   globalSetup: './tests/e2e/global-setup.ts',
   outputDir: 'test-results/playwright',
   fullyParallel: false,

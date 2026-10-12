@@ -250,6 +250,56 @@ describe('loadConfig — designer mode (pglite engine)', () => {
   });
 });
 
+describe('loadConfig — production database guard', () => {
+  const designerSessionSecret = () => 'generated-designer-secret-0123456789-abcdefghijklmnop';
+
+  it('refuses to boot in production when BLOG0_DATABASE_URL is absent or empty', () => {
+    for (const value of [undefined, '', '   ']) {
+      const problems = problemsOf({ ...baseEnv({ BLOG0_DATABASE_URL: value }), NODE_ENV: 'production' });
+
+      expect(problems).toEqual([
+        'BLOG0_DATABASE_URL is required in production; set postgres://… or explicitly pglite://… to opt in',
+      ]);
+    }
+  });
+
+  it('never generates a designer session secret for a refused production boot', () => {
+    let calls = 0;
+    expect(() => loadConfig({ NODE_ENV: 'production' }, { designerSessionSecret: () => (calls++, 'x'.repeat(40)) })).toThrow(
+      /BLOG0_DATABASE_URL is required in production/,
+    );
+    expect(calls).toBe(0);
+  });
+
+  it('allows an explicit pglite:// URL in production (designer-mode opt-in)', () => {
+    const config = loadConfig(
+      { BLOG0_DATABASE_URL: 'pglite://./var/pglite-guard', NODE_ENV: 'production' },
+      { designerSessionSecret },
+    );
+
+    expect(config.isProduction).toBe(true);
+    expect(config.dbEngine).toBe('pglite');
+    expect(config.databaseUrlDefaulted).toBe(false);
+  });
+
+  it('allows postgres in production and keeps the embedded default outside production', () => {
+    expect(loadConfig({ ...baseEnv(), NODE_ENV: 'production' }).dbEngine).toBe('postgres');
+    for (const NODE_ENV of [undefined, 'development', 'test']) {
+      const config = loadConfig({ NODE_ENV }, { designerSessionSecret });
+      expect(config.databaseUrlDefaulted).toBe(true);
+    }
+  });
+
+  it('does not apply during `next build` (the build stays env-free)', () => {
+    const config = loadConfig(
+      { NODE_ENV: 'production', NEXT_PHASE: 'phase-production-build' },
+      { designerSessionSecret },
+    );
+
+    expect(config.databaseUrlDefaulted).toBe(true);
+  });
+});
+
 describe('loadDatabaseTarget', () => {
   it('parses the engine for db:* scripts and defaults to embedded PGlite', () => {
     expect(loadDatabaseTarget({ BLOG0_DATABASE_URL: 'postgres://sai@localhost:5432/blog0_dev' })).toEqual({
