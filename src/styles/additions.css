@@ -1,0 +1,115 @@
+/* ============================================================
+   additions.css — new rules only (spec/ui.md §5). Loaded after the
+   verbatim design.css; built only from the design's tokens.
+   ============================================================ */
+
+/* --- fonts: next/font self-hosts the design's three families (div. 23) --- */
+:root {
+  --font-head: var(--nf-head), 'Helvetica Neue', Arial, sans-serif;
+  --font-body: var(--nf-body), Georgia, 'Times New Roman', serif;
+  --font-mono: var(--nf-mono), ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* --- the design's #root is #blog0-root here (spec/ui.md §1 rule 3) --- */
+#blog0-root { position: relative; z-index: 1; }
+
+/* The design renders on the client, so its print-in starts from an empty
+   page. Server-rendered HTML would paint first and then vanish when the
+   print-in hides it; the theme script marks the first load, this holds the
+   chrome back, and PrintIn lifts it in the same frame it assigns the lines.
+   A timeout in the script lifts it anyway if hydration never comes. */
+html[data-printing] #blog0-root { visibility: hidden; }
+
+/* --- paragraphs (the pipeline's .para replaces the design's .sent; div. 2) --- */
+.para { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* the hover rule appears only once paragraph sharing is wired (Phase 2) */
+[data-para-share] .para { position: relative; cursor: pointer; }
+@media (hover: hover) {
+  [data-para-share] .para:hover::before {
+    content: ''; position: absolute; left: -14px; top: 0.35em; bottom: 0.35em;
+    width: 2px; background: var(--accent); border-radius: 1px;
+  }
+}
+.para.is-hl, .para.is-live { background: var(--accent-soft); border-radius: 2px; }
+.para.is-live { background: var(--accent-softer); }
+
+/* --- Markdown beyond the design (div. 11) ----------------------------- */
+.prose del { color: var(--muted); }
+.prose .table-scroll {
+  overflow-x: auto; margin: 30px 0 14px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--surface);
+}
+.prose table {
+  border-collapse: collapse; width: 100%; font-family: var(--font-head); font-size: 15px; line-height: 1.5;
+}
+.prose > table { display: block; overflow-x: auto; margin: 30px 0 14px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); }
+.prose .table-scroll table { min-width: 560px; }
+.prose th, .prose td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.prose thead th { font-size: 13.5px; font-weight: 600; color: var(--muted); background: var(--surface-2); }
+.prose tbody tr:last-child td { border-bottom: 0; }
+
+.prose code {
+  font-family: var(--font-mono); font-size: 0.9em;
+  background: var(--surface-2); border-radius: 2px; padding: 0.1em 0.3em;
+}
+.prose pre { margin: 24px 0; }
+.prose pre.shiki, .prose pre {
+  font-family: var(--font-mono); font-size: 14.5px; line-height: 1.6;
+  padding: 16px; border: 1px solid var(--border); border-radius: 4px; overflow: auto;
+  background: var(--surface);
+}
+.prose pre code { font-size: inherit; background: transparent; padding: 0; border-radius: 0; }
+/* Shiki dual theme (defaultColor: false): every token carries both colours as
+   variables; the site's data-theme picks one. */
+.shiki, .shiki span { color: var(--shiki-light); background-color: var(--shiki-light-bg); }
+[data-theme="dark"] .shiki, [data-theme="dark"] .shiki span {
+  color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important;
+}
+[data-theme="light"] .shiki, [data-theme="light"] .shiki span {
+  color: var(--shiki-light) !important; background-color: var(--shiki-light-bg) !important;
+}
+
+/* footnotes — the design's "Notes" section */
+.prose .footnotes {
+  margin-top: 42px; padding-top: 6px; border-top: 1px solid var(--border);
+  font-size: 15.5px; line-height: 1.6; color: var(--text);
+}
+.prose .footnotes h2.footnotes-label {
+  position: static; width: auto; height: auto; overflow: visible; clip: auto; white-space: normal;
+}
+.prose .footnotes ol { padding-left: 1.4em; }
+.prose .footnotes li p { margin: 0 0 .4em; }
+.prose sup { line-height: 0; }
+.prose sup a, .prose sup a.inline { color: var(--accent-ink); border-bottom: 0; font-family: var(--font-head); font-size: 0.8em; padding: 0 1px; }
+.prose a[data-footnote-backref] { color: var(--accent-ink); border-bottom: 0; font-family: var(--font-head); }
+
+/* task lists */
+.prose .contains-task-list { list-style: none; padding-left: 0.2em; }
+.prose .task-list-item input[type="checkbox"] {
+  margin: 0 0.55em 0 0; vertical-align: -0.1em; accent-color: var(--accent);
+}
+
+/* --- StubNotice: a labelled "not built yet" panel --------------------- */
+.stub {
+  margin: 0 0 18px; padding: 14px 18px;
+  border: 1px dashed var(--border-strong); border-radius: 3px; background: var(--surface);
+  font-family: var(--font-head); font-size: 14.5px; line-height: 1.5; color: var(--muted);
+}
+.stub__label { color: var(--accent-ink); font-weight: 600; }
+.listenview .stub { width: 100%; margin: 0; }
+
+/* the footer's newsletter form is a labelled stub in Phase 1 */
+.ft-go[data-stub]:disabled, .ft-fld:disabled { cursor: not-allowed; }
+.ft-fld:disabled { opacity: .6; }
+
+/* --- capsule: the design references disabled modes ------------------- */
+.mode:disabled { opacity: .45; cursor: not-allowed; }
+
+/* --- deck above the article's sticky strip ---------------------------
+   Design divergence 26 (spec/architecture.md "## Design divergences (ask user)",
+   "TLDR deck stacking order"): .modebar is sticky at
+   z-index 45 and the deck is fixed at z-index 40, so the article strip covers
+   the deck's own "TL;DR | title" strip and its Pause and X can't be clicked.
+   The design's comments say the deck's strip is the one meant to show, under
+   the site header (z-index 50). */
+.tdeck { z-index: 46; }

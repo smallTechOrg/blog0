@@ -158,7 +158,7 @@ step; guard failures that make no call create no row).
 | task | text not null | `tldr.select` |
 | status | text not null | check in (`running`,`succeeded`,`failed`) |
 | requested_by | uuid fk → app_user | |
-| started_at | timestamptz not null | |
+| started_at | timestamptz not null default `now()` | |
 | finished_at | timestamptz null | |
 | model | text not null | slug used |
 | prompt_version | text not null | `jev-select-v1` |

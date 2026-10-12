@@ -73,6 +73,8 @@ export interface Config {
   maxAudioMinutes: number;
   maxImageMb: number;
   e2eBaseUrl: string | null;
+  /** Reverse proxies in front of the app that append to X-Forwarded-For (0 = none: never trust it). */
+  trustedProxyHops: number;
   isProduction: boolean;
 }
 
@@ -89,6 +91,7 @@ export const CONFIG_DEFAULTS = {
   maxAudioMb: 50,
   maxAudioMinutes: 30,
   maxImageMb: 8,
+  trustedProxyHops: 0,
 } as const;
 
 export class ConfigError extends Error {
@@ -122,6 +125,18 @@ function secret(env: Env, name: string): string | undefined {
   if (raw === undefined) return undefined;
   const value = raw.trim();
   return value === '' ? undefined : value;
+}
+
+/** `.env.example` ships secrets as `replace-with-…`; a copied-but-unedited value must never boot. */
+const PLACEHOLDER_PREFIX = 'replace-with-';
+
+function isPlaceholder(value: string): boolean {
+  return value.startsWith(PLACEHOLDER_PREFIX);
+}
+
+/** The value itself is never echoed — only the variable name. */
+function placeholderProblem(name: string): string {
+  return `${name} still holds the .env.example placeholder — set a real value in .env`;
 }
 
 function isPostgresUrl(value: string): boolean {
@@ -196,6 +211,8 @@ export function loadConfig(env: Env): Config {
   const sessionSecret = secret(env, 'BLOG0_SESSION_SECRET');
   if (sessionSecret === undefined) {
     problems.push('BLOG0_SESSION_SECRET is required (generate one with: openssl rand -base64 48)');
+  } else if (isPlaceholder(sessionSecret)) {
+    problems.push(placeholderProblem('BLOG0_SESSION_SECRET'));
   } else if (sessionSecret.length < 32) {
     problems.push('BLOG0_SESSION_SECRET must be at least 32 characters (openssl rand -base64 48)');
   }
@@ -203,6 +220,8 @@ export function loadConfig(env: Env): Config {
   const openrouterApiKey = secret(env, 'BLOG0_OPENROUTER_API_KEY');
   if (openrouterApiKey === undefined) {
     problems.push('BLOG0_OPENROUTER_API_KEY is required (create one at https://openrouter.ai/keys)');
+  } else if (isPlaceholder(openrouterApiKey)) {
+    problems.push(placeholderProblem('BLOG0_OPENROUTER_API_KEY'));
   }
 
   const rawOpenrouterBase = plain(env, 'BLOG0_OPENROUTER_BASE_URL') ?? CONFIG_DEFAULTS.openrouterBaseUrl;
@@ -223,13 +242,17 @@ export function loadConfig(env: Env): Config {
   if (adminEmail !== null && !EMAIL_RE.test(adminEmail)) problems.push('BLOG0_ADMIN_EMAIL must be an email address');
 
   const adminPassword = secret(env, 'BLOG0_ADMIN_PASSWORD');
-  if (adminPassword !== undefined && adminPassword.length < 12) {
+  if (adminPassword !== undefined && isPlaceholder(adminPassword)) {
+    problems.push(placeholderProblem('BLOG0_ADMIN_PASSWORD'));
+  } else if (adminPassword !== undefined && adminPassword.length < 12) {
     problems.push('BLOG0_ADMIN_PASSWORD must be at least 12 characters');
   }
   const adminName = plain(env, 'BLOG0_ADMIN_NAME') ?? CONFIG_DEFAULTS.adminName;
 
   const newAdminPassword = secret(env, 'BLOG0_NEW_ADMIN_PASSWORD');
-  if (newAdminPassword !== undefined && newAdminPassword.length < 12) {
+  if (newAdminPassword !== undefined && isPlaceholder(newAdminPassword)) {
+    problems.push(placeholderProblem('BLOG0_NEW_ADMIN_PASSWORD'));
+  } else if (newAdminPassword !== undefined && newAdminPassword.length < 12) {
     problems.push('BLOG0_NEW_ADMIN_PASSWORD must be at least 12 characters');
   }
 
@@ -241,6 +264,8 @@ export function loadConfig(env: Env): Config {
   const e2eRaw = plain(env, 'BLOG0_E2E_BASE_URL');
   const e2eBaseUrl = e2eRaw === undefined ? null : httpUrl(e2eRaw);
   if (e2eRaw !== undefined && e2eBaseUrl === null) problems.push('BLOG0_E2E_BASE_URL must be an absolute http(s) URL');
+
+  const trustedProxyHops = int(problems, env, 'BLOG0_TRUSTED_PROXY_HOPS', CONFIG_DEFAULTS.trustedProxyHops, 0, 10);
 
   if (problems.length > 0) throw new ConfigError(problems);
 
@@ -266,6 +291,7 @@ export function loadConfig(env: Env): Config {
     maxAudioMinutes,
     maxImageMb,
     e2eBaseUrl,
+    trustedProxyHops,
     isProduction: env.NODE_ENV === 'production',
   };
 }

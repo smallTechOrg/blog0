@@ -124,6 +124,46 @@ describe('loadConfig', () => {
     expect(config.openrouterApiKey.reveal()).toBe(API_KEY);
   });
 
+  it('rejects the .env.example placeholder secrets with a message pointing at .env, never echoing the value', () => {
+    const env = baseEnv({
+      BLOG0_SESSION_SECRET: 'replace-with-output-of-openssl-rand-base64-48',
+      BLOG0_OPENROUTER_API_KEY: 'replace-with-your-openrouter-key',
+      BLOG0_ADMIN_PASSWORD: 'replace-with-a-12-plus-char-password',
+      BLOG0_NEW_ADMIN_PASSWORD: '  replace-with-anything-long-enough  ',
+    });
+
+    const problems = problemsOf(env);
+    const message = (() => {
+      try {
+        loadConfig(env);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return '';
+    })();
+
+    expect(problems).toEqual([
+      expect.stringMatching(/^BLOG0_SESSION_SECRET still holds the \.env\.example placeholder .*\.env/),
+      expect.stringMatching(/^BLOG0_OPENROUTER_API_KEY still holds the \.env\.example placeholder .*\.env/),
+      expect.stringMatching(/^BLOG0_ADMIN_PASSWORD still holds the \.env\.example placeholder .*\.env/),
+      expect.stringMatching(/^BLOG0_NEW_ADMIN_PASSWORD still holds the \.env\.example placeholder .*\.env/),
+    ]);
+    expect(message).toMatch(/\.env/);
+    expect(message).not.toMatch(/replace-with-/);
+  });
+
+  it('accepts real-looking secrets and the keyless test value pending-placeholder', () => {
+    const env = baseEnv({
+      BLOG0_OPENROUTER_API_KEY: 'pending-placeholder',
+      BLOG0_SESSION_SECRET: 'a-secret-that-merely-contains-replace-with-inside-it',
+    });
+
+    const config = loadConfig(env);
+
+    expect(config.openrouterApiKey.reveal()).toBe('pending-placeholder');
+    expect(config.sessionSecret.reveal()).toBe('a-secret-that-merely-contains-replace-with-inside-it');
+  });
+
   it('lower-cases the admin email and accepts an absent admin block', () => {
     const withAdmin = loadConfig(baseEnv({ BLOG0_ADMIN_EMAIL: 'Sai@SmallTech.in' }));
     const withoutAdmin = loadConfig(baseEnv());

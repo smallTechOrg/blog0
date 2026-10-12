@@ -102,5 +102,28 @@ describe('GET /api/health', () => {
       expect(body.error.requestId).toBe(response.headers.get('x-request-id'));
       expect(logs.find('api.request')[0]).toMatchObject({ status: 503, err_code: 'DB_UNAVAILABLE' });
     });
+
+    it('never leaks the driver error to the client and logs it server-side instead', async () => {
+      const request = new Request('http://localhost:3410/api/health');
+
+      const response = await GET(request, ctx);
+      const text = await response.text();
+      const body = JSON.parse(text) as Envelope<HealthDto>;
+
+      expect(response.status).toBe(503);
+      expect(body.ok).toBe(false);
+      if (body.ok) return;
+      expect(body.error).not.toHaveProperty('details');
+      expect(text).not.toMatch(/ECONNREFUSED|127\.0\.0\.1|blog0_unreachable|connect |did not answer/i);
+      const errorLines = logs.find('error');
+      expect(errorLines).toHaveLength(1);
+      expect(errorLines[0]).toMatchObject({
+        level: 'error',
+        request_id: response.headers.get('x-request-id'),
+        err_code: 'DB_UNAVAILABLE',
+      });
+      expect(typeof errorLines[0]?.err_message).toBe('string');
+      expect(String(errorLines[0]?.err_message).length).toBeGreaterThan(0);
+    });
   });
 });

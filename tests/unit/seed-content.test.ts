@@ -94,6 +94,9 @@ describe('hard-cases fixture', () => {
     ['known figure', /^@@fig:slide47@@$/m],
     ['unknown figure', /^@@fig:does-not-exist@@$/m],
     ['3-word paragraph', /^Only three words\.$/m],
+    ['GFM strikethrough', /\S ~~[^~\n]+~~ \S/],
+    ['open task item', /^- \[ \] \S/m],
+    ['done task item', /^- \[x\] \S/m],
   ])('contains %s', (_name, pattern) => {
     expect(md).toMatch(pattern);
   });

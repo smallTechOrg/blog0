@@ -1,30 +1,6 @@
-/* Placeholder global stylesheet (scaffold). S1.4 replaces this with
-   @import of design.css + additions.css (spec/architecture.md → Layout). */
-
-:root {
-  color-scheme: light dark;
-  --scaffold-ink: #1a1a1a;
-  --scaffold-paper: #fbfaf7;
-}
-
-body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  background: var(--scaffold-paper);
-  color: var(--scaffold-ink);
-}
-
-.scaffold {
-  max-width: 40rem;
-  margin: 20vh auto;
-  padding: 0 1.5rem;
-}
-
-.scaffold__title {
-  font-size: 2rem;
-  letter-spacing: -0.02em;
-}
-
-.scaffold__note {
-  opacity: 0.7;
-}
+/* Global stylesheet (spec/architecture.md → Layout, spec/ui.md §1 + §5).
+   design.css is a byte-for-byte copy of spec/design/design-app.css — never edit it.
+   Every new or overriding rule lives in additions.css, loaded after it.
+   (admin.css is imported by the admin layout, not here.) */
+@import './design.css';
+@import './additions.css';

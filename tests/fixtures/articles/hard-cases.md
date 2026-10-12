@@ -31,6 +31,13 @@ A loose list of longer items:
 
 2. The second loose item is also a full paragraph of its own.
 
+The old plan was ~~to ship everything at once~~ quietly dropped. Nobody missed it in the weeks after that.
+
+A task list of open chores:
+
+- [ ] Write the remaining chapters of the guide
+- [x] Review the ~~first~~ opening draft with the team
+
 ## Quotes
 
 > Dependent on the eye and forms, eye-consciousness arises.

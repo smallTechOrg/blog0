@@ -17,7 +17,11 @@ only those in `spec/architecture.md` → `## Design divergences (ask user)`. Qua
 3. The design's `#root` becomes `<div id="blog0-root">` (used by `PrintIn`'s selector root).
 4. The root layout injects, before paint, the design's theme script extended with persistence:
    read `localStorage['blog0.theme']` (`'light'|'dark'`); else `prefers-color-scheme`; set
-   `data-theme` on `<html>` (`suppressHydrationWarning`).
+   `data-theme` on `<html>` (`suppressHydrationWarning`). Unless reduced motion is preferred, the
+   same script also sets `data-printing` on `<html>` (`additions.css` hides `#blog0-root` while it
+   is set) so server HTML never flashes before the print-in; `PrintIn` removes it in its layout
+   effect once the lines are staged, and a 2.5 s timeout in the script removes it if hydration
+   never arrives.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
    400), JetBrains Mono (400/500), exposed as CSS variables and wired in `additions.css`:
    `:root { --font-head: var(--nf-head), 'Helvetica Neue', Arial, sans-serif; --font-body:
@@ -170,8 +174,12 @@ to the editor.
     **Generate with Jev** (or **Regenerate**; confirm "Replace your current deck with Jev's new
     picks?" when a draft exists). Unsaved changes → button label "Save & generate" (saves then
     generates). Disabled with reason when 0 eligible sentences.
-  - Running: button spinner "Jev is reading…" with elapsed seconds; panel keeps prior deck
-    visible but dimmed.
+  - Saving first (unsaved changes): button disabled, label "Saving…" while the editor saves;
+    then the Running state.
+  - Running: button disabled, spinner "Jev is reading… Ns" (N = elapsed seconds); panel keeps
+    prior deck visible but dimmed.
+  - Success notice: "Jev picked N lines — saved as your draft deck. Edit them or publish."
+    ("1 line" when N = 1).
   - Generation meta line (latest): "Jev · <model> · <promptVersion> · <tokens> tokens · $<cost
     to 4 dp> (or ‘cost n/a’) · <name> · <relative time>".
   - Failure card: "Jev couldn’t make a deck: <message>." **Try again** · "or pick lines yourself

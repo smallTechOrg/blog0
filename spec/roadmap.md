@@ -44,7 +44,9 @@ explicit click, cached forever, never per reader view).
    the E2E reader walk).
 5. Editing text after a deck exists never auto-regenerates; the deck shows **stale** and the
    published deck keeps serving until the writer acts.
-6. Every gate runs against real Postgres and the real OpenRouter key from `.env`.
+6. Every gate runs against real Postgres and the real OpenRouter key from `.env`. Without a key,
+   real-key tests skip as `PENDING KEY` (never a pass); in CI or with a real key present a key
+   problem fails — see `spec/architecture.md` → `## Conventions` → Real-key tests.
 
 ## In scope (whole roadmap) / Out of scope
 
@@ -420,8 +422,11 @@ shutdown, liveness vs readiness endpoints, backup/restore scripts (Postgres dump
 and a deploy runbook. Capabilities: `container-image`, `backup-restore`, `abuse-protection`.
 Capability files are written at the start of this phase (spec-first) from this paragraph.
 
-Slices (planned): S5.1 Dockerfile + `.dockerignore` + `scripts/release.ts`; S5.2 backups
+Slices (planned): S5.1 Dockerfile + `.dockerignore` + `scripts/release.ts`, and adds
+`output: 'standalone'` to `next.config.ts` (absent until now because local `next start` warns
+under it); the container runs `node .next/standalone/server.js`; S5.2 backups
 (`scripts/backup.ts`, `scripts/restore.ts`, docs); S5.3 security headers/CSP in `next.config.ts`
+(depends on S5.1's one-line `next.config.ts` edit landing first)
 + DB-backed rate limits (`src/server/rate-limit/**`, migration owned by this slice); S5.4
 readiness/liveness + graceful shutdown (`src/app/api/health/{live,ready}/route.ts`); S5.5 E2E
 against the container.

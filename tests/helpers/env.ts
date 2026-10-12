@@ -2,6 +2,10 @@
 // dedicated test database URL. Tests refuse to run against the dev database.
 import { loadEnvConfig } from '@next/env';
 
+// `@/server/llm/key` imports `server-only`: Vitest aliases it to a no-op (vitest.config.ts); other
+// Node-side importers (Playwright) must import scripts/lib/allow-server-only first.
+import { openRouterKeyStatus } from '@/server/llm/key';
+
 // Kept on globalThis: Vitest re-evaluates modules per test file inside one worker process, but
 // process.env (already pointed at the test DB by an earlier file) persists.
 const ORIGINAL_DB_URL = Symbol.for('blog0.tests.originalDatabaseUrl');
@@ -45,12 +49,16 @@ export function pointAtTestDatabase(): string {
   return testUrl;
 }
 
-/** Real-key tests fail (not skip) when the key is missing locally; they skip only on CI without a key. */
+/** True only for a plausible real OpenRouter key. Empty and placeholder values
+ *  (`pending-placeholder`, `replace-with-…`) count as absent — the PENDING KEY rule in
+ *  spec/architecture.md ## Conventions; classification is delegated to `openRouterKeyStatus`. */
 export function hasOpenRouterKey(): boolean {
   loadTestEnv();
-  return (process.env.BLOG0_OPENROUTER_API_KEY ?? '').trim() !== '';
+  return openRouterKeyStatus(process.env.BLOG0_OPENROUTER_API_KEY) === 'real';
 }
 
+/** PENDING KEY rule: with no real key, real-key tests SKIP (with a visible `PENDING KEY` reason)
+ *  unless `CI=true`, where they must run and FAIL. With a real key they always run. */
 export function shouldSkipRealKeyTests(): boolean {
-  return process.env.CI === 'true' && !hasOpenRouterKey();
+  return !hasOpenRouterKey() && process.env.CI !== 'true';
 }

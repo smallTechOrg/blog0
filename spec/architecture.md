@@ -238,8 +238,16 @@ fingerprint changed). Status is computed, never stored.
   `/admin/login?next=<path>`).
 - CSRF: every mutating `/api/*` route requires an `Origin` header whose origin equals
   `BLOG0_PUBLIC_BASE_URL`'s origin or the request's own `Host` → else 403 `FORBIDDEN_ORIGIN`.
-- Login throttling (Phase 1, in-memory per process): 5 failures per (lower-cased email, IP) per
-  15 min → 429 `RATE_LIMITED` with `Retry-After`. Phase 5 moves limits to Postgres.
+- Login throttling (Phase 1, in-memory per process): 5 failures per (lower-cased email, client
+  IP) per 15 min, and 20 failures per lower-cased email across all IPs per 15 min → 429
+  `RATE_LIMITED` with `Retry-After` (even for the right password). Each allowed attempt is
+  reserved synchronously at the check, before any `await`, so concurrent attempts cannot overrun
+  the limit; a correct password clears the (email, IP) count and refunds its reservation on the
+  per-email count. Client IP: `BLOG0_TRUSTED_PROXY_HOPS` = 0 (default, no proxy) ignores
+  `X-Forwarded-For` and `X-Real-IP` (client-controlled) and uses the constant `direct`, so the
+  limit is effectively per email; N > 0 takes the Nth entry from the right of `X-Forwarded-For`
+  (fewer entries → `unknown`); `X-Real-IP` is never trusted. Sessions store the IP only when it
+  is a real address. Phase 5 moves limits to Postgres.
 - Raw HTML in Markdown is never rendered. Uploaded files (Phase 3) are served with their stored
   MIME type, `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`.
 - Tenancy: every table has `site_id`; every query filters by the current site id from
@@ -270,8 +278,18 @@ Envelope at every API boundary (`src/lib/api/envelope.ts`):
 `{ ok: true, data: T }` | `{ ok: false, error: { code: string, message: string, details?: unknown, requestId: string } }`.
 `message` is written for the writer ("Jev couldn't reach the model — try again in a minute.").
 Unexpected exceptions → 500 `INTERNAL` with a generic message and an `error` log line. Codes are
-listed in `spec/api.md`. Pages: `not-found.tsx` for unknown/unpublished slugs; admin client
-components render every API error inline with a retry path (never a blank screen).
+listed in `spec/api.md`. Admin client components render every API error inline with a retry
+path (never a blank screen). Public page errors: `src/app/(site)/error.tsx` (client boundary,
+inside site chrome).
+
+**Unknown/unpublished slugs (`src/proxy.ts`).** Next 16 proxy, `matcher: ['/p/:slug', '/p/:slug/tldr']`
+only. It calls `publishedSlugExists(slug)` (`src/server/public/articles.ts`, same published-only
+filter as the page queries); when false it rewrites to an unmatched internal path so the root
+`src/app/not-found.tsx` server-renders a 404 **with site chrome**. If the DB check throws, the
+proxy logs and falls through to the page, whose own `notFound()` remains the fallback. Reason:
+in Next 16.4, `notFound()` thrown from a page segment during SSR returns the bare
+`__next_error__` HTML (status 404) and the chrome appears only after hydration. The proxy never
+does auth (layouts + route handlers own it). Cost: one indexed query per `/p/*` request.
 
 ## 9. Storage interface (Phase 3 contract; written here so S3.2 can code against it)
 
@@ -298,6 +316,7 @@ rejects `..` and absolute keys.
 | `BLOG0_PORT` | no | `3410` | read by `scripts/serve.mjs` (after loading `.env`) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
+| `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | integer 0–10: reverse proxies appending to `X-Forwarded-For`; 0 = ignore forwarding headers (§6) |
 | `BLOG0_SESSION_SECRET` | yes | — | ≥ 32 chars (`openssl rand -base64 48`) |
 | `BLOG0_OPENROUTER_API_KEY` | yes | — | validated at boot for presence; liveness by `pnpm check:openrouter` |
 | `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | |
@@ -314,8 +333,19 @@ rejects `..` and absolute keys.
 Rules: `loadConfig(env)` is pure (unit-testable) and `getConfig()` caches it; values are trimmed
 and, for non-secret fields, a trailing ` # comment` is stripped (dirty `.env` tolerance); missing
 or invalid required values throw one error listing every problem and pointing at `.env`; secret
-fields are wrapped so `JSON.stringify`/`util.inspect` print `[redacted]`. Scripts and tests load
-`.env` with `@next/env`'s `loadEnvConfig(process.cwd())`.
+fields are wrapped so `JSON.stringify`/`util.inspect` print `[redacted]`; a secret field
+(`BLOG0_SESSION_SECRET`, `BLOG0_OPENROUTER_API_KEY`, `BLOG0_ADMIN_PASSWORD`,
+`BLOG0_NEW_ADMIN_PASSWORD`) whose value starts with `replace-with-` (the `.env.example`
+placeholder prefix) is rejected at boot as unset, listed in the same aggregated error. Scripts and
+tests load `.env` with `@next/env`'s `loadEnvConfig(process.cwd())`.
+
+`/api/health` never returns raw DB driver errors: on DB failure the driver error is logged
+server-side (`error` event with `request_id`) and the response is the generic envelope 503
+`DB_UNAVAILABLE` with a fixed message (no driver text, host, or connection string).
+
+> **Assumed:** local dev admin credentials may live in the gitignored file `var/dev-admin.env`
+> (`BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME`), sourced into the shell when
+> `.env` lacks them; values in `.env` take precedence over it.
 
 ---
 
@@ -347,7 +377,7 @@ the requirements.
 | Media probing (Phase 3) | `music-metadata`, `image-size` | Pure JS duration/format probe for mp3/m4a and dimensions/type for images; no native ffmpeg dependency. |
 | Lint | ESLint 9 flat config + `eslint-config-next` (core-web-vitals, typescript) | Standard for Next; `next lint` is not used. |
 
-> **Assumed:** Next.js **16** is current stable in Oct 2026 (Turbopack default; `params`/`searchParams` are Promises; Middleware renamed Proxy). blog0 uses **no** middleware/proxy file at all (auth is enforced in layouts and route handlers), so the rename cannot bite. If 16 is unavailable, use 15.5 — no code in this spec depends on 16-only APIs.
+> **Assumed:** Next.js **16** is current stable in Oct 2026 (Turbopack default; `params`/`searchParams` are Promises; Middleware renamed Proxy). blog0 has exactly **one** proxy file, `src/proxy.ts` (404 pre-check for `/p/:slug` and `/p/:slug/tldr` only; see §8); auth is never enforced there (layouts and route handlers own it). If 16 is unavailable, use 15.5 and rename the file to `src/middleware.ts` (same matcher and logic).
 > **Assumed:** Drizzle over Prisma (rationale above).
 > **Assumed:** plain `<textarea>` editor (monospace, tab inserts two spaces) instead of CodeMirror — fewer moving parts for v0.1; swap later behind `MarkdownEditor`.
 > **Assumed:** pnpm ≥10 blocks dependency build scripts by default; `pnpm-workspace.yaml` lists `onlyBuiltDependencies: [esbuild, sharp]`. If `pnpm install` warns about ignored builds, run `pnpm approve-builds` and commit the result.
@@ -357,8 +387,11 @@ Deploy-time dependencies (must be in `dependencies`, not `devDependencies`): `ne
 packages, `shiki`, `@shikijs/rehype`, `@next/env`. Dev-only: `drizzle-kit`, `vitest`,
 `@playwright/test`, `typescript`, `@types/*`, `eslint*`.
 
-`next.config.ts`: `output: 'standalone'` (Phase 5 Docker), `serverExternalPackages:
-['@node-rs/argon2', 'shiki', 'postgres']`, `poweredByHeader: false`, `typedRoutes` off.
+`next.config.ts`: `serverExternalPackages: ['@node-rs/argon2', 'shiki', 'postgres']`,
+`poweredByHeader: false`, `typedRoutes` off. **No** `output: 'standalone'` before Phase 5: the
+documented local run command is `next start` (via `scripts/serve.mjs`), which warns under
+standalone output. Phase 5 slice S5.1 (Dockerfile) adds `output: 'standalone'` and the container
+runs `node .next/standalone/server.js` (see `spec/roadmap.md` → Phase 5).
 
 ## Layout
 
@@ -380,10 +413,12 @@ blog0/
 │   └── db-seed-posts.ts                                                         # S2.6
 ├── src/
 │   ├── instrumentation.ts       # register(): getConfig() (fail fast) + app.boot log
+│   ├── proxy.ts                 # Next 16 proxy: /p/:slug(/tldr) unknown/unpublished → rewrite to root 404 (§8); no auth
 │   ├── app/
 │   │   ├── layout.tsx           # <html data-theme> + theme init script + fonts + global CSS
+│   │   ├── not-found.tsx        # root 404 with site chrome (target of the proxy rewrite)
 │   │   ├── (site)/              # public, wrapped by Masthead/Footer chrome
-│   │   │   ├── layout.tsx  page.tsx  not-found.tsx
+│   │   │   ├── layout.tsx  page.tsx  not-found.tsx  error.tsx
 │   │   │   ├── p/[slug]/page.tsx   p/[slug]/tldr/page.tsx   p/[slug]/listen/page.tsx (P3)
 │   │   │   ├── archive/page.tsx    about/page.tsx
 │   │   ├── admin/
@@ -489,8 +524,18 @@ network; the LLM boundary may use a stub `LlmClient` whose outputs are tagged `<
 Integration tests hit real `blog0_test` and the real OpenRouter key from `.env`; they assert
 structural properties (bounds, verbatim, fields present), never exact prose. Each integration
 test calls `resetDb()` in `beforeEach`. Stateful flows have a second interaction (save → save →
-read; generate → edit → publish → re-read). Real-key tests fail (not skip) when the key is
-missing locally; they skip only when `CI=true` and the key is absent (CI contract).
+read; generate → edit → publish → re-read).
+
+**Real-key tests (PENDING KEY rule).** Real-key tests are: `tests/integration/jev-openrouter.test.ts`,
+the real Generate step of the tldr-flow integration test, `pnpm eval:jev`, and the Generate step of
+the golden-path E2E. When `BLOG0_OPENROUTER_API_KEY` is absent or a placeholder (`replace-with-…`)
+**and** `CI` is not `true`, each of these SKIPS with an explicit, visible reason containing
+`PENDING KEY` (e.g. `it.skip`/`test.skip` titled or annotated `PENDING KEY: BLOG0_OPENROUTER_API_KEY
+unset`; `eval:jev` prints `PENDING KEY …` and exits 0 without scoring). They are never stubbed into
+a pass — no stub `LlmClient`, no recorded fixture, no `<stub:jev>` output on these paths. When
+`CI=true`, a missing/placeholder key is a FAILURE (not a skip). Whenever a real (non-placeholder)
+key is present, an invalid/rejected key (401/403) or any provider error is a FAILURE, never a
+skip. A gate run that skipped any `PENDING KEY` test is reported as "pending key", not as passed.
 
 **Formatting.** Prettier (dev dependency, `.prettierrc`: `printWidth: 110, singleQuote: true`)
 for editor formatting; it is not part of the gate. `pnpm lint` runs ESLint only.
@@ -588,3 +633,9 @@ the question for the user.
 25. **Brand values from the site record.** `WORDMARK` 'log0', tagline, contact mail, About texts,
     publisher 'smallTech' come from the `site` row (seeded with the design's values), not code
     constants.
+26. **TLDR deck stacking order.** Design: `.tdeck { position: fixed; inset: 0; z-index: 40; }`
+    (`spec/design/design-app.css` line 1287), below the sticky `.modebar` (mode capsule strip,
+    `z-index: 45`) and `.sitehead` (`z-index: 50`). v0.1: `.tdeck { z-index: 46 }` (override in
+    `additions.css`) so the open deck sits above the docked mode capsule/modebar chrome instead
+    of the capsule showing through it. Default = keep 46. *Ask:* confirm the deck should cover the
+    docked mode capsule.

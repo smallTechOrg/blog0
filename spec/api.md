@@ -99,7 +99,7 @@ interface TldrStateDto {
 
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
-| GET `/api/health` | none | — | `{ status: 'ok', db: 'ok', dbLatencyMs: number, version: string, uptimeSec: number }`; DB down → 503 `DB_UNAVAILABLE` |
+| GET `/api/health` | none | — | `{ status: 'ok', db: 'ok', dbLatencyMs: number, version: string, uptimeSec: number }`; DB down → 503 `DB_UNAVAILABLE` (generic envelope; fixed message, no `details`, never the raw driver error — that is logged server-side) |
 
 ## Endpoints — Phase 1
 

@@ -243,7 +243,9 @@ editors". > **Assumed:** the user has not chosen a heuristic fallback, so none i
   (deduped), too few/too many, empty reason, over-long reason (truncated), unsorted (sorted),
   invalid JSON → repair → success, invalid twice → `LLM_INVALID_OUTPUT`, adapter error mapping,
   fenced JSON stripping, usage summed across attempts.
-- **Integration (real OpenRouter key from `.env`, `tests/integration/jev-openrouter.test.ts`):**
+- **Integration (real OpenRouter key from `.env`, `tests/integration/jev-openrouter.test.ts`;
+  key absent/placeholder → `PENDING KEY` skip / CI or real key → failure, per
+  `spec/architecture.md` → `## Conventions` → Real-key tests; same rule for `eval:jev`):**
   for each of the 5 seed posts and `tests/fixtures/articles/hard-cases.md`, run `runJev` on the
   real pipeline output and assert: `ok`, picks count within bounds, indices unique + ascending,
   every pick's `text` is byte-identical to `sentences[index].text` and occurs verbatim in the
