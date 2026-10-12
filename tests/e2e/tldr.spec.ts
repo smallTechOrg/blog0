@@ -4,7 +4,7 @@ import { e2eAdmin, signInThroughForm } from './helpers/admin';
 import { markdownPlainText, readE2eArticle } from './helpers/article-text';
 import { generationRows } from './helpers/db';
 import { jevKeyPlan, PENDING_KEY_TITLE } from './helpers/jev-key';
-import { apiRequests, readServerLog } from './helpers/logs';
+import { LOG_NOT_WIRED_REASON, apiRequests, logFileNotWired, readServerLog } from './helpers/logs';
 
 // TLDR golden path (capability jev-tldr; spec/roadmap.md "How the user tests it"): sign in, paste
 // an article, live preview, save, Generate with Jev (real OpenRouter call — or a visible PENDING
@@ -330,7 +330,7 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
   });
 
   test('the server log has api.request lines for save, publish (and generate + llm.call when Jev ran)', async () => {
-    test.skip(Boolean(process.env.BLOG0_E2E_BASE_URL), 'the log file is only wired for the locally started server');
+    test.skip(logFileNotWired(), LOG_NOT_WIRED_REASON);
     const { articleId } = journey();
 
     const lines = readServerLog();

@@ -5,7 +5,7 @@ import { loadEnvConfig } from '@next/env';
 // `@/server/llm/key` imports `server-only`: Vitest aliases it to a no-op (vitest.config.ts); other
 // Node-side importers (Playwright) must import scripts/lib/allow-server-only first.
 import { isPostgresUrl } from '@/server/db/url';
-import { openRouterKeyStatus } from '@/server/llm/key';
+import { openRouterKeyStatus, realKeyRequired } from '@/server/llm/key';
 
 // Kept on globalThis: Vitest re-evaluates modules per test file inside one worker process, but
 // process.env (already pointed at the test DB by an earlier file) persists.
@@ -59,7 +59,8 @@ export function hasOpenRouterKey(): boolean {
 }
 
 /** PENDING KEY rule: with no real key, real-key tests SKIP (with a visible `PENDING KEY` reason)
- *  unless `CI=true`, where they must run and FAIL. With a real key they always run. */
+ *  unless `realKeyRequired()` (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when it is unset), where they
+ *  must run and FAIL. With a real key they always run. */
 export function shouldSkipRealKeyTests(): boolean {
-  return !hasOpenRouterKey() && process.env.CI !== 'true';
+  return !hasOpenRouterKey() && !realKeyRequired(process.env);
 }

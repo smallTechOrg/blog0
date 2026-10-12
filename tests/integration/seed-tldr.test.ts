@@ -19,7 +19,7 @@ import { aiGeneration, article, articleFormat, type SiteRow } from '@/server/db/
 import { readTldrPayload, type TldrPayload } from '@/server/formats/payload';
 import { JEV_PROMPT_VERSION } from '@/server/jev/prompt';
 import { resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
+import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import { getPublishedArticle } from '@/server/public/articles';
 import { DECKS_DIR, loadDeckFixture } from '@/server/seed/decks';
 import { loadSeedPosts, SEED_POSTS } from '@/server/seed/posts';
@@ -37,12 +37,12 @@ const JEV_ONLY = 'Lines selected by Jev (AI), verbatim from the article.';
 
 const keyStatus = openRouterKeyStatus(process.env.BLOG0_OPENROUTER_API_KEY);
 const pendingKey = keyStatus !== 'real';
-const ci = process.env.CI === 'true';
-if (pendingKey && !ci) console.warn(`[seed-tldr] ${PENDING_KEY_REASON} (key ${keyStatus}); the real-key seed suite is skipped.`);
+const keyRequired = realKeyRequired(process.env);
+if (pendingKey && !keyRequired) console.warn(`[seed-tldr] ${PENDING_KEY_REASON} (key ${keyStatus}); the real-key seed suite is skipped.`);
 
-describe.runIf(pendingKey && ci)('seed:tldr real-key requirement under CI', () => {
-  it(`fails: ${PENDING_KEY_REASON} (CI=true requires a real key)`, () => {
-    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — CI=true requires a real OpenRouter key; this is a failure, not a skip.`);
+describe.runIf(pendingKey && keyRequired)('seed:tldr real-key requirement (BLOG0_REQUIRE_REAL_KEY=1 / CI)', () => {
+  it(`fails: ${PENDING_KEY_REASON} (a real key is required: BLOG0_REQUIRE_REAL_KEY=1 or CI=true)`, () => {
+    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — a real OpenRouter key is required (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when unset); this is a failure, not a skip.`);
   });
 });
 

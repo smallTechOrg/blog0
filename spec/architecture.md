@@ -869,7 +869,7 @@ to `$GITHUB_ENV`. Jobs:
 - `integration`: service `postgres:18` (`POSTGRES_PASSWORD: postgres`, port 5432, `pg_isready`
   health options); install `postgresql-client-18` from the PGDG apt repo (backup test);
   `pnpm db:create && pnpm db:migrate && pnpm db:verify`; `pnpm test:integration`.
-- `e2e`: same service; `pnpm exec playwright install --with-deps chromium`; `pnpm build`;
+- `e2e`: same service; `pnpm exec playwright install --with-deps chromium`; `pnpm db:create`; `pnpm build`;
   `pnpm test:e2e`; `pnpm test:e2e:design`; on failure upload `playwright-report/` and
   `test-results/` as artifacts.
 - `image`: `docker build -t blog0:ci .`; `docker run --rm blog0:ci id -u` = `1000`; run detached
@@ -894,7 +894,7 @@ and exits 1; a `trap` always runs `docker rm -f blog0-e2e`:
    `BLOG0_REQUIRE_REAL_KEY`, values unquoted, one `KEY=value` per line — and prints the container
    DB URL: `BLOG0_TEST_DATABASE_URL` with host `localhost`/`127.0.0.1` replaced by
    `host.docker.internal`.
-4. `BLOG0_DATABASE_URL=$BLOG0_TEST_DATABASE_URL pnpm db:create`, then the release step:
+4. `node scripts/lib/container-env.mjs reset-db` (creates `blog0_test` if missing, then empties its schemas; `db:create` refuses when the test and dev URLs match), then the release step:
    `docker run --rm --add-host=host.docker.internal:host-gateway --env-file var/container-e2e.env -e BLOG0_DATABASE_URL=<container url> blog0:local node release.mjs`
    → output contains `0 pending: OK`.
 5. `mkdir -p var/storage-e2e test-results`, then

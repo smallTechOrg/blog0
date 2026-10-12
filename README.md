@@ -318,6 +318,7 @@ With a real key present, a rejected key (401/403) or any provider error is alway
 | `pnpm test:e2e` | Playwright (Chromium) against `pnpm start` on port **3411** using `blog0_test`; run `pnpm build` first |
 | `pnpm test:e2e:design` | Playwright against designer mode (`pnpm dev:design`) on port **3413** with its own PGlite dir `var/pglite-e2e` |
 | `pnpm eval:jev` | Jev evaluation table (real key; non-gating) |
+| `pnpm test:container` | builds the container image, runs the release step and the full E2E suite against the container on port **3412** (needs Docker) — see [Deploy](#deploy) |
 
 `pnpm test:e2e` runs 4 Playwright projects in a fixed order — `tldr` → `reader` → `listen` →
 `smoke` — because they share `blog0_test` and each needs the state the previous one leaves.
@@ -329,6 +330,35 @@ BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_DIST_DIR=.next-gate pnpm test:e2e
 
 E2E server logs go to `test-results/e2e-server.log`; the HTML report to `playwright-report/`
 (`pnpm exec playwright show-report`).
+
+## Deploy
+
+blog0 deploys as one non-root container image (`Dockerfile`) with a separate release step
+(`node release.mjs`: migrate + verify + seed site/admin), liveness/readiness probes
+(`/api/health/live`, `/api/health/ready`), graceful shutdown and uploads on a volume at
+`/data/storage`. The runbook — environment table, first deploy, upgrades, backups + restore
+drill, rotating `BLOG0_SESSION_SECRET`, health probes, logs, reverse proxy + TLS, scaling — is
+[`docs/deploy.md`](docs/deploy.md).
+
+Prove the image end to end locally (Docker running, e.g. `colima start`; Postgres + `.env` as for
+the tests):
+
+```bash
+pnpm test:container
+# builds/reuses blog0:local → resets blog0_test → release step in the image → starts it on :3412
+# (uploads → var/storage-e2e, log → test-results/e2e-server.log) → waits for /api/health/ready
+# → BLOG0_E2E_BASE_URL=http://localhost:3412 pnpm test:e2e → checks the volume, headers and a
+# graceful docker stop → "container-e2e: PASS" + a summary
+```
+
+Exit 0 = PASS; exit 3 = `PENDING DOCKER` (no Docker daemon — not a pass); anything else = FAIL.
+The container gets a fresh random session secret and the OpenRouter key from `.env` when it is
+real (then the Jev Generate step runs for real); otherwise `pending-placeholder`, and that step
+reports `PENDING KEY`. The image is rebuilt only when a build-context file is newer than it
+(`BLOG0_CONTAINER_BUILD=always|never` overrides).
+
+Backups: `pnpm backup -- --out <dir>`; restore + check: `pnpm restore -- --in <backupDir> --db <name> --storage <dir>`
+(details and cron example in the runbook).
 
 ## Database
 
@@ -382,6 +412,10 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_STORAGE_DIR` | no | `./var/storage` | audio/image storage + upload limits |
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | audio/image storage + upload limits |
 | `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server |
+| `BLOG0_E2E_LOG_FILE` | no | — | with `BLOG0_E2E_BASE_URL`: host path of that server's JSON log (`pnpm test:container` sets it); unset → the log-asserting E2E tests skip |
+| `BLOG0_REQUIRE_REAL_KEY` | no | — | `1` → a missing/placeholder OpenRouter key fails the real-key tests; `0` → PENDING KEY skip; unset → `CI` decides |
+| `BLOG0_RATE_LIMIT_STORE` | no | `auto` | sign-in/newsletter throttle store: `auto` (Postgres on `postgres://`, memory on `pglite://`) \| `db` \| `memory` |
+| `BLOG0_SHUTDOWN_TIMEOUT_MS` | no | `8000` | drain deadline after SIGTERM/SIGINT (1000–120000) |
 
 ## Layout
 

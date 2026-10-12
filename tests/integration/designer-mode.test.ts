@@ -28,7 +28,7 @@ import { designerAdminFileFor, formatSampleListenSummary, SAMPLE_LISTEN_SLUG, se
 import { readListenPayload } from '@/server/formats/payload';
 import { ApiError } from '@/server/http/api';
 import { resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
+import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import { resetLoggerForTests } from '@/server/log';
 import { seedPosts } from '@/server/seed/seed-posts';
 import { seedSite } from '@/server/seed/site';
@@ -43,7 +43,14 @@ const saved: Record<string, string | undefined> = {};
 const realKey = process.env.BLOG0_OPENROUTER_API_KEY;
 const keyStatus = openRouterKeyStatus(realKey);
 const pendingKey = keyStatus !== 'real';
-if (pendingKey && process.env.CI !== 'true') console.warn(`[designer-mode] ${PENDING_KEY_REASON}; the real Generate-on-PGlite test is skipped.`);
+const keyRequired = realKeyRequired(process.env);
+if (pendingKey && !keyRequired) console.warn(`[designer-mode] ${PENDING_KEY_REASON} (key ${keyStatus}); the real Generate-on-PGlite test is skipped.`);
+
+describe.runIf(pendingKey && keyRequired)('designer-mode real-key requirement (BLOG0_REQUIRE_REAL_KEY=1 / CI)', () => {
+  it(`fails: ${PENDING_KEY_REASON} (a real key is required: BLOG0_REQUIRE_REAL_KEY=1 or CI=true)`, () => {
+    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — a real OpenRouter key is required (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when unset); this is a failure, not a skip.`);
+  });
+});
 
 const tmp = mkdtempSync(path.join(tmpdir(), 'blog0-designer-'));
 const adminFile = path.join(tmp, 'designer-admin.txt');
@@ -254,8 +261,9 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
     expect(n).toBe(0);
   });
 
+  const realTitle = 'with the real key: create → Generate (one real call) → save deck → publish → edit all complete on PGlite (no tx deadlock)';
   it.skipIf(pendingKey)(
-    'with the real key: create → Generate (one real call) → save deck → publish → edit all complete on PGlite (no tx deadlock)',
+    pendingKey ? `${realTitle} — ${PENDING_KEY_REASON}` : realTitle,
     async () => {
       process.env.BLOG0_OPENROUTER_API_KEY = realKey;
       resetConfigForTests();

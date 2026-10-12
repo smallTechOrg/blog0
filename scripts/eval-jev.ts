@@ -3,8 +3,9 @@
 // picked indices / N), first/last-third hit, attempts, tokens, cost, latency. Run on every prompt
 // version change and paste the table into the PR. Never prints the key.
 // Exit codes: 0 all articles ok · 1 any article failed.
-// PENDING KEY rule (spec/architecture.md ## Conventions): no real key and CI !== 'true' → prints PENDING KEY
-// and exits 0 without scoring; CI=true with a missing/placeholder key → prints PENDING KEY and exits 1.
+// PENDING KEY rule (spec/architecture.md ## Conventions): no real key and `realKeyRequired` false → prints
+// PENDING KEY and exits 0 without scoring; required (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when that is
+// unset) with a missing/placeholder key → prints PENDING KEY and exits 1.
 import './lib/allow-server-only';
 
 import { loadEnvConfig } from '@next/env';
@@ -15,7 +16,7 @@ import { loadJevEvalArticles } from '../src/server/jev/articles';
 import { jevInputFromRendered } from '../src/server/jev/build-input';
 import { JEV_PROMPT_VERSION } from '../src/server/jev/prompt';
 import { runJev } from '../src/server/jev/run';
-import { openRouterKeyStatus, PENDING_KEY_REASON } from '../src/server/llm/key';
+import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '../src/server/llm/key';
 import { OpenRouterClient } from '../src/server/llm/openrouter';
 
 function plain(name: string): string | undefined {
@@ -33,10 +34,9 @@ async function main(): Promise<void> {
   if (!plain('BLOG0_LOG_LEVEL')) process.env.BLOG0_LOG_LEVEL = 'warn';
 
   const status = openRouterKeyStatus(process.env.BLOG0_OPENROUTER_API_KEY);
-  const ci = process.env.CI === 'true';
   if (status !== 'real') {
-    if (ci) {
-      console.error(`${PENDING_KEY_REASON} (key ${status}) — CI=true requires a real key; eval:jev FAILED (not scored).`);
+    if (realKeyRequired(process.env)) {
+      console.error(`${PENDING_KEY_REASON} (key ${status}) — a real key is required (BLOG0_REQUIRE_REAL_KEY=1 or CI=true); eval:jev FAILED (not scored).`);
       process.exit(1);
     }
     console.log(`${PENDING_KEY_REASON} (key ${status}) — eval:jev skipped, nothing scored. Add a real key to .env, then re-run pnpm eval:jev.`);

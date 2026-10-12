@@ -1,8 +1,8 @@
 // Real-key Jev integration (spec/agent.md §7): runs runJev on the real content pipeline output
 // against the real OpenRouter key from .env. Structural assertions only (bounds, verbatim, fields).
-// PENDING KEY rule (spec/architecture.md ## Conventions): with no real key and CI !== 'true' the real-call
-// suite is SKIPPED with "PENDING KEY: BLOG0_OPENROUTER_API_KEY not set"; under CI=true a missing/placeholder
-// key is a FAILURE. With a real key, provider errors fail — never skip. Never stubbed into a pass.
+// PENDING KEY rule (spec/architecture.md ## Conventions): with no real key and `realKeyRequired` false the
+// real-call suite is SKIPPED with "PENDING KEY: BLOG0_OPENROUTER_API_KEY not set"; when a real key is required
+// (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when that is unset) a missing/placeholder key is a FAILURE. With a real key, provider errors fail — never skip. Never stubbed into a pass.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RenderedArticle } from '@/lib/content/types';
@@ -13,20 +13,20 @@ import { jevInputFromRendered } from '@/server/jev/build-input';
 import { runJev } from '@/server/jev/run';
 import type { JevInput } from '@/server/jev/state';
 import { getLlmClient, resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
+import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import type { LlmClient } from '@/server/llm/types';
 
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
 
 const keyStatus = openRouterKeyStatus(process.env.BLOG0_OPENROUTER_API_KEY);
 const pending = keyStatus !== 'real';
-const ci = process.env.CI === 'true';
+const keyRequired = realKeyRequired(process.env);
 const realSuite = (name: string) => (pending ? `${name} — ${PENDING_KEY_REASON}` : name);
-if (pending && !ci) console.warn(`[jev-openrouter] ${PENDING_KEY_REASON} (key ${keyStatus}); real-call tests are skipped.`);
+if (pending && !keyRequired) console.warn(`[jev-openrouter] ${PENDING_KEY_REASON} (key ${keyStatus}); real-call tests are skipped.`);
 
-describe.runIf(pending && ci)('Jev real-key requirement under CI', () => {
-  it(`fails: ${PENDING_KEY_REASON} (CI=true requires a real key)`, () => {
-    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — CI=true requires a real OpenRouter key; this is a failure, not a skip.`);
+describe.runIf(pending && keyRequired)('Jev real-key requirement (BLOG0_REQUIRE_REAL_KEY=1 / CI)', () => {
+  it(`fails: ${PENDING_KEY_REASON} (a real key is required: BLOG0_REQUIRE_REAL_KEY=1 or CI=true)`, () => {
+    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — a real OpenRouter key is required (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when unset); this is a failure, not a skip.`);
   });
 });
 

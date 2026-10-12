@@ -1,5 +1,6 @@
 // Playwright global setup (spec/architecture.md → Test wiring): empty the server's storage dir
-// (var/storage-e2e, BLOG0_STORAGE_DIR in playwright.config.ts) so stored media match the fresh DB,
+// (var/storage-e2e, BLOG0_STORAGE_DIR in playwright.config.ts; the container's /data/storage volume
+// under `pnpm test:container`) so stored media match the fresh DB,
 // reset + migrate blog0_test, seed the site row and the admin through src/server/seed/admin.ts,
 // then the 5 design articles (seedPosts) and their decks from the committed fixture (seedTldr
 // source 'fixture'), so the reader walk makes 0 LLM calls. Playwright starts the web server first;
@@ -12,7 +13,7 @@
 import '../../scripts/lib/allow-server-only';
 
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import { closeDb, getDb } from '@/server/db/client';
@@ -26,12 +27,16 @@ import { pointAtTestDatabase } from '../helpers/env';
 import { E2E_ADMIN_ENV } from './helpers/admin';
 import { E2E_STORAGE_DIR } from './helpers/upload';
 
-/** Empties the E2E server's storage dir — guarded so only a var/storage-e2e dir is ever wiped. */
-function wipeE2eStorage(): void {
+/**
+ * Empties the E2E server's storage dir without removing it — guarded so only a var/storage-e2e
+ * dir is ever touched. The directory itself must survive: under `pnpm test:container` it is the
+ * container's bind-mounted /data/storage, and removing a bind-mount source detaches the mount.
+ */
+function emptyE2eStorage(): void {
   const dir = path.resolve(process.cwd(), E2E_STORAGE_DIR);
-  if (!/[\\/]var[\\/]storage-e2e$/.test(dir)) throw new Error(`refusing to wipe ${dir}`);
-  rmSync(dir, { recursive: true, force: true });
+  if (!/[\\/]var[\\/]storage-e2e$/.test(dir)) throw new Error(`refusing to empty ${dir}`);
   mkdirSync(dir, { recursive: true });
+  for (const entry of readdirSync(dir)) rmSync(path.join(dir, entry), { recursive: true, force: true });
 }
 
 function e2eAdminCredentials(): AdminCredentials {
@@ -49,7 +54,7 @@ export default async function globalSetup(): Promise<void> {
   const previousUrl = process.env.BLOG0_DATABASE_URL;
   const testUrl = pointAtTestDatabase();
   try {
-    wipeE2eStorage();
+    emptyE2eStorage();
     await prepareTestDatabase(testUrl);
     resetConfigForTests();
     const site = await resetDb();

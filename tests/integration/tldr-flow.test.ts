@@ -2,7 +2,7 @@
 //
 // 1. "real Jev" suite — create → save → Generate (REAL OpenRouter call) → edit deck → publish →
 //    public view model → text change ⇒ stale with no new generation row; wrong model slug ⇒
-//    LLM_MODEL_NOT_FOUND. With no real key (and CI unset) it is SKIPPED as "PENDING KEY" — never
+//    LLM_MODEL_NOT_FOUND. With no real key (and none required) it is SKIPPED as "PENDING KEY" — never
 //    stubbed into a pass.
 // 2. Hand-pick suite — every deck/publish/stale rule with writer-picked lines (no LLM at all).
 // 3. "(fake transport)" suites — error-path/structure tests only: an OpenRouterClient whose fetch
@@ -30,7 +30,7 @@ import { getDb } from '@/server/db/client';
 import { aiGeneration, appUser, articleFormat, site } from '@/server/db/schema';
 import { JEV_PROMPT_VERSION } from '@/server/jev/prompt';
 import { resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
+import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import { OpenRouterClient } from '@/server/llm/openrouter';
 import { getPublishedArticle } from '@/server/public/articles';
 import { loadSeedPosts } from '@/server/seed/posts';
@@ -42,16 +42,16 @@ import { captureLogs, type CapturedLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
 
 // Real-key rule (spec/architecture.md → Conventions → Real-key tests).
-// No real key: locally the real suite is SKIPPED (visible PENDING KEY reason); under CI=true it is an
-// explicit FAILURE naming the PENDING KEY reason — never a vague provider 401/LLM_AUTH.
+// No real key: the real suite is SKIPPED (visible PENDING KEY reason) unless `realKeyRequired`
+// (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when that is unset) — then it is an explicit FAILURE naming the PENDING KEY reason — never a vague provider 401/LLM_AUTH.
 const keyStatus = openRouterKeyStatus(process.env.BLOG0_OPENROUTER_API_KEY);
 const pendingKey = keyStatus !== 'real';
-const ci = process.env.CI === 'true';
-if (pendingKey && !ci) console.warn(`[tldr-flow] ${PENDING_KEY_REASON} (key ${keyStatus}); the real Generate suite is skipped.`);
+const keyRequired = realKeyRequired(process.env);
+if (pendingKey && !keyRequired) console.warn(`[tldr-flow] ${PENDING_KEY_REASON} (key ${keyStatus}); the real Generate suite is skipped.`);
 
-describe.runIf(pendingKey && ci)('TLDR real-key requirement under CI', () => {
-  it(`fails: ${PENDING_KEY_REASON} (CI=true requires a real key)`, () => {
-    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — CI=true requires a real OpenRouter key; this is a failure, not a skip.`);
+describe.runIf(pendingKey && keyRequired)('TLDR real-key requirement (BLOG0_REQUIRE_REAL_KEY=1 / CI)', () => {
+  it(`fails: ${PENDING_KEY_REASON} (a real key is required: BLOG0_REQUIRE_REAL_KEY=1 or CI=true)`, () => {
+    throw new Error(`${PENDING_KEY_REASON} (key ${keyStatus}) — a real OpenRouter key is required (BLOG0_REQUIRE_REAL_KEY=1, or CI=true when unset); this is a failure, not a skip.`);
   });
 });
 
