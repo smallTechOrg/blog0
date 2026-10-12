@@ -6,8 +6,22 @@ import { useState } from 'react';
 
 import { apiRequest } from './api';
 
-// Admin header bar (spec/ui.md §4 DeskHeader): small wordmark "log0 · desk", Desk link,
-// the signed-in writer's name, Sign out. Later phases add Site, Subscribers, AI usage, Team.
+// Admin header bar (spec/ui.md §4 DeskHeader): small wordmark "blog0 · desk", links Desk, Site,
+// Subscribers (Phase 2), the signed-in writer's name, Sign out. Phase 4 adds AI usage, Team.
+
+const LINKS = [
+  { href: '/admin', label: 'Desk' },
+  { href: '/admin/site', label: 'Site' },
+  { href: '/admin/subscribers', label: 'Subscribers' },
+] as const;
+
+/** The link that is current for a pathname: Desk owns /admin and the article screens. */
+export function deskSection(pathname: string): (typeof LINKS)[number]['href'] | null {
+  if (pathname === '/admin/site' || pathname.startsWith('/admin/site/')) return '/admin/site';
+  if (pathname === '/admin/subscribers' || pathname.startsWith('/admin/subscribers/')) return '/admin/subscribers';
+  if (pathname === '/admin' || pathname.startsWith('/admin/articles')) return '/admin';
+  return null;
+}
 
 export interface DeskHeaderProps {
   wordmark: string;
@@ -20,7 +34,7 @@ export function DeskHeader({ wordmark, userName }: DeskHeaderProps) {
   const [state, setState] = useState<'idle' | 'pending' | 'error'>('idle');
   const head = wordmark.slice(0, -1);
   const last = wordmark.slice(-1);
-  const onDesk = pathname === '/admin';
+  const current = deskSection(pathname);
 
   async function signOut(): Promise<void> {
     setState('pending');
@@ -44,9 +58,15 @@ export function DeskHeader({ wordmark, userName }: DeskHeaderProps) {
           <span className="deskhead__desk mono">· desk</span>
         </Link>
         <nav className="deskhead__nav" aria-label="Desk">
-          <Link href="/admin" className={onDesk ? 'tab is-on' : 'tab'} aria-current={onDesk ? 'page' : undefined}>
-            Desk
-          </Link>
+          {LINKS.map((l) => {
+            const on = current === l.href;
+            const exact = pathname === l.href;
+            return (
+              <Link key={l.href} href={l.href} className={on ? 'tab is-on' : 'tab'} aria-current={exact ? 'page' : undefined}>
+                {l.label}
+              </Link>
+            );
+          })}
         </nav>
         <div className="deskhead__user">
           <span className="deskhead__name">{userName}</span>

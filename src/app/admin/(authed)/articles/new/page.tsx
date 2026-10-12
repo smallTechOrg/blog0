@@ -7,7 +7,7 @@ import { requireAdminPage } from '@/server/auth/guard';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = { title: 'New article · log0' };
+export const metadata: Metadata = { title: 'New article · blog0' };
 
 export default async function NewArticlePage() {
   await requireAdminPage('/admin/articles/new');

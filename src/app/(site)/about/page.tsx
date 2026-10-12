@@ -1,12 +1,13 @@
 import type { Metadata } from 'next';
 
-import { StubNotice } from '@/components/StubNotice';
+import { AboutView } from '@/components/site/about/AboutView';
+import { aboutParagraphs } from '@/components/site/about/about-text';
 import { getConfig } from '@/server/config';
 import { pageTitle, sitePageMetadata } from '@/server/public/metadata';
 import { getCurrentSite } from '@/server/site/current';
 
-// About (spec/ui.md §3): Phase 1 ships the page header (wordmark from the site record) + a
-// labelled stub. Phase 2 builds the design's About page (stand, strap, body; admin-editable).
+// About /about (spec/ui.md §3; design `About`): wordmark heading, stand, strap, body — all from
+// the site record, edited in Admin → Site. A load failure falls to (site)/error.tsx.
 
 export const dynamic = 'force-dynamic';
 
@@ -22,14 +23,5 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function AboutPage() {
   const site = await getCurrentSite();
-  return (
-    <main className="col">
-      <header className="pagehead">
-        <h1>{'About ' + site.wordmark}</h1>
-      </header>
-      <div className="home-sec">
-        <StubNotice>The About page arrives in Phase 2: who we are, what we publish, and why.</StubNotice>
-      </div>
-    </main>
-  );
+  return <AboutView wordmark={site.wordmark} stand={site.aboutStand} strap={site.aboutStrap} paragraphs={aboutParagraphs(site.aboutBodyMd)} />;
 }

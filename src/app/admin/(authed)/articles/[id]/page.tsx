@@ -10,7 +10,7 @@ import { loadAdminContext } from '../../_lib/admin-context';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = { title: 'Editor · log0' };
+export const metadata: Metadata = { title: 'Editor · blog0' };
 
 export default async function ArticleEditorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

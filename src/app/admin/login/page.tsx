@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-const FALLBACK_WORDMARK = 'log0';
+const FALLBACK_WORDMARK = 'blog0';
 
 async function loadSiteAndUser(): Promise<{ wordmark: string; signedIn: boolean }> {
   try {

@@ -9,7 +9,7 @@ import { loadAdminContext } from './_lib/admin-context';
 
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = { title: 'Desk · log0' };
+export const metadata: Metadata = { title: 'Desk · blog0' };
 
 export default async function DeskPage() {
   await requireAdminPage('/admin');

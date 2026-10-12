@@ -18,7 +18,7 @@ const body = Source_Serif_4({
 const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--nf-mono', display: 'swap' });
 
 export const metadata: Metadata = {
-  title: 'log0',
+  title: 'blog0',
   description: "smallTech's blog on all things AI",
 };
 
