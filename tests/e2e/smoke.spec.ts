@@ -158,7 +158,7 @@ test('the server writes a structured api.request log line for the health request
   // behind its port mapping) may use any port.
   expect(lines.findLast((l) => l.event === 'app.boot')).toMatchObject({
     level: 'info',
-    port: isExternalServer() ? expect.any(Number) : 3411,
+    port: isExternalServer() ? expect.any(Number) : Number(process.env.BLOG0_E2E_PORT) || 3411,
     site_slug: 'blog0',
   });
   expect(lines.find((l) => l.event === 'api.request' && l.request_id === requestId)).toMatchObject({

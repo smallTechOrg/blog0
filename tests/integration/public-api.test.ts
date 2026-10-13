@@ -153,7 +153,7 @@ describe('GET /api/public/articles/:slug/tldr', () => {
 });
 
 describe('sitemap and robots', () => {
-  it('lists exactly /, /archive, /about and the published article URLs (absolute)', async () => {
+  it('lists exactly /, /archive, /about, /privacy and the published article URLs (absolute)', async () => {
     const pre = await renderArticle({ title: 'T', dek: 'A short standfirst.', bodyMd: BODY_A });
     await seedArticle({ slug: 'older', title: 'Older', bodyMd: BODY_B, firstPublishedAt: day(2) });
     await seedArticle({ slug: 'newer', title: 'Newer', bodyMd: BODY_A, firstPublishedAt: day(5), lastPublishedAt: day(9), deck: deckFrom(pre, [0]) });
@@ -164,7 +164,7 @@ describe('sitemap and robots', () => {
 
     const entries = await sitemap();
 
-    expect(entries.map((e) => e.url)).toEqual([`${BASE}/`, `${BASE}/archive`, `${BASE}/about`, `${BASE}/p/newer`, `${BASE}/p/older`]);
+    expect(entries.map((e) => e.url)).toEqual([`${BASE}/`, `${BASE}/archive`, `${BASE}/about`, `${BASE}/privacy`, `${BASE}/p/newer`, `${BASE}/p/older`]);
     const newer = entries.find((e) => e.url.endsWith('/p/newer'));
     expect(newer?.lastModified).toEqual(day(9));
     expect(entries[0].lastModified).toEqual(day(9));
@@ -173,7 +173,7 @@ describe('sitemap and robots', () => {
 
   it('still lists the three site pages when nothing is published', async () => {
     const entries = await sitemap();
-    expect(entries.map((e) => e.url)).toEqual([`${BASE}/`, `${BASE}/archive`, `${BASE}/about`]);
+    expect(entries.map((e) => e.url)).toEqual([`${BASE}/`, `${BASE}/archive`, `${BASE}/about`, `${BASE}/privacy`]);
     expect(entries[0].lastModified).toBeUndefined();
   });
 

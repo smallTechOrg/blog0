@@ -7,6 +7,7 @@ import { getDb } from '../../db/client';
 import { newsletterMessage } from '../../db/schema';
 import { log, maskEmail } from '../../log';
 import { getCurrentSite } from '../../site/current';
+import { redactConfirmUrl } from '../erase';
 
 // Transactional mail (spec/architecture.md §13.2): the SMTP transport (nodemailer, BLOG0_SMTP_*) or,
 // without BLOG0_SMTP_HOST, the recording stub whose `newsletter_message` row IS the delivery —
@@ -56,6 +57,11 @@ function errorText(err: unknown): string {
   return text.slice(0, 500);
 }
 
+/**
+ * The stored row is the audit copy, not the delivery: a `confirmation` is stored with its confirm token
+ * replaced (`…/newsletter/confirm?t=[redacted]`, fix pass) so a database copy can never confirm an
+ * address. The transport still sends the real message; the stub's log line keeps `confirm_url`.
+ */
 async function recordMessage(msg: MailMessage, fields: { transport: 'smtp' | 'stub'; status: 'sent' | 'failed' | 'stubbed'; providerMessageId?: string | null; error?: string | null }): Promise<string> {
   const site = await getCurrentSite();
   const [row] = await getDb()
@@ -67,8 +73,8 @@ async function recordMessage(msg: MailMessage, fields: { transport: 'smtp' | 'st
       issueId: msg.issueId ?? null,
       toEmail: msg.to,
       subject: msg.subject,
-      html: msg.html,
-      text: msg.text,
+      html: msg.kind === 'confirmation' ? redactConfirmUrl(msg.html) : msg.html,
+      text: msg.kind === 'confirmation' ? redactConfirmUrl(msg.text) : msg.text,
       transport: fields.transport,
       status: fields.status,
       providerMessageId: fields.providerMessageId ?? null,

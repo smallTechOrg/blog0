@@ -27,7 +27,7 @@ export {
 export async function sendConfirmationMail(
   subscriber: Pick<NewsletterSubscriberRow, 'id' | 'email'>,
   token: string,
-  site: Pick<SiteRow, 'brandName' | 'newsletterConsentText'>,
+  site: Pick<SiteRow, 'brandName' | 'newsletterConsentText' | 'newsletterPostalAddress'>,
   requestId?: string,
 ): Promise<MailResult> {
   const link = confirmUrl(token);
@@ -39,6 +39,7 @@ export async function sendConfirmationMail(
     consentText: site.newsletterConsentText,
     expiresHours: Math.round(CONFIRM_TOKEN_TTL_MS / 3_600_000),
     publicBaseUrl: getConfig().publicBaseUrl,
+    postalAddress: site.newsletterPostalAddress,
   });
   return getMailTransport().send({
     to: subscriber.email,

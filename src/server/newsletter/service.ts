@@ -4,7 +4,6 @@ import type { SubscriberCounts, SubscriberDetailDto, SubscriberDto, SubscriberLi
 
 import { inArray } from 'drizzle-orm';
 
-import { getConfig } from '../config';
 import { getDb, type Executor } from '../db/client';
 import { appUser, newsletterSubscriber, type NewsletterSubscriberRow, type SiteRow } from '../db/schema';
 import { ApiError } from '../http/api';
@@ -12,13 +11,14 @@ import { log, maskEmail } from '../log';
 import { getCurrentSite } from '../site/current';
 
 import { CONFIRM_TOKEN_TTL_MS, CONFIRMATION_CAP_WINDOW_MS, CONFIRMATION_SENDS_PER_DAY, USER_AGENT_MAX } from './constants';
+import { unsubscribeVerifySecrets } from './links';
 import { MailError, sendConfirmationMail } from './mail';
 import { isKnownClientIp } from './rate-limit';
 import * as repo from './repo';
 import type { SubscribeInput } from './schemas';
 import { afterConfirm, afterSuppress } from './sender-hook';
 import { providerOptOutWins } from './sender/opt-out';
-import { hashConfirmToken, isWellFormedConfirmToken, newConfirmToken, verifyUnsubscribeToken } from './tokens';
+import { erasureHash, hashConfirmToken, isWellFormedConfirmToken, isWellFormedUnsubscribeToken, newConfirmToken, verifyUnsubscribeToken } from './tokens';
 
 // The owned list (capability newsletter-list.md; HOW spec/architecture.md §13.1). blog0 is the
 // source of truth: every status change commits here first, then the sender hook gets a copy.
@@ -72,6 +72,9 @@ export async function subscribe(ctx: RequestContext, input: SubscribeInput, site
 
   const decided = await db.transaction(async (tx) => {
     const existing = await repo.findByEmail(tx, current.id, input.email, true);
+    // Fix pass: an address that was erased before is never a clean slate — the new row still needs a
+    // fresh double opt-in and its signup event says so (matched by hash, the address is not stored).
+    const erasedBefore = await repo.hasErasureHash(tx, current.id, erasureHash(current.newsletterEraseSalt, input.email));
     const consent = {
       consentText: current.newsletterConsentText,
       consentVersion: current.newsletterConsentVersion,
@@ -107,7 +110,11 @@ export async function subscribe(ctx: RequestContext, input: SubscribeInput, site
         actorUserId: null,
         ip,
         userAgent: ua,
-        details: { sourceUrl: input.sourceUrl, consentVersion: current.newsletterConsentVersion },
+        details: {
+          sourceUrl: input.sourceUrl,
+          consentVersion: current.newsletterConsentVersion,
+          ...(erasedBefore ? { resignup: true, erasedBefore: true } : {}),
+        },
         createdAt: now,
       });
       return { outcome: 'pending_created' as const, row, token: token as string | null };
@@ -145,6 +152,7 @@ export async function subscribe(ctx: RequestContext, input: SubscribeInput, site
         sourceUrl: input.sourceUrl,
         consentVersion: current.newsletterConsentVersion,
         ...(resignup ? { resignup: true, previousStatus: existing.status } : {}),
+        ...(erasedBefore ? { erasedBefore: true } : {}),
         ...(capped && !resignup ? { capped: true } : {}),
       },
       createdAt: now,
@@ -232,6 +240,24 @@ function tokenInvalid(): ApiError {
 
 function tokenExpired(): ApiError {
   return new ApiError('TOKEN_EXPIRED', 410, 'This link has expired or was already used — sign up again from the footer.');
+}
+
+/**
+ * Page-side shape check of an emailed confirm link (fix pass, scanner-safe): true when `token` is a
+ * well-formed confirm token. Pure — reads nothing, consumes nothing, counts toward no limit; the
+ * state change is the POST (`confirmByToken`).
+ */
+export function peekConfirmToken(token: unknown): token is string {
+  return isWellFormedConfirmToken(token);
+}
+
+/**
+ * Page-side check of an unsubscribe link (fix pass, scanner-safe): true when `token` is well formed AND its
+ * signature verifies against the unsubscribe / session secrets. Pure — no lookup, no write, no limit
+ * counted; the state change is the POST (`unsubscribeByToken`).
+ */
+export function peekUnsubscribeToken(token: unknown): token is string {
+  return isWellFormedUnsubscribeToken(token) && verifyUnsubscribeToken(token, unsubscribeVerifySecrets()) !== null;
 }
 
 /** The emailed confirm link. 404 TOKEN_INVALID for an unknown token, 410 TOKEN_EXPIRED past 72 h or after use. */
@@ -371,7 +397,7 @@ export async function unsubscribeByToken(
   ctx: RequestContext,
   site?: SiteRow,
 ): Promise<UnsubscribeResult> {
-  const id = verifyUnsubscribeToken(token, getConfig().sessionSecret.reveal());
+  const id = verifyUnsubscribeToken(token, unsubscribeVerifySecrets());
   if (!id) throw tokenInvalid();
   const current = site ?? (await getCurrentSite());
   const row = await repo.findById(getDb(), current.id, id);

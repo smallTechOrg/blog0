@@ -12,6 +12,7 @@ const INPUT = {
   consentText: 'One issue a week at most. Unsubscribe in one click; we never share the list.',
   expiresHours: 72,
   publicBaseUrl: 'http://localhost:3410',
+  postalAddress: '',
 };
 
 describe('confirmationEmail', () => {
@@ -52,6 +53,24 @@ describe('confirmationEmail', () => {
     expect(html).toContain('href="http://x/confirm?t=1&amp;u=2"');
     expect(html).not.toContain('<b>');
     expect(text).toContain('http://x/confirm?t=1&u=2'); // text is raw
+  });
+
+  it('links /privacy in the HTML and text footers (fix pass)', () => {
+    const { html, text } = confirmationEmail(INPUT);
+    expect(html).toContain('href="http://localhost:3410/privacy"');
+    expect(text).toContain('Privacy: http://localhost:3410/privacy');
+  });
+
+  it('prints the postal address only when it is set, escaped in HTML and raw in text (fix pass)', () => {
+    const none = confirmationEmail(INPUT);
+    const blank = confirmationEmail({ ...INPUT, postalAddress: '   ' });
+    expect(none.html).not.toContain('Example Street');
+    expect(blank.html).toBe(none.html);
+    expect(blank.text).toBe(none.text);
+
+    const set = confirmationEmail({ ...INPUT, postalAddress: 'smallTech, 1 Example Street <Unit 2>\nMumbai 400001' });
+    expect(set.html).toContain('smallTech, 1 Example Street &lt;Unit 2&gt;<br>Mumbai 400001');
+    expect(set.text).toContain('smallTech, 1 Example Street <Unit 2>\nMumbai 400001');
   });
 
   it('esc covers the five characters', () => {

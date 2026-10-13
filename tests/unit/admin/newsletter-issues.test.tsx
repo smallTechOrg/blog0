@@ -94,7 +94,7 @@ describe('issue labels', () => {
 const ISSUE: IssueDetailDto = {
   id: 'i1', number: 3, status: 'draft', origin: 'per_post', title: 'Hello world', postCount: 1, recipientCount: null,
   createdAt: '2026-10-12T11:50:00Z', sentAt: null, lastError: null, introMd: 'Intro', providerCampaignId: null, stats: null,
-  createdBy: 'Sai', sentBy: null, editable: true, stuckSending: false,
+  createdBy: 'Sai', sentBy: null, editable: true, stuckSending: false, warnings: [],
   posts: [{ articleId: 'a1', slug: 'hello', title: 'Hello', dek: 'Dek', excerpt: 'Ex', topic: 'AI', publishedLabel: '1 Oct 2026', readUrl: 'https://b/p/hello', tldrUrl: null, listenUrl: null }],
   events: [{ id: 'e1', kind: 'created', actor: 'Sai', details: {}, createdAt: '2026-10-12T11:50:00Z' }],
 };
@@ -134,7 +134,7 @@ describe('PostPicker', () => {
 
 describe('IssuePreview', () => {
   it('renders the HTML tab in a sandboxed srcdoc iframe and the text tab as pre', () => {
-    const preview = { subject: 'Hello', html: '<p>Hi</p>', text: 'Hi\nhttps://b/p/hello', sampleRecipient: { email: 'me@x.test', consentLine: 'You subscribed.' } };
+    const preview = { subject: 'Hello', html: '<p>Hi</p>', text: 'Hi\nhttps://b/p/hello', sampleRecipient: { email: 'me@x.test', consentLine: 'You subscribed.' }, warnings: [] };
     const html = renderToStaticMarkup(<IssuePreview preview={preview} tab="html" onTab={noop} refreshed={false} />);
     expect(html).toContain('<iframe');
     expect(html).toContain('sandbox=""');

@@ -142,6 +142,8 @@ export function eventLabel(ev: SubscriberEventDto): string {
       return 'Removed from Listmonk';
     case 'ip_pruned':
       return 'IP pruned';
+    case 'erased':
+      return 'Personal data erased';
     default:
       return String(ev.kind);
   }
@@ -213,4 +215,28 @@ export function retryAtMessage(details: unknown, timeZone: string): string | nul
 
 export function canUnsubscribe(status: SubscriberStatus): boolean {
   return status !== 'unsubscribed' && status !== 'bounced';
+}
+
+// ---- Erase personal data (fix pass; spec/ui.md §4 "Subscriber") ----
+
+export const ERASE_CONFIRM = (email: string): string =>
+  `Erase ${email}? This permanently redacts the address, IP, user agent and source page in the subscriber, event and message records and removes the address from Listmonk. A tombstone and an erased entry remain. This cannot be undone.`;
+
+/** The Erase button is enabled only when the typed text equals the address (case-insensitive). */
+export function eraseConfirmMatches(typed: string, email: string): boolean {
+  const t = typed.trim().toLowerCase();
+  return t !== '' && t === email.trim().toLowerCase();
+}
+
+export function eraseNotice(providerRemoved: boolean): string {
+  return providerRemoved ? 'Erased. Listmonk copy removed.' : 'Erased. Listmonk removal failed — see the log.';
+}
+
+/** The tombstone address an erased subscriber carries (`erased+<hash>@erased.invalid`). */
+export function isErasedEmail(email: string): boolean {
+  return /^erased\+[^@]+@erased\.invalid$/i.test(email);
+}
+
+export function canErase(email: string): boolean {
+  return !isErasedEmail(email);
 }

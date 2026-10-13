@@ -275,6 +275,10 @@ export interface PublicListenDto {
 export interface SiteSettingsDto {
   tagline: string; contactEmail: string; aboutStrap: string; aboutStand: string; aboutBodyMd: string;
   socialXUrl: string | null; socialLinkedinUrl: string | null;
+  /** Fix pass: body of the public /privacy page (blank-line separated paragraphs; a draft the owner must review). */
+  privacyText: string;
+  /** Fix pass: printed in every issue footer and confirmation email when non-empty (empty = none; sending warns). */
+  newsletterPostalAddress: string;
   /** Phase 7: read-only here — edited via PATCH /api/admin/newsletter/settings. */
   newsletter: NewsletterSettingsDto;
 }
@@ -295,6 +299,8 @@ export const SITE_SETTINGS_LIMITS = {
   aboutStand: 400,
   aboutBodyMd: 10_000,
   socialUrl: 500,
+  privacyText: 8_000,
+  newsletterPostalAddress: 300,
 } as const;
 
 // ---------------------------------------------------------------------------------------------
@@ -304,9 +310,9 @@ export const SITE_SETTINGS_LIMITS = {
 export type SubscriberStatus = 'pending' | 'confirmed' | 'unsubscribed' | 'bounced' | 'legacy_unconfirmed';
 export type SubscriberEventKind =
   | 'signup' | 'confirmation_sent' | 'confirmed' | 'resubscribed' | 'unsubscribed' | 'bounced'
-  | 'legacy_confirmation_sent' | 'provider_synced' | 'provider_removed' | 'ip_pruned';
+  | 'legacy_confirmation_sent' | 'provider_synced' | 'provider_removed' | 'ip_pruned' | 'erased';
 export type NewsletterSource = 'footer' | 'email_link' | 'one_click' | 'admin' | 'provider' | 'webhook' | 'migration' | 'system';
-export type SuppressionReason = 'unsubscribed' | 'bounced' | 'complaint' | 'admin';
+export type SuppressionReason = 'unsubscribed' | 'bounced' | 'complaint' | 'admin' | 'erased';
 
 /** POST /api/newsletter — the same shape for a new, pending, confirmed or suppressed address (no enumeration). */
 export interface NewsletterSubscribeRequest { email: string; name?: string; sourceUrl?: string }
@@ -356,6 +362,9 @@ export interface SendConfirmationResponse { subscriber: SubscriberDetailDto; sen
 /** POST /api/admin/subscribers/send-legacy-confirmations. */
 export interface SendLegacyConfirmationsRequest { confirm: true }
 export interface SendLegacyConfirmationsResponse { sent: number; skipped: number }
+/** POST /api/admin/subscribers/:id/erase (fix pass): `confirmEmail` must equal the subscriber's address (case-insensitive) → 400 VALIDATION_FAILED otherwise; already erased → 409 SUBSCRIBER_NOT_ELIGIBLE. */
+export interface SubscriberEraseRequest { confirmEmail: string }
+export interface SubscriberEraseResponse { erased: true; providerRemoved: boolean }
 /** POST /api/admin/subscribers/:id/unsubscribe. */
 export interface AdminUnsubscribeRequest { note?: string }
 export interface AdminUnsubscribeResponse { subscriber: SubscriberDetailDto }
@@ -426,12 +435,15 @@ export interface IssueDetailDto extends IssueListItemDto {
   editable: boolean;
   /** status === 'sending' with no progress for 10 min (crashed send): Try again is offered and allowed. */
   stuckSending: boolean;
+  /** Fix pass: non-blocking warnings about the issue as it would go out (`postal_address_missing` = the site has no postal address). */
+  warnings: IssueWarningCode[];
 }
+export type IssueWarningCode = 'postal_address_missing';
 export interface IssueDetailResponse { issue: IssueDetailDto }
 export interface IssueCreateRequest { title: string; introMd?: string; articleIds: string[] }
 /** articleIds = new order / subset (manual + automatic drafts alike). */
 export interface IssueUpdateRequest { title?: string; introMd?: string; articleIds?: string[] }
-export interface IssuePreviewDto { subject: string; html: string; text: string; sampleRecipient: { email: string; consentLine: string } }
+export interface IssuePreviewDto { subject: string; html: string; text: string; sampleRecipient: { email: string; consentLine: string }; warnings: IssueWarningCode[] }
 export interface IssueSendRequest { confirm: true }
 export interface IssueTestResponse { sentTo: string; transport: 'smtp' | 'stub'; messageId: string }
 export interface IssueDeleteResponse { deleted: true }

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
 /* The signup (design NewsletterForm): name (optional), then e-mail and the
@@ -118,7 +119,10 @@ export function NewsletterForm({ consentText }: NewsletterFormProps) {
               {busy ? '…' : '→'}
             </button>
           </div>
-          <p className="ft-micro">{consentText}</p>
+          <p className="ft-micro">
+            {consentText}{' '}
+            <Link href="/privacy">Privacy</Link>
+          </p>
           <p className="ft-st" id="nl-st" aria-live="polite">
             {err}
           </p>

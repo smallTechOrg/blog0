@@ -134,9 +134,11 @@ describe('POST /api/newsletter — double opt-in signup (happy path)', () => {
     expect(messages[0].text).toContain('/newsletter/confirm?t=');
     expect(messages[0].html).toContain(currentSite.newsletterConsentText);
 
-    // the token is in the email, only its hash in the row
+    // the real token is in the sent mail (the stub's log line), only its hash in the row; the stored copy is redacted (fix pass)
     const token = tokenFromLog(logs);
-    expect(messages[0].html).toContain(token);
+    expect(messages[0].html).toContain('/newsletter/confirm?t=[redacted]');
+    expect(messages[0].html).not.toContain(token);
+    expect(messages[0].text).not.toContain(token);
     expect(hashConfirmToken(token)).toBe(row.confirmTokenHash);
     expect(token).not.toBe(row.confirmTokenHash);
     const mail = logs.find('newsletter.mail')[0];

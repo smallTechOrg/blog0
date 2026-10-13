@@ -29,6 +29,13 @@
       "when": 1791901041493,
       "tag": "0003_newsletter_prune_fix",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791913416733,
+      "tag": "0004_newsletter_erasure",
+      "breakpoints": true
     }
   ]
 }

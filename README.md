@@ -185,7 +185,7 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 5 applied (latest 0004_newsletter_erasure), 0 pending: OK
    ```
 
 6. **Prove the OpenRouter key and Jev** (the decisions model `typesafe/jev-1.13`) with one real
@@ -385,8 +385,11 @@ the hourly `pnpm newsletter:tick` cron): the runbook's **Newsletter** section.
 1. A reader enters an email in the footer form → a `pending` subscriber row with the consent text,
    time, IP (only behind a trusted proxy), user agent and source page → a confirmation email
    (transactional, sent by blog0 itself over SMTP — `BLOG0_SMTP_*`).
-2. The reader clicks the link within 72 h → `confirmed` (double opt-in). Every step is an
-   append-only event; unsubscribes and bounces are append-only suppression entries.
+2. The reader opens the link within 72 h and presses **Confirm my subscription** → `confirmed`
+   (double opt-in). Opening the confirm or unsubscribe link alone never changes anything (mail
+   scanners prefetch links): only the button's POST does, and that POST is rate-limited. Every step
+   is an append-only event; unsubscribes and bounces are append-only suppression entries. The
+   stored confirmation message carries `…/confirm?t=[redacted]`, never the live token.
 3. Confirmed subscribers are mirrored to one Listmonk list (`BLOG0_NEWSLETTER_SENDER=listmonk`);
    suppressed ones are blocklisted there. Issues (manual, one per first publish, or a digest —
    **Site → Newsletter**) are drafted in blog0, then sent as a Listmonk campaign.
@@ -400,6 +403,15 @@ whose `confirm_url` you can open); with `BLOG0_NEWSLETTER_SENDER=stub` (the defa
 recorded per confirmed subscriber and never delivered. The **Site → Newsletter** card says so
 ("Sender: **Stub** — issues are recorded, not delivered"). Designer mode, the integration tests
 and the E2E suites always use both stubs — no SMTP, no Listmonk, no Docker.
+
+**Privacy and erasure.** `/privacy` shows the site's **privacy text** (a seeded plain-language
+*draft* — review it in **Site**; it is not legal advice), and the issue footer and confirmation mail
+link to it and print the **newsletter postal address** (also set in **Site**; sending without one
+only warns). **Erase personal data** on a subscriber redacts the address, IPs, user agents and
+source from the subscriber, its events, suppressions and messages (migration
+`0004_newsletter_erasure`, `newsletter_erase_subscriber`) and keeps only a salted-hash tombstone —
+steps in `docs/deploy.md` → *Handling an erasure request*. `BLOG0_UNSUBSCRIBE_SECRET` (optional)
+signs new unsubscribe links so rotating the session secret does not break mailed ones.
 
 **Admin pages.** `/admin/subscribers` (list, filters, CSV + audit export, per-subscriber proof of
 consent, resend confirmation, unsubscribe), `/admin/newsletter` (issues: create, preview, test
@@ -460,7 +472,7 @@ Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g
 
 ```bash
 BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
-# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
+# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 5 applied (latest 0004_newsletter_erasure), 0 pending: OK
 ```
 
 Run them only while no dev server has that directory open. `drizzle-kit` commands
@@ -510,6 +522,7 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | secret; that user's token (shown once at creation) |
 | `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | integer id of the one list blog0 mirrors into (`pnpm newsletter:sync -- --create-list`) |
 | `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | no | — | ≥ 24 chars (`openssl rand -base64 32`); bearer secret of `POST /api/newsletter/webhook`; unset → that endpoint answers 404 |
+| `BLOG0_UNSUBSCRIBE_SECRET` | no | session secret | ≥ 24 chars (`openssl rand -base64 32`); signs **new** unsubscribe links (verified first, then the session secret) so rotating the session secret does not break links already mailed |
 
 ## Layout
 

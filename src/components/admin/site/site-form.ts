@@ -20,6 +20,8 @@ export const SITE_FIELDS: readonly SiteField[] = [
   'aboutBodyMd',
   'socialXUrl',
   'socialLinkedinUrl',
+  'privacyText',
+  'newsletterPostalAddress',
 ] as const;
 
 const URL_FIELDS: ReadonlySet<SiteField> = new Set<SiteField>(['socialXUrl', 'socialLinkedinUrl']);
@@ -32,7 +34,12 @@ export const FIELD_LABELS: Record<SiteField, string> = {
   aboutBodyMd: 'About text',
   socialXUrl: 'X URL',
   socialLinkedinUrl: 'LinkedIn URL',
+  privacyText: 'Privacy text',
+  newsletterPostalAddress: 'Newsletter postal address',
 };
+
+/** Fields the owner may leave empty (fix pass: the postal address). */
+const OPTIONAL_TEXT: ReadonlySet<SiteField> = new Set<SiteField>(['newsletterPostalAddress']);
 
 export function maxLengthOf(field: SiteField): number {
   return URL_FIELDS.has(field) ? SITE_SETTINGS_LIMITS.socialUrl : SITE_SETTINGS_LIMITS[field as Exclude<SiteField, 'socialXUrl' | 'socialLinkedinUrl'>];
@@ -90,6 +97,7 @@ export function validateDraft(draft: SiteSettingsDraft): FieldErrors {
       else if (!isHttpUrl(v)) errors[f] = `${label} must start with https:// (or http://).`;
       continue;
     }
+    if (!v && OPTIONAL_TEXT.has(f)) continue;
     if (!v) errors[f] = `${label} can’t be empty.`;
     else if (v.length > max) errors[f] = `${label} must be ${max} characters or fewer.`;
     else if (f === 'contactEmail' && !EMAIL_RE.test(v)) errors[f] = 'Enter a valid email address.';

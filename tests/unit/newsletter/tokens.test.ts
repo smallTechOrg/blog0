@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
+  erasureHash,
   hashConfirmToken,
   isWellFormedConfirmToken,
   isWellFormedUnsubscribeToken,
@@ -81,5 +82,49 @@ describe('unsubscribe token', () => {
 
   it('refuses to sign a non-uuid id', () => {
     expect(() => signUnsubscribeToken('not-a-uuid', SECRET)).toThrow(/uuid/);
+  });
+});
+
+describe('unsubscribe token — verification with a list of secrets (fix pass)', () => {
+  const UNSUB = 'a-dedicated-unsubscribe-secret-24+chars';
+  const ROTATED = 'a-brand-new-session-secret-after-rotation-1234';
+
+  it('accepts a string or a list; either listed secret verifies; none listed does not', () => {
+    const id = randomUUID();
+    const bySession = signUnsubscribeToken(id, SECRET);
+    const byUnsub = signUnsubscribeToken(id, UNSUB);
+    expect(bySession).not.toBe(byUnsub);
+    expect(verifyUnsubscribeToken(byUnsub, [UNSUB, SECRET])).toBe(id);
+    expect(verifyUnsubscribeToken(bySession, [UNSUB, SECRET])).toBe(id);
+    expect(verifyUnsubscribeToken(bySession, [SECRET])).toBe(id);
+    expect(verifyUnsubscribeToken(bySession, [UNSUB])).toBeNull();
+    expect(verifyUnsubscribeToken(bySession, [])).toBeNull();
+    expect(verifyUnsubscribeToken(bySession, SECRET)).toBe(id);
+  });
+
+  it('a link signed with the unsubscribe secret survives a session-secret rotation; one signed with the old session secret does not', () => {
+    const id = randomUUID();
+    const dedicated = signUnsubscribeToken(id, UNSUB);
+    const legacy = signUnsubscribeToken(id, SECRET);
+    expect(verifyUnsubscribeToken(dedicated, [UNSUB, ROTATED])).toBe(id);
+    expect(verifyUnsubscribeToken(legacy, [UNSUB, ROTATED])).toBeNull();
+  });
+
+  it('a tampered token fails against every secret in the list', () => {
+    const id = randomUUID();
+    const token = signUnsubscribeToken(id, UNSUB);
+    const tampered = token.slice(0, 30) + (token[30] === 'A' ? 'B' : 'A') + token.slice(31);
+    expect(verifyUnsubscribeToken(tampered, [UNSUB, SECRET])).toBeNull();
+  });
+});
+
+describe('erasureHash (fix pass; the twin of the SQL in migration 0004)', () => {
+  it('is sha256hex(salt + ":" + trim(lower(email))), deterministic and salt-specific', () => {
+    const a = erasureHash('salt-1', 'Reader@Example.com ');
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(erasureHash('salt-1', 'reader@example.com')).toBe(a);
+    expect(erasureHash('salt-2', 'reader@example.com')).not.toBe(a);
+    expect(erasureHash('salt-1', 'other@example.com')).not.toBe(a);
+    expect(a).not.toContain('reader');
   });
 });

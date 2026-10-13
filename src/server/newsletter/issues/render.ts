@@ -6,7 +6,7 @@
 
 import type { IssuePost } from '@/lib/api/dto';
 
-import { esc } from '../mail/templates';
+import { esc, postalAddressLines } from '../mail/templates';
 import { CONSENT_PLACEHOLDER, UNSUBSCRIBE_PLACEHOLDER } from '../sender/types';
 
 export { CONSENT_PLACEHOLDER, UNSUBSCRIBE_PLACEHOLDER };
@@ -23,6 +23,10 @@ export interface IssueRenderInput {
   posts: IssuePost[];
   number: number;
   year: number;
+  /** Site setting `newsletterPostalAddress` (fix pass): printed in the footer only when non-blank. */
+  postalAddress: string;
+  /** Absolute `<publicBaseUrl>/privacy`, linked in the footer (fix pass). */
+  privacyUrl: string;
 }
 
 // Design tokens (light) and their dark-mode counterparts (the <style> block below).
@@ -82,6 +86,12 @@ ${rows.join('\n')}
 </td></tr>`;
 }
 
+/** The footer address block (`line<br>line<br>\n`), or '' when the setting is blank. */
+function addressHtml(address: string): string {
+  const lines = postalAddressLines(address);
+  return lines.length > 0 ? `${lines.map(esc).join('<br>')}<br>\n` : '';
+}
+
 /** The email HTML: contains UNSUBSCRIBE_PLACEHOLDER and CONSENT_PLACEHOLDER exactly once each. */
 export function renderIssueHtml(input: IssueRenderInput): string {
   const intro = input.introHtml.trim()
@@ -108,9 +118,9 @@ ${DARK_CSS}
 <tr><td class="b0-ink" style="padding:0 32px 14px;font-family:${HEAD};font-size:26px;line-height:1.25;font-weight:700;color:${C.ink};">${esc(input.title)}</td></tr>
 ${intro}${input.posts.map(postHtml).join('\n')}
 <tr><td class="b0-rule b0-muted" style="padding:20px 32px 28px;border-top:1px solid ${C.border};font-family:${HEAD};font-size:13px;line-height:1.6;color:${C.muted};">
-<a href="${UNSUBSCRIBE_PLACEHOLDER}" class="b0-muted" style="color:${C.muted};text-decoration:underline;">Unsubscribe</a><br>
+<a href="${UNSUBSCRIBE_PLACEHOLDER}" class="b0-muted" style="color:${C.muted};text-decoration:underline;">Unsubscribe</a> · <a href="${esc(input.privacyUrl)}" class="b0-muted" style="color:${C.muted};text-decoration:underline;">Privacy</a><br>
 ${CONSENT_PLACEHOLDER}<br>
-© ${input.year} ${esc(input.brand)} | ${esc(input.publisherName)}
+${addressHtml(input.postalAddress)}© ${input.year} ${esc(input.brand)} | ${esc(input.publisherName)}
 </td></tr>
 </table>
 </td></tr>
@@ -133,7 +143,10 @@ export function renderIssueText(input: IssueRenderInput): string {
     lines.push('');
     for (const link of postLinks(post)) lines.push(`${link.label}: ${link.url}`);
   }
-  lines.push('', '———', '', `Unsubscribe: ${UNSUBSCRIBE_PLACEHOLDER}`, CONSENT_PLACEHOLDER, `© ${input.year} ${input.brand} | ${input.publisherName}`, '');
+  lines.push('', '———', '', `Unsubscribe: ${UNSUBSCRIBE_PLACEHOLDER}`, `Privacy: ${input.privacyUrl}`, CONSENT_PLACEHOLDER);
+  const address = postalAddressLines(input.postalAddress);
+  if (address.length > 0) lines.push(...address);
+  lines.push(`© ${input.year} ${input.brand} | ${input.publisherName}`, '');
   return lines.join('\n');
 }
 

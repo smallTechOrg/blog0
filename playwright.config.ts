@@ -9,7 +9,7 @@ import { E2E_STORAGE_DIR } from './tests/e2e/helpers/upload';
 
 loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
 
-const E2E_PORT = '3411';
+const E2E_PORT = (process.env.BLOG0_E2E_PORT ?? '').trim() || '3411';
 const externalBaseUrl = (process.env.BLOG0_E2E_BASE_URL ?? '').trim();
 const baseURL = externalBaseUrl || `http://localhost:${E2E_PORT}`;
 const testDatabaseUrl = (process.env.BLOG0_TEST_DATABASE_URL ?? '').trim();

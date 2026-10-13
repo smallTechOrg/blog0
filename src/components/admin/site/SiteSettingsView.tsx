@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 
 import { AboutView } from '@/components/site/about/AboutView';
 import { aboutParagraphs } from '@/components/site/about/about-text';
+import { PrivacyView } from '@/components/site/privacy/PrivacyView';
 import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
 
 import { AdminLoadError, useAdminLoad } from '../AdminLoad';
@@ -71,7 +72,7 @@ export function SiteSettingsView({ wordmark, timeZone }: { wordmark: string; tim
 
 type Save = { kind: 'idle' } | { kind: 'saving' } | { kind: 'saved' } | { kind: 'error'; message: string; signedOut: boolean };
 
-function SiteSettingsForm({
+export function SiteSettingsForm({
   wordmark,
   saved,
   onSaved,
@@ -176,6 +177,14 @@ function SiteSettingsForm({
         {field('aboutBodyMd', { rows: 8, hint: 'Plain paragraphs; a blank line starts a new one.' })}
         {field('socialXUrl', { type: 'url', hint: 'Leave blank to hide the X icon in the footer.' })}
         {field('socialLinkedinUrl', { type: 'url', hint: 'Leave blank to hide the LinkedIn icon in the footer.' })}
+        {field('privacyText', {
+          rows: 12,
+          hint: 'Shown at /privacy. Review the wording — the default is a draft, not legal advice.',
+        })}
+        {field('newsletterPostalAddress', {
+          rows: 3,
+          hint: 'Printed in every issue footer and confirmation email. Often required by anti-spam law; must be filled before you send (leave empty only if you are sure).',
+        })}
         <div className="admin-form__actions">
           <button type="submit" className="admin-btn admin-btn--primary" disabled={pending || !dirty} aria-busy={pending}>
             {pending ? 'Saving…' : 'Save'}
@@ -218,6 +227,15 @@ function SiteSettingsForm({
           strap={draft.aboutStrap.trim()}
           paragraphs={aboutParagraphs(draft.aboutBodyMd)}
         />
+      </section>
+      <section
+        aria-labelledby="site-privacy-preview-h"
+        style={{ marginTop: 28, padding: '14px 20px', border: '1px solid var(--border)', borderRadius: 3, background: 'var(--surface)' }}
+      >
+        <h2 id="site-privacy-preview-h" className="admin-label">
+          Preview — /privacy
+        </h2>
+        <PrivacyView as="div" paragraphs={aboutParagraphs(draft.privacyText)} contactEmail={draft.contactEmail.trim()} />
       </section>
     </>
   );

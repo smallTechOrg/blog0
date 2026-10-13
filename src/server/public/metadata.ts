@@ -111,6 +111,7 @@ export async function sitemapEntries(): Promise<MetadataRoute.Sitemap> {
     { url: base + '/', ...(newest ? { lastModified: newest } : {}), changeFrequency: 'weekly', priority: 1 },
     { url: base + '/archive', ...(newest ? { lastModified: newest } : {}), changeFrequency: 'weekly', priority: 0.6 },
     { url: base + '/about', changeFrequency: 'yearly', priority: 0.4 },
+    { url: base + '/privacy', changeFrequency: 'yearly', priority: 0.3 },
     ...articles,
   ];
 }

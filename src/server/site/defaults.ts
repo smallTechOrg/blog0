@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_VERSION, type NewSiteRow } from '../db/schema';
+import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_VERSION, DEFAULT_PRIVACY_TEXT, type NewSiteRow } from '../db/schema';
 
 // Seed values for the `site` row (spec/data.md → site; design constants from spec/design/design-app.js).
 // Shared by the test helper (resetDb) and `pnpm db:seed`. The brand is blog0 everywhere
@@ -37,6 +37,10 @@ export const SITE_DEFAULTS = {
   newsletterConsentText: DEFAULT_CONSENT_TEXT,
   newsletterConsentVersion: DEFAULT_CONSENT_VERSION,
   newsletterModeSetAt: null,
+  // Fix pass (0004): a plain-language DRAFT privacy page (the owner must review it) and no postal address.
+  // `newsletterEraseSalt` is never seeded here — its column default is a fresh random value per row.
+  privacyText: DEFAULT_PRIVACY_TEXT,
+  newsletterPostalAddress: '',
 } as const satisfies Omit<NewSiteRow, 'id' | 'createdAt' | 'updatedAt'>;
 
 /** The seed row for a given site slug (BLOG0_SITE_SLUG). */

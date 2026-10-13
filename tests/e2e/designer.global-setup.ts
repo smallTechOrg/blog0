@@ -10,7 +10,7 @@
 // The password is never printed.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
-export const DESIGN_E2E_PORT = 3413;
+export const DESIGN_E2E_PORT = Number(process.env.BLOG0_DESIGN_E2E_PORT) || 3413;
 export const DESIGN_E2E_DIR = 'var/pglite-e2e';
 export const DESIGN_E2E_ADMIN_FILE = `${DESIGN_E2E_DIR}.designer-admin.txt`;
 /** Own storage dir (wiped with the PGlite dir), so a designer's ./var/storage is never touched. */

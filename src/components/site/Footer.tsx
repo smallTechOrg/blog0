@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRef } from 'react';
 
@@ -98,6 +99,8 @@ export function Footer({ site }: FooterProps) {
             <span className="brandmark__logo" aria-hidden="true" />
             {site.publisherName}
           </span>
+          <i aria-hidden="true" />
+          <Link href="/privacy">Privacy</Link>
         </p>
         <p className="ft-eof" aria-hidden="true">
           <span ref={eofRef} />

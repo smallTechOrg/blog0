@@ -24,7 +24,7 @@ export type NewEvent = Omit<NewsletterSubscriberEventRow, 'id' | 'createdAt' | '
   details?: Record<string, unknown>;
   createdAt?: Date;
 };
-export type NewSuppression = Omit<NewsletterSuppressionRow, 'id' | 'createdAt' | 'details'> & { details?: Record<string, unknown>; createdAt?: Date };
+export type NewSuppression = Omit<NewsletterSuppressionRow, 'id' | 'createdAt' | 'details' | 'emailHash'> & { details?: Record<string, unknown>; createdAt?: Date; emailHash?: string | null };
 
 export async function findByEmail(db: Executor, siteId: string, email: string, lock = false): Promise<NewsletterSubscriberRow | null> {
   const q = db
@@ -218,4 +218,13 @@ export async function pruneCandidates(db: Executor, siteId: string, bar: Date): 
       ),
     )
     .orderBy(asc(newsletterSubscriber.createdAt));
+}
+
+/** True when an `erased` suppression keyed by this `erasureHash` exists (fix pass: a re-signup of an erased address). */
+export async function hasErasureHash(db: Executor, siteId: string, hash: string): Promise<boolean> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(newsletterSuppression)
+    .where(and(eq(newsletterSuppression.siteId, siteId), eq(newsletterSuppression.reason, 'erased'), eq(newsletterSuppression.emailHash, hash)));
+  return Number(row?.n ?? 0) > 0;
 }

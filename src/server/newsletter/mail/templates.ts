@@ -13,6 +13,8 @@ export interface ConfirmationEmailInput {
   consentText: string;
   expiresHours: number;
   publicBaseUrl: string;
+  /** Site setting `newsletterPostalAddress`; printed in the footer only when non-blank (fix pass). */
+  postalAddress: string;
 }
 
 export interface RenderedEmail {
@@ -23,7 +25,17 @@ export interface RenderedEmail {
 
 export const IGNORE_LINE = 'If you didn’t ask for this, ignore this email.';
 
+/** The postal address as trimmed lines, or [] when the setting is blank. */
+export function postalAddressLines(address: string): string[] {
+  return address
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+}
+
 export function confirmationEmail(input: ConfirmationEmailInput): RenderedEmail {
+  const privacyUrl = `${input.publicBaseUrl.replace(/\/+$/, '')}/privacy`;
+  const address = postalAddressLines(input.postalAddress);
   const subject = `Confirm your subscription to ${input.brand}`;
   const expiry = `This link works for ${input.expiresHours} hours.`;
   const text = [
@@ -39,6 +51,8 @@ export function confirmationEmail(input: ConfirmationEmailInput): RenderedEmail 
     '',
     `${input.brand} · ${input.publicBaseUrl}`,
     `Unsubscribe: ${input.unsubscribeUrl}`,
+    `Privacy: ${privacyUrl}`,
+    ...(address.length > 0 ? ['', ...address] : []),
   ].join('\n');
 
   const html = `<!doctype html>
@@ -58,7 +72,7 @@ export function confirmationEmail(input: ConfirmationEmailInput): RenderedEmail 
 <tr><td style="padding:0 32px 20px;font-size:14px;line-height:1.5;color:#6b6b66;">${esc(IGNORE_LINE)}</td></tr>
 <tr><td style="padding:16px 32px 28px;border-top:1px solid #e3e3df;font-size:13px;line-height:1.5;color:#6b6b66;">
   ${esc(input.consentText)}<br>
-  <a href="${esc(input.publicBaseUrl)}" style="color:#6b6b66;">${esc(input.brand)}</a> · <a href="${esc(input.unsubscribeUrl)}" style="color:#6b6b66;">Unsubscribe</a>
+  <a href="${esc(input.publicBaseUrl)}" style="color:#6b6b66;">${esc(input.brand)}</a> · <a href="${esc(input.unsubscribeUrl)}" style="color:#6b6b66;">Unsubscribe</a> · <a href="${esc(privacyUrl)}" style="color:#6b6b66;">Privacy</a>${address.length > 0 ? `<br>${address.map(esc).join('<br>')}` : ''}
 </td></tr>
 </table>
 </td></tr>

@@ -57,6 +57,9 @@ export type WebhookInput = z.infer<typeof webhookBody>;
 /** `{ confirm: true }` bodies (send-legacy-confirmations, sync, send). */
 export const confirmTrueBody = z.object({ confirm: z.literal(true) });
 
+/** POST /api/admin/subscribers/:id/erase (fix pass): the typed address; matched against the row in the service. */
+export const eraseBody = z.object({ confirmEmail: z.string().trim().min(1, 'Type the address to confirm.').max(EMAIL_MAX) }).strict();
+
 /** POST /api/admin/subscribers/:id/unsubscribe */
 export const adminUnsubscribeBody = z.object({
   note: z

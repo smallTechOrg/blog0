@@ -184,3 +184,22 @@ html[data-printing] #blog0-root { visibility: hidden; }
 }
 .nl-page h1 { font-size: clamp(24px, 3vw, 32px); line-height: 1.2; margin: 14px 0 12px; }
 .nl-page p { font-size: 17px; line-height: 1.55; margin: 0 0 24px; }
+
+/* Newsletter link pages: the action button (fix pass) and its error line. */
+.nl-page .btn {
+  display: inline-flex; align-items: center; cursor: pointer;
+  font-family: var(--font-head); font-size: 15px; font-weight: 500; color: #fff;
+  background: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 10px 22px;
+}
+.nl-page .btn:hover:not(:disabled) { filter: brightness(1.08); }
+.nl-page .btn:disabled { opacity: .6; cursor: default; }
+.nl-page__err { margin: 14px 0 0; color: var(--danger, #b3261e); font-size: 15px; }
+.priv-contact { margin-top: 24px; }
+
+/* Admin: non-blocking warning line (fix pass: missing postal address). */
+.admin-warn {
+  margin: 12px 0; padding: 10px 14px; font-size: 14px; line-height: 1.45;
+  border: 1px solid var(--warn, #b7791f); border-left-width: 4px; border-radius: 3px; background: var(--surface);
+}
+.admin-warn a { text-decoration: underline; }
+.admin-btn--danger { color: var(--danger, #b3261e); border-color: var(--danger, #b3261e); }

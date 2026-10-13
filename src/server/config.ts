@@ -134,6 +134,11 @@ export interface NewsletterConfig {
   listmonk: ListmonkConfig | null;
   /** BLOG0_NEWSLETTER_WEBHOOK_SECRET (≥ 24 chars). null ⇒ POST /api/newsletter/webhook answers 404. */
   webhookSecret: Secret | null;
+  /**
+   * BLOG0_UNSUBSCRIBE_SECRET (fix pass, ≥ 24 chars): signs NEW unsubscribe tokens; verification tries it
+   * first, then the session secret. null ⇒ the session secret signs.
+   */
+  unsubscribeSecret: Secret | null;
 }
 
 /** From used by the stub transport when BLOG0_SMTP_HOST is unset (§10). */
@@ -501,11 +506,20 @@ function loadNewsletter(problems: string[], env: Env): NewsletterConfig {
     problems.push('BLOG0_NEWSLETTER_WEBHOOK_SECRET must be at least 24 characters (openssl rand -base64 32)');
   }
 
+  // --- Unsubscribe-token secret (fix pass): optional; unset ⇒ the session secret signs.
+  const unsubscribeSecret = secret(env, 'BLOG0_UNSUBSCRIBE_SECRET');
+  if (unsubscribeSecret !== undefined && isPlaceholder(unsubscribeSecret)) {
+    problems.push(placeholderProblem('BLOG0_UNSUBSCRIBE_SECRET'));
+  } else if (unsubscribeSecret !== undefined && unsubscribeSecret.length < 24) {
+    problems.push('BLOG0_UNSUBSCRIBE_SECRET must be at least 24 characters (openssl rand -base64 32)');
+  }
+
   return {
     smtp,
     sender: sender ?? CONFIG_DEFAULTS.newsletterSender,
     listmonk,
     webhookSecret: webhookSecret === undefined ? null : new Secret(webhookSecret),
+    unsubscribeSecret: unsubscribeSecret === undefined ? null : new Secret(unsubscribeSecret),
   };
 }
 

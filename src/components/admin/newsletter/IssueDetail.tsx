@@ -36,6 +36,8 @@ import {
   issueStatusClass,
   ORIGIN_LABEL,
   SETTINGS_API,
+  POSTAL_WARNING,
+  postalAddressMissing,
   sentLine,
 } from './newsletter-api';
 import { PostPicker } from './PostPicker';
@@ -245,6 +247,7 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
   }
 
   const { canSend, shownFailure } = sendAffordance(issue, failed);
+  const postalWarn = canSend && postalAddressMissing(issue.warnings);
 
   return (
     <>
@@ -279,6 +282,11 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
         </p>
       </header>
 
+      {postalWarn ? (
+        <p className="admin-warn" role="status">
+          {POSTAL_WARNING} <Link href="/admin/site">Open Site settings</Link>
+        </p>
+      ) : null}
       <div className="admin-actions issue-actions">
         <button type="button" className="admin-btn" onClick={sendTest} disabled={busy !== null} aria-busy={busy === 'test'}>
           {busy === 'test' ? 'Sending test…' : 'Send test to me'}
@@ -327,7 +335,7 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
         </div>
       ) : null}
 
-      {dialog ? <SendDialog recipients={dialog.recipients} sender={dialog.sender} pending={busy === 'send'} onSend={send} onCancel={() => setDialog(null)} /> : null}
+      {dialog ? <SendDialog recipients={dialog.recipients} sender={dialog.sender} pending={busy === 'send'} postalAddressMissing={postalWarn} onSend={send} onCancel={() => setDialog(null)} /> : null}
 
       {issue.editable ? (
         <EditPanel

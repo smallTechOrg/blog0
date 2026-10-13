@@ -9,9 +9,12 @@ import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { apiRequest, signInHref } from '../api';
 import { runExclusive } from '../editor/tldr-generate';
 
+import { EraseDialog } from './EraseDialog';
 import { SubscriberTimeline } from './SubscriberTimeline';
 import {
+  canErase,
   canUnsubscribe,
+  eraseNotice,
   confirmationAction,
   dateTimeLabel,
   ipLine,
@@ -90,6 +93,7 @@ function SubscriberBody({
   const [notice, setNotice] = useState<Notice>(null);
   const [sending, setSending] = useState(false);
   const [dialog, setDialog] = useState(false);
+  const [eraseDialog, setEraseDialog] = useState(false);
   const sendFlight = useRef(false);
   const action = confirmationAction(s, timeZone);
   const src = sourceCells(s);
@@ -151,6 +155,11 @@ function SubscriberBody({
             Unsubscribe
           </button>
         ) : null}
+        {canErase(s.email) ? (
+          <button type="button" className="admin-btn admin-btn--danger" onClick={() => setEraseDialog(true)}>
+            Erase personal data
+          </button>
+        ) : null}
       </div>
       {action?.disabled && action.title ? <p className="admin-hint">{action.title}</p> : null}
       <div aria-live="polite">
@@ -176,6 +185,21 @@ function SubscriberBody({
             setDialog(false);
             onChange(next);
             setNotice({ kind: 'ok', text: `${next.email} is unsubscribed; the suppression entry is permanent.` });
+          }}
+        />
+      ) : null}
+
+      {eraseDialog ? (
+        <EraseDialog
+          subscriber={s}
+          onCancel={() => setEraseDialog(false)}
+          onDone={(result) => {
+            setEraseDialog(false);
+            setNotice({ kind: 'ok', text: eraseNotice(result.providerRemoved) });
+            // Reload in place (a full loading state would drop the notice): the tombstone + erased entry.
+            void apiRequest<SubscriberDetailResponse>(subscriberApi(s.id)).then((res) => {
+              if (res.ok) onChange(res.data.subscriber);
+            });
           }}
         />
       ) : null}

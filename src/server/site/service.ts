@@ -61,6 +61,13 @@ export const siteSettingsPatchBody = z
     aboutBodyMd: requiredText('About text', L.aboutBodyMd).optional(),
     socialXUrl: socialUrl('X URL').optional(),
     socialLinkedinUrl: socialUrl('LinkedIn URL').optional(),
+    // Fix pass: the /privacy body (required) and the newsletter footer address (blank clears it).
+    privacyText: requiredText('Privacy text', L.privacyText).optional(),
+    newsletterPostalAddress: z
+      .string()
+      .trim()
+      .max(L.newsletterPostalAddress, `Postal address must be ${L.newsletterPostalAddress} characters or fewer.`)
+      .optional(),
   })
   .strict();
 
@@ -73,6 +80,8 @@ export function siteSettingsFrom(row: SiteRow): SiteSettingsDto {
     aboutBodyMd: row.aboutBodyMd,
     socialXUrl: row.socialXUrl ?? null,
     socialLinkedinUrl: row.socialLinkedinUrl ?? null,
+    privacyText: row.privacyText,
+    newsletterPostalAddress: row.newsletterPostalAddress,
     // Phase 7: read-only here (edited via PATCH /api/admin/newsletter/settings).
     newsletter: newsletterSettingsFrom(row),
   };

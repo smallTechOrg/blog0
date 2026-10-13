@@ -13,7 +13,7 @@ import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import { siteViewModelFrom } from '@/lib/view-models';
 import { getDb } from '@/server/db/client';
-import { site } from '@/server/db/schema';
+import { DEFAULT_PRIVACY_TEXT, site } from '@/server/db/schema';
 import { bumpConsentVersion, updateNewsletterSettings } from '@/server/newsletter/settings';
 import { getCurrentSite, resetCurrentSiteForTests } from '@/server/site/current';
 import { SITE_DEFAULTS } from '@/server/site/defaults';
@@ -67,6 +67,8 @@ describe('GET /api/admin/site', () => {
       aboutBodyMd: SITE_DEFAULTS.aboutBodyMd,
       socialXUrl: null,
       socialLinkedinUrl: null,
+      privacyText: DEFAULT_PRIVACY_TEXT,
+      newsletterPostalAddress: '',
       newsletter: {
         mode: 'manual',
         autoSend: false,
@@ -145,6 +147,48 @@ describe('PATCH /api/admin/site — happy path', () => {
       socialLinkedinUrl: 'https://www.linkedin.com/company/smalltech',
       aboutStrap: SITE_DEFAULTS.aboutStrap,
     });
+  });
+});
+
+describe('PATCH /api/admin/site — privacy text and newsletter postal address (fix pass)', () => {
+  it('seeds a plain-language draft that covers what is collected, retention, unsubscribing and erasure; the address starts empty; the erase salt is never in the DTO', async () => {
+    const row = await siteRow();
+    expect(row.privacyText).toBe(DEFAULT_PRIVACY_TEXT);
+    for (const needle of ['email address', 'IP address', 'user agent', 'twelve months', 'unsubscribe', 'erased']) {
+      expect(row.privacyText.toLowerCase()).toContain(needle.toLowerCase());
+    }
+    expect(row.newsletterPostalAddress).toBe('');
+    expect(row.newsletterEraseSalt).toMatch(/^[0-9a-f]{64}$/);
+
+    const { env } = await call<SiteSettingsResponse>(getRoute, 'GET', { cookie: admin.cookie });
+    expect(JSON.stringify(env)).not.toContain(row.newsletterEraseSalt);
+    expect(Object.keys(data(env).site)).not.toContain('newsletterEraseSalt');
+  });
+
+  it('saves both fields (trimmed), shows them to the reader site on the next load, and an empty address clears it', async () => {
+    const { status, env } = await patch(admin, { privacyText: '  We keep your address.\n\nWrite to us to erase it.  ', newsletterPostalAddress: '  smallTech, 1 Example Street\nMumbai 400001 ' });
+
+    expect(status).toBe(200);
+    expect(data(env).site).toMatchObject({ privacyText: 'We keep your address.\n\nWrite to us to erase it.', newsletterPostalAddress: 'smallTech, 1 Example Street\nMumbai 400001' });
+    expect((await getCurrentSite()).privacyText).toBe('We keep your address.\n\nWrite to us to erase it.');
+    expect((await getCurrentSite()).newsletterPostalAddress).toBe('smallTech, 1 Example Street\nMumbai 400001');
+
+    expect(data((await patch(admin, { newsletterPostalAddress: '   ' })).env).site.newsletterPostalAddress).toBe('');
+    expect((await siteRow()).newsletterPostalAddress).toBe('');
+    expect((await siteRow()).privacyText).toBe('We keep your address.\n\nWrite to us to erase it.');
+  });
+
+  it('accepts the maximum lengths (8 000 / 300) and rejects one character more or a blank privacy text', async () => {
+    expect((await patch(admin, { privacyText: 'x'.repeat(8000), newsletterPostalAddress: 'y'.repeat(300) })).status).toBe(200);
+    const longText = await patch(admin, { privacyText: 'x'.repeat(8001) });
+    const longAddress = await patch(admin, { newsletterPostalAddress: 'y'.repeat(301) });
+    const blank = await patch(admin, { privacyText: '   ' });
+
+    for (const res of [longText, longAddress, blank]) {
+      expect(res.status).toBe(400);
+      expect(err(res.env).code).toBe('VALIDATION_FAILED');
+    }
+    expect((await siteRow()).privacyText).toBe('x'.repeat(8000));
   });
 });
 

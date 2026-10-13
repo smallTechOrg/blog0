@@ -9,6 +9,7 @@ import type {
   IssueOrigin,
   IssuePost,
   IssuePreviewDto,
+  IssueWarningCode,
   IssueStatsDto,
   IssueStatus,
   IssueTestResponse,
@@ -22,7 +23,7 @@ import { site, type NewsletterIssueRow, type SiteRow } from '../../db/schema';
 import { ApiError } from '../../http/api';
 import { log, maskEmail } from '../../log';
 import { SENDING_STALE_MS } from '../constants';
-import { consentLine, unsubscribeUrl, UNSUBSCRIBE_PATH } from '../links';
+import { consentLine, privacyUrl, unsubscribeUrl, UNSUBSCRIBE_PATH } from '../links';
 import { getMailTransport, MailError } from '../mail';
 import * as listRepo from '../repo';
 
@@ -87,7 +88,13 @@ export function issueListItem(row: NewsletterIssueRow): IssueListItemDto {
   };
 }
 
+/** Non-blocking notes about an issue as it would go out (never refuses a send). */
+export function issueWarnings(siteRow: Pick<SiteRow, 'newsletterPostalAddress'>): IssueWarningCode[] {
+  return siteRow.newsletterPostalAddress.trim() === '' ? ['postal_address_missing'] : [];
+}
+
 export async function issueDetail(db: Executor, row: NewsletterIssueRow): Promise<IssueDetailDto> {
+  const siteRow = await siteRowById(db, row.siteId);
   const events = await repo.issueEvents(db, row.id);
   const names = await repo.userNames(db, [row.createdBy, row.sentBy, ...events.map((e) => e.actorUserId)]);
   const name = (id: string | null) => (id ? (names.get(id) ?? null) : null);
@@ -102,6 +109,7 @@ export async function issueDetail(db: Executor, row: NewsletterIssueRow): Promis
     events: events.map((e) => ({ id: e.id, kind: e.kind, actor: name(e.actorUserId), details: e.details, createdAt: e.createdAt.toISOString() })),
     editable: row.status === 'draft',
     stuckSending: isStuckSending(row),
+    warnings: issueWarnings(siteRow),
   };
 }
 
@@ -259,6 +267,8 @@ export function renderIssue(row: Pick<NewsletterIssueRow, 'title' | 'introMd' | 
     posts,
     number: row.number,
     year: yearInZone(now, siteRow.timezone),
+    postalAddress: siteRow.newsletterPostalAddress,
+    privacyUrl: privacyUrl(),
   };
   return { subject: row.title, html: renderIssueHtml(input), text: renderIssueText(input) };
 }
@@ -314,6 +324,7 @@ export async function previewIssue(siteId: string, id: string, admin: { email: s
     html: fillPlaceholders(bodies.html, sample, 'html'),
     text: fillPlaceholders(bodies.text, sample, 'text'),
     sampleRecipient: { email: sample.email, consentLine: sample.consentLine },
+    warnings: issueWarnings(siteRow),
   };
 }
 

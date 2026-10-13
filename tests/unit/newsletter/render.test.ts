@@ -61,6 +61,8 @@ function input(overrides: Partial<IssueRenderInput> = {}): IssueRenderInput {
     posts,
     number: 7,
     year: 2026,
+    postalAddress: '',
+    privacyUrl: `${BASE}/privacy`,
     ...overrides,
   };
 }
@@ -117,6 +119,28 @@ describe('renderIssueHtml', () => {
     expect(html).toContain('The strongest lines, in order.');
     expect(html).not.toContain('font-size:16px;line-height:1.6;color:#1a1a1a;margin:0 0 12px;');
     expect(renderIssueText(input({ introHtml: '', introText: '' }))).not.toContain('Two new pieces');
+  });
+});
+
+describe('issue footer: privacy link and postal address (fix pass)', () => {
+  it('always links /privacy, in HTML and text', () => {
+    expect(renderIssueHtml(input())).toContain(`<a href="${BASE}/privacy"`);
+    expect(renderIssueText(input())).toContain(`Privacy: ${BASE}/privacy`);
+  });
+
+  it('renders the postal address only when non-empty (escaped in HTML, line breaks kept)', () => {
+    const none = { html: renderIssueHtml(input()), text: renderIssueText(input()) };
+    expect(none.html).not.toContain('Example Street');
+    const blank = { html: renderIssueHtml(input({ postalAddress: '  \n ' })), text: renderIssueText(input({ postalAddress: '  \n ' })) };
+    expect(blank).toEqual(none);
+
+    const address = 'smallTech, 1 Example Street <Unit 2>\nMumbai 400001';
+    const html = renderIssueHtml(input({ postalAddress: address }));
+    const text = renderIssueText(input({ postalAddress: address }));
+    expect(html).toContain('smallTech, 1 Example Street &lt;Unit 2&gt;<br>Mumbai 400001');
+    expect(text).toContain(address);
+    expect(occurrences(html, UNSUBSCRIBE_PLACEHOLDER)).toBe(1);
+    expect(occurrences(text, CONSENT_PLACEHOLDER)).toBe(1);
   });
 });
 

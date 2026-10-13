@@ -4,7 +4,7 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 import { e2eAdmin, originOf, signIn } from './helpers/admin';
-import { confirmUrlFromLog, lineCount, NL_CONFIRMED, NL_DONE, pathOf } from './helpers/newsletter';
+import { confirmUrlFromLog, lineCount, NL_CONFIRM_BUTTON, NL_CONFIRMED, NL_DONE, pathOf } from './helpers/newsletter';
 import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
 import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGN_E2E_STORAGE_DIR, DESIGNER_ENV } from './designer.global-setup';
 
@@ -236,6 +236,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect(url!).toMatch(new RegExp(`^http://localhost:${DESIGN_E2E_PORT}/newsletter/confirm\\?t=`));
 
     await page.goto(pathOf(url!));
+    await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
 
     await signIn(page, designer());

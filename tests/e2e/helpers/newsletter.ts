@@ -6,16 +6,20 @@
 // exact per address, independent of log timing, and it works against an external server too.
 // Designer E2E (PGlite, single process — no second DB client): the stub's `newsletter.mail` log line
 // carries `confirm_url` in clear; it is read from the dev server's console file.
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 
 import { expect } from '@playwright/test';
 
 import { withTestDb } from './db';
+import { e2eLogFile, readServerLog } from './logs';
 
 export const NL_DONE = 'Almost there — check your inbox and confirm.';
 export const NL_CONFIRMED = 'You’re subscribed.';
 export const NL_EXPIRED = 'This link has expired or was already used.';
 export const NL_UNSUBSCRIBED = 'You’re unsubscribed. Sorry to see you go.';
+export const NL_CONFIRM_BUTTON = 'Confirm my subscription';
+export const NL_UNSUBSCRIBE_BUTTON = 'Yes, unsubscribe me';
 
 const CONFIRM_RE = /https?:\/\/[^\s"'<>]+\/newsletter\/confirm\?t=[A-Za-z0-9_%-]+/;
 const UNSUBSCRIBE_RE = /https?:\/\/[^\s"'<>]+\/newsletter\/unsubscribe\?t=[A-Za-z0-9_.%-]+/;
@@ -57,17 +61,30 @@ export async function messagesTo(email: string, kind: MessageRow['kind']): Promi
   );
 }
 
-/** The confirm link of the newest confirmation message to `email` (polled: the row commits with the 200). */
-export async function latestConfirmUrl(email: string, after = 0): Promise<string> {
+/**
+ * The confirm link currently valid for `email`, from the stub transport's `newsletter.mail` log line
+ * (`confirm_url` — the stored message rows carry `t=[redacted]`, fix pass). The log has one line per
+ * confirmation sent, possibly for many addresses, so the line is matched to the subscriber by the
+ * sha256 of its token == the row's `confirm_token_hash`. Polled: the row and the line land with the 200.
+ */
+export async function latestConfirmUrl(email: string): Promise<string> {
   let url: string | null = null;
   await expect
     .poll(
       async () => {
-        const rows = await messagesTo(email, 'confirmation');
-        url = rows.length > after ? confirmUrlIn(rows.at(-1)!.text) : null;
+        const rows = await withTestDb((sql) => sql<{ h: string | null }[]>`select confirm_token_hash as h from newsletter_subscriber where email = ${email}`);
+        const hash = rows[0]?.h;
+        if (!hash) return (url = null);
+        const lines = readServerLog().filter((l) => l.event === 'newsletter.mail' && l.kind === 'confirmation' && typeof l.confirm_url === 'string');
+        url = null;
+        for (const l of lines) {
+          const candidate = l.confirm_url as string;
+          const token = new URL(candidate).searchParams.get('t') ?? '';
+          if (createHash('sha256').update(token, 'utf8').digest('hex') === hash) url = candidate;
+        }
         return url;
       },
-      { message: `confirmation message #${after + 1} to ${email} in newsletter_message` },
+      { message: `newsletter.mail confirm_url for ${email} in ${e2eLogFile()}` },
     )
     .not.toBeNull();
   return url!;

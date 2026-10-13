@@ -127,26 +127,40 @@ afterEach(() => {
   setHops(savedHops);
 });
 
-describe('GET /newsletter/confirm (page)', () => {
-  it('confirms and shows "You’re subscribed"; a second visit shows the expired/used copy; garbage is a 404', async () => {
+describe('GET /newsletter/confirm (page) — scanner-safe (fix pass)', () => {
+  it('a plain GET only renders the Confirm button: nothing is consumed, written or counted; the POST confirms; a second POST is the expired/used outcome; garbage is a 404', async () => {
     const token = await signup('page@example.com');
+    const before = await row('page@example.com');
+    const eventsBefore = (await events('page@example.com')).length;
+    const linkLogsBefore = logs.find('newsletter.link').length;
 
-    const html = await renderPage('confirm', token);
+    for (let i = 0; i < 3; i += 1) {
+      const html = await renderPage('confirm', token);
+      expect(html).toContain('Confirm your subscription');
+      expect(html).toContain('Confirm my subscription');
+      expect(html).not.toContain('You’re subscribed');
+      expect(html).not.toContain(token); // the page never echoes the token into markup beyond what the client component holds
+    }
 
-    expect(html).toContain('You’re subscribed.');
-    expect(html).toContain('blog0 issues will land in this inbox');
-    expect(html).toContain('Back to blog0');
-    expect(html).toContain('class="tag">Newsletter');
+    const untouched = await row('page@example.com');
+    expect(untouched).toMatchObject({ status: 'pending', confirmTokenHash: before.confirmTokenHash, confirmedAt: null });
+    expect((await events('page@example.com')).length).toBe(eventsBefore);
+    expect(logs.find('newsletter.link')).toHaveLength(linkLogsBefore); // a GET is not even a link request
+    expect(await renderPage('confirm', 'not-a-token')).toBe('NOT_FOUND');
+    expect(await renderPage('confirm', undefined)).toBe('NOT_FOUND');
+
+    const ok = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token }, { 'user-agent': 'vitest-page' });
+    expect(ok.res.status).toBe(200);
     const r = await row('page@example.com');
     expect(r.status).toBe('confirmed');
     expect(r.confirmedUserAgent).toBe('vitest-page');
     expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'ok', subscriber_id: r.id });
 
-    expect(await renderPage('confirm', token)).toContain('This link has expired or was already used.');
+    const again = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token });
+    expect(again.res.status).toBe(410);
     expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'expired' });
-    expect(await renderPage('confirm', 'not-a-token')).toBe('NOT_FOUND');
-    expect(await renderPage('confirm', undefined)).toBe('NOT_FOUND');
-    expect(await renderPage('confirm', 'B'.repeat(43))).toBe('NOT_FOUND');
+    const unknown = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: 'B'.repeat(43) });
+    expect(unknown.res.status).toBe(404);
     expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'invalid' });
   });
 
@@ -182,9 +196,14 @@ describe('unsubscribe link, one-click and suppression', () => {
     expect(link).toMatch(/^http:\/\/localhost:3410\/newsletter\/unsubscribe\?t=/);
     const t = new URL(link).searchParams.get('t') as string;
 
-    const html = await renderPage('unsubscribe', t);
+    // fix pass: opening the link only shows the button — nothing changes until it is pressed
+    const prompt = await renderPage('unsubscribe', t);
+    expect(prompt).toContain('Yes, unsubscribe me');
+    expect(await row('bye@example.com')).toMatchObject({ status: 'confirmed', unsubscribedAt: null });
+    expect(await suppressions('bye@example.com')).toHaveLength(0);
+    const pressed = await postJson<NewsletterUnsubscribeResponse>(unsubscribeRoute, '/api/newsletter/unsubscribe', { token: t, source: 'email_link' });
+    expect(pressed.env).toEqual({ ok: true, data: { unsubscribed: true, alreadyUnsubscribed: false } });
 
-    expect(html).toContain('You’re unsubscribed. Sorry to see you go.');
     expect(await row('bye@example.com')).toMatchObject({ status: 'unsubscribed' });
     expect((await row('bye@example.com')).unsubscribedAt).not.toBeNull();
     const sup = await suppressions('bye@example.com');
@@ -204,7 +223,7 @@ describe('unsubscribe link, one-click and suppression', () => {
     expect(oneClick.status).toBe(200);
     expect((await oneClick.json()) as Envelope<NewsletterUnsubscribeResponse>).toEqual({ ok: true, data: { unsubscribed: true, alreadyUnsubscribed: true } });
     expect(await suppressions('bye@example.com')).toHaveLength(1);
-    expect(await renderPage('unsubscribe', t)).toContain('You’re unsubscribed. Sorry to see you go.');
+    expect(await renderPage('unsubscribe', t)).toContain('Yes, unsubscribe me'); // a GET never reports or writes anything
     expect(await suppressions('bye@example.com')).toHaveLength(1);
 
     const tampered = t.slice(0, -1) + (t.endsWith('A') ? 'B' : 'A');
@@ -214,7 +233,7 @@ describe('unsubscribe link, one-click and suppression', () => {
     expect(await renderPage('unsubscribe', tampered)).toBe('NOT_FOUND');
     expect(await renderPage('unsubscribe', 'garbage')).toBe('NOT_FOUND');
     expect(await suppressions('bye@example.com')).toHaveLength(1);
-    expect(logs.find('newsletter.link').filter((l) => l.outcome === 'invalid').length).toBeGreaterThanOrEqual(2);
+    expect(logs.find('newsletter.link').filter((l) => l.outcome === 'invalid').length).toBeGreaterThanOrEqual(1);
   });
 
   it('one-click on a confirmed subscriber (JSON { token } and form) writes a one_click-sourced suppression', async () => {
@@ -413,20 +432,26 @@ describe('link rate caps (spec/architecture.md §6)', () => {
     expect(fine.res.status).toBe(200);
     const unsub = await postJson(unsubscribeRoute, '/api/newsletter/unsubscribe', { token: unsubscribeToken((await row('cap0@example.com')).id) }, ip);
     expect(unsub.res.status).toBe(429);
-    expect(await renderPage('unsubscribe', unsubscribeToken((await row('cap0@example.com')).id), ip)).toContain('Too many requests.');
+    // the cap counts POSTs only: the page (a GET) still renders its button for a limited client
+    expect(await renderPage('unsubscribe', unsubscribeToken((await row('cap0@example.com')).id), ip)).toContain('Yes, unsubscribe me');
   });
 
-  it('with hops=0 only the site-wide cap applies (injected small): the page shows the 429 copy with the minutes', async () => {
+  it('with hops=0 only the site-wide cap applies (injected small): the third POST is a 429 with the minutes in Retry-After; GETs never count', async () => {
     setHops('0');
     resetNewsletterLinkRateLimiterForTests({ siteWide: 2 });
     const a = await signup('site1@example.com');
     const b = await signup('site2@example.com');
     const c = await signup('site3@example.com');
-    expect(await renderPage('confirm', a)).toContain('You’re subscribed.');
-    expect(await renderPage('confirm', b)).toContain('You’re subscribed.');
-    const html = await renderPage('confirm', c);
-    expect(html).toContain('Too many requests.');
-    expect(html).toMatch(/Try the link again in \d+ minutes?\./);
+    for (let i = 0; i < 5; i += 1) expect(await renderPage('confirm', c)).toContain('Confirm my subscription');
+    expect((await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: a })).res.status).toBe(200);
+    expect((await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: b })).res.status).toBe(200);
+    const blocked = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: c });
+    expect(blocked.res.status).toBe(429);
+    if (!blocked.env.ok) {
+      expect(blocked.env.error.code).toBe('RATE_LIMITED');
+      expect(blocked.env.error.message).toMatch(/try again in \d+ minutes?/i);
+    }
+    expect(Number(blocked.res.headers.get('retry-after'))).toBeGreaterThan(0);
     expect((await row('site3@example.com')).status).toBe('pending');
   });
 });

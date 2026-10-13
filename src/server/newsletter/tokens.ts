@@ -4,7 +4,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 // - confirm token: 32 random bytes → base64url; only sha256hex(token) is stored, so a database copy
 //   cannot confirm anyone;
 // - unsubscribe token: stateless, `<uuid-as-base64url>.<base64url(HMAC-SHA256(secret, DOMAIN + id))>`
-//   signed with the session secret (domain-separated), never expiring — an unsubscribe must always
+//   signed with `unsubscribeSigningSecret()` (BLOG0_UNSUBSCRIBE_SECRET, default the session secret;
+//   domain-separated) and verified against `unsubscribeVerifySecrets()`, never expiring — an unsubscribe must always
 //   work, and Listmonk-sent issues can carry the link as a subscriber attribute.
 
 const UNSUBSCRIBE_DOMAIN = 'blog0.newsletter.unsubscribe:';
@@ -60,8 +61,12 @@ export function isWellFormedUnsubscribeToken(value: unknown): value is string {
   return BASE64URL_RE.test(value.slice(0, dot)) && BASE64URL_RE.test(value.slice(dot + 1));
 }
 
-/** The subscriber id the token names, or null when malformed or tampered (constant-time compare). */
-export function verifyUnsubscribeToken(token: string, secret: string): string | null {
+/**
+ * The subscriber id the token names, or null when malformed or tampered (constant-time compare).
+ * `secrets` is one secret or a list tried in order (every candidate is compared, none short-circuits
+ * on a mismatch).
+ */
+export function verifyUnsubscribeToken(token: string, secrets: string | readonly string[]): string | null {
   if (!isWellFormedUnsubscribeToken(token)) return null;
   const [idPart, sigPart] = token.split('.');
   const id = base64urlToUuid(idPart);
@@ -71,7 +76,19 @@ export function verifyUnsubscribeToken(token: string, secret: string): string | 
   if (uuidToBase64url(id) !== idPart) return null;
   const given = Buffer.from(sigPart, 'base64url');
   if (given.toString('base64url') !== sigPart) return null;
-  const expected = unsubscribeSignature(id, secret);
-  if (given.length !== expected.length) return null;
-  return timingSafeEqual(given, expected) ? id : null;
+  const candidates = typeof secrets === 'string' ? [secrets] : secrets;
+  let ok = false;
+  for (const secret of candidates) {
+    const expected = unsubscribeSignature(id, secret);
+    if (given.length === expected.length && timingSafeEqual(given, expected)) ok = true;
+  }
+  return ok ? id : null;
+}
+
+/**
+ * Erasure matching hash (fix pass, spec/data.md `0004`): `sha256hex(salt + ':' + trim(lower(email)))`,
+ * the twin of the SQL in `newsletter_erase_subscriber`. The salt is `site.newsletter_erase_salt`.
+ */
+export function erasureHash(salt: string, email: string): string {
+  return createHash('sha256').update(`${salt}:${email.trim().toLowerCase()}`, 'utf8').digest('hex');
 }

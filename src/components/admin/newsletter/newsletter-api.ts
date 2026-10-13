@@ -99,3 +99,13 @@ export function senderNote(sender: NewsletterStatusDto['sender']): string {
 export function sentLine(recipients: number | null): string {
   return recipients === null ? 'Sent' : `Sent to ${plural(recipients, 'subscriber', 'subscribers')}`;
 }
+
+// ---- Postal address warning (fix pass; spec/ui.md §4 "Issue") ----
+
+export const POSTAL_WARNING = 'No postal address is set — issues will go out without one. Add it in Site → Newsletter postal address.';
+
+/** True when an issue's `warnings` (strings or `{ code }` objects) carry `postal_address_missing`. */
+export function postalAddressMissing(warnings: unknown): boolean {
+  if (!Array.isArray(warnings)) return false;
+  return warnings.some((w) => w === 'postal_address_missing' || (typeof w === 'object' && w !== null && (w as { code?: unknown }).code === 'postal_address_missing'));
+}

@@ -26,5 +26,6 @@ Listen: http://localhost:3410/p/listen-first/listen
 ———
 
 Unsubscribe: %%BLOG0_UNSUBSCRIBE_URL%%
+Privacy: http://localhost:3410/privacy
 %%BLOG0_CONSENT_LINE%%
 © 2026 blog0 | smallTech

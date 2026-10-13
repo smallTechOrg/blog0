@@ -347,7 +347,7 @@ describe('loadConfig — newsletter (Phase 7, spec/architecture.md §10)', () =>
     const postgres = loadConfig(baseEnv());
 
     for (const config of [designer, postgres]) {
-      expect(config.newsletter).toEqual({ smtp: null, sender: 'stub', listmonk: null, webhookSecret: null });
+      expect(config.newsletter).toEqual({ smtp: null, sender: 'stub', listmonk: null, webhookSecret: null, unsubscribeSecret: null });
     }
   });
 

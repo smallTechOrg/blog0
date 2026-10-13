@@ -52,6 +52,7 @@ makes the server log one aggregated error and exit 1 before serving.
 | `BLOG0_LISTMONK_URL` / `BLOG0_LISTMONK_API_USER` / `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | no | Listmonk base URL as the container reaches it (e.g. `http://listmonk:9000`), the API user, the list id |
 | `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | **yes** | the API user's token |
 | `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | optional | — | **yes** | ≥ 24 chars (`openssl rand -base64 32`); unset → `POST /api/newsletter/webhook` answers 404 |
+| `BLOG0_UNSUBSCRIBE_SECRET` | optional | session secret | **yes** | ≥ 24 chars (`openssl rand -base64 32`); signs **new** unsubscribe links, verified before the session secret. Set it once, before the first issue, so a later session-secret rotation leaves mailed links working. See [Rotating the secrets](#rotating-blog0_session_secret) |
 | `BLOG0_STORAGE_DIR` | baked in: `/data/storage` | — | no | do not change; mount the volume there |
 | `PORT` / `HOSTNAME` / `NODE_ENV` | baked in: `3410` / `0.0.0.0` / `production` | — | no | map a host/ingress port to 3410 instead of changing `PORT` |
 
@@ -82,7 +83,8 @@ Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_
    # <db>: applied 0001_rate_limit_bucket
    # <db>: applied 0002_newsletter
    # <db>: applied 0003_newsletter_prune_fix
-   # release: blog0 @ PostgreSQL 18.x — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
+   # <db>: applied 0004_newsletter_erasure
+   # release: blog0 @ PostgreSQL 18.x — 5 applied (latest 0004_newsletter_erasure), 0 pending: OK
    # site blog0 ok (created), admin <masked email> ok (created)
    ```
 
@@ -209,6 +211,10 @@ that has never been restored is a hope, not a backup.
 
 ## Rotating `BLOG0_SESSION_SECRET`
 
+(Two secrets matter here: `BLOG0_SESSION_SECRET` and the optional `BLOG0_UNSUBSCRIBE_SECRET`; the
+last step below and [Rotating `BLOG0_UNSUBSCRIBE_SECRET`](#rotating-blog0_unsubscribe_secret) say
+what each one breaks.)
+
 The database stores only `HMAC-SHA256(secret, token)` of each session, so a new secret
 invalidates **every** session: all admins must sign in again. No data is lost (articles, media,
 subscribers and accounts are untouched; passwords are argon2 hashes, independent of the secret).
@@ -219,11 +225,24 @@ Rotate on a schedule or at once if the secret may have leaked:
    reject each other's sessions — do not run a mixed fleet longer than the rollout).
 3. Optional cleanup of the now-dead rows: `psql "$BLOG0_DATABASE_URL" -c 'delete from session'`.
 4. Sign in again at `/admin/login`.
-5. **Newsletter:** the same secret signs every subscriber's unsubscribe link, so links in emails
-   already delivered stop working (they open a "not found" page). With Listmonk, re-sync at once so
-   future issues carry fresh links: `pnpm newsletter:sync` from the ops checkout (expect
-   `… N changed` with N = the confirmed subscribers) or **Site → Newsletter → Sync to Listmonk**.
-   Confirmation links are unaffected (they are random tokens, stored hashed).
+5. **Newsletter:** without `BLOG0_UNSUBSCRIBE_SECRET` the session secret also signs every
+   subscriber's unsubscribe link, so links in emails already delivered stop working (they open a
+   "not found" page). **With `BLOG0_UNSUBSCRIBE_SECRET` set, links signed with it keep working** —
+   only links signed with the old session secret (issues sent before you set it) break. Either way
+   with Listmonk re-sync at once so future issues carry fresh links: `pnpm newsletter:sync` from the
+   ops checkout (expect `… N changed` with N = the confirmed subscribers) or **Site → Newsletter →
+   Sync to Listmonk**. Confirmation links are unaffected (they are random tokens, stored hashed).
+
+## Rotating `BLOG0_UNSUBSCRIBE_SECRET`
+
+Setting it for the first time is harmless: new links are signed with it, and verification tries it
+first and the session secret second, so every link already mailed keeps working. **Changing or
+removing it breaks the links signed with the old value** (an unsubscribe link in an already-delivered
+issue then shows "not found"; the reader can still use the footer or reply to the contact address).
+Rotate it only if it leaked: set the new value on **all** web containers, run
+`pnpm newsletter:sync` (or **Site → Newsletter → Sync to Listmonk**) so future issues carry links
+signed with it, and accept that older mail's links stop working. Keep the two secrets different, so a
+session-secret rotation never touches unsubscribe links.
 
 ## Newsletter
 
@@ -440,6 +459,39 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
 - Proof of consent on request: `/admin/subscribers` → the subscriber page, or **Export audit
   (JSON)** (every subscriber, event and suppression). Listmonk holds a copy of the consent fields
   as subscriber attributes, but blog0's export is the record.
+
+### Handling an erasure request
+
+A reader asks (by mail to the contact address shown on `/privacy`) to have their data erased.
+
+1. **Verify the requester** — reply from, or ask them to confirm from, the address in question;
+   never erase on an unverified claim.
+2. Admin → **Subscribers** → open the address → **Erase personal data**. Type the address to confirm
+   and press **Erase**. The page says whether the Listmonk copy was removed.
+3. What it does, in one transaction (`newsletter_erase_subscriber`, migration `0004`): the address,
+   name, IPs, user agents and source page are removed from the subscriber, its events, its
+   suppression entries and its stored messages; the address becomes a tombstone
+   `erased+<hash>@erased.invalid`, the row is `unsubscribed`, and a suppression entry
+   (`erased`, keyed by a salted hash — never the address) plus one `erased` event stay as the proof
+   that an erasure happened. If the same address signs up again it is **not** a clean slate: it still
+   needs a fresh double opt-in and its signup event says `erasedBefore`.
+4. **Confirm the log line**: `newsletter.erase` with `outcome: "erased"` and `provider:`
+   `removed` (Listmonk contacted), `skipped` (stub sender) or `failed` (a `warn` — the erase
+   still happened; blocklist/delete the address in the Listmonk admin by hand). The line never
+   contains the address.
+5. **Listmonk:** blog0 *blocklists* the address there (never a delete — Listmonk keeps the row so a
+   provider-side import cannot re-mail it). If the requester wants the address gone from Listmonk
+   too, delete the subscriber in Listmonk's admin (Subscribers → select → Delete) after the erase.
+6. **Backups made before the erasure still hold the data** until they expire — delete or rotate
+   them per your backup policy (see [Backups](#backups)); a restore of such a backup brings the
+   address back, so redo the erase after any restore and keep a note of erasures made.
+7. Reply to the requester. The seeded `/privacy` text is a plain-language **draft**: review and
+   edit it in Admin → Site → Privacy text, and set Admin → Site → Newsletter postal address (issues
+   and confirmation mail print it; sending without one only warns).
+
+Residue by design: the throttle table `rate_limit_bucket` keeps only SHA-256 hashes of IPs and
+addresses for up to an hour (fixed windows; excluded from backups), and `site.newsletter_erase_salt`
+(in the `site` row, inside every backup) must survive restores — erasure matching depends on it.
 
 ### Newsletter backups
 

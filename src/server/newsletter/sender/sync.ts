@@ -6,6 +6,7 @@ import { getDb } from '../../db/client';
 import type { NewsletterSubscriberRow, SiteRow } from '../../db/schema';
 import { log, maskEmail } from '../../log';
 import { getCurrentSite } from '../../site/current';
+import { isErasedEmail } from '../erase';
 import { consentLine, unsubscribeUrl } from '../links';
 import * as listRepo from '../repo';
 import { markProviderSynced, suppressByEmail } from '../service';
@@ -72,6 +73,8 @@ async function syncRow(
   trigger: SyncTrigger,
   mode: 'all' | 'one',
 ): Promise<{ outcome: Outcome; changed: boolean }> {
+  // An erased subscriber is a tombstone (`erased+<hash>@erased.invalid`): nothing of it may reach the provider.
+  if (isErasedEmail(row.email)) return { outcome: 'skipped', changed: false };
   if (row.status === 'confirmed') {
     const { providerId, changed, optOut } = await sender.syncSubscriber(senderSubscriberFrom(row, site));
     if (optOut !== undefined) {

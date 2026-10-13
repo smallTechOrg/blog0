@@ -4,18 +4,20 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import type { NewsletterAuditBundle, NewsletterSettingsResponse } from '@/lib/api/dto';
 
+import { withTestDb } from './helpers/db';
 import { createArticleApi, e2eAdmin, originOf, publishApi, signIn } from './helpers/admin';
 import { logFileNotWired, readServerLog } from './helpers/logs';
 import {
   confirmedCount,
-  confirmUrlIn,
   eventKinds,
   insertLegacySubscriber,
   latestConfirmUrl,
   messagesTo,
+  NL_CONFIRM_BUTTON,
   NL_CONFIRMED,
   NL_DONE,
   NL_EXPIRED,
+  NL_UNSUBSCRIBE_BUTTON,
   NL_UNSUBSCRIBED,
   pathOf,
   subscriberByEmail,
@@ -39,16 +41,18 @@ const RUN = Date.now();
 const EMAIL = `nl-walk-${RUN}@example.test`;
 const NAME = 'E2E Newsletter Reader';
 const LEGACY_EMAIL = `nl-legacy-${RUN}@example.test`;
+const ERASE_EMAIL = `nl-erase-${RUN}@example.test`;
 const ARTICLE_TITLE = `Owning the list ${RUN}`;
 const ARTICLE_DEK = 'Why the subscriber list lives next to the posts.';
 const ARTICLE_BODY = 'A newsletter is a promise kept by email.\n\nThis post exists so the per-post issue has something to carry.\n';
 
 /** Shared across the serial steps. */
-const walk: { subscriberId: string; issueId: string; articleSlug: string; unsubscribeUrl: string } = {
+const walk: { subscriberId: string; issueId: string; articleSlug: string; unsubscribeUrl: string; firstConfirmUrl: string } = {
   subscriberId: '',
   issueId: '',
   articleSlug: '',
   unsubscribeUrl: '',
+  firstConfirmUrl: '',
 };
 
 function dd(scope: Locator, term: string): Locator {
@@ -80,7 +84,8 @@ async function settings(page: Page): Promise<NewsletterSettingsResponse> {
 
 test('footer signup → "Almost there"; the admin shows the address Pending with its proof of consent', async ({ page }) => {
   await page.goto('/');
-  const consentShown = (await page.locator('#newsletter .ft-micro').innerText()).trim();
+  // The consent line is followed by the Privacy link (fix pass); the stored consent text is the line alone.
+  const consentShown = (await page.locator('#newsletter .ft-micro').innerText()).trim().replace(/\s*Privacy$/, '');
   const browserUa = await page.evaluate(() => navigator.userAgent);
 
   await signupInFooter(page, EMAIL, NAME);
@@ -116,11 +121,32 @@ test('footer signup → "Almost there"; the admin shows the address Pending with
   await expect(main.getByRole('button', { name: 'Resend confirmation' })).toBeVisible();
 });
 
-test('the confirm link → "You’re subscribed."; the admin shows Confirmed + timeline; reopening the link is spent', async ({ page }) => {
+test('a plain GET of the confirm link (a mail scanner) leaves the subscriber Pending and the link unspent', async ({ page }) => {
   const url = await latestConfirmUrl(EMAIL);
+  walk.firstConfirmUrl = url;
+  const eventsBefore = await eventKinds(walk.subscriberId);
+
+  const res = await page.request.get(pathOf(url));
+  expect(res.status()).toBe(200);
+  expect(await res.text()).toContain(NL_CONFIRM_BUTTON);
+  await page.request.get(pathOf(url));
+
+  expect((await subscriberByEmail(EMAIL)).status).toBe('pending');
+  expect(await eventKinds(walk.subscriberId)).toEqual(eventsBefore);
+
+  // The stored message never keeps the real token (fix pass); the log line / transport carried it.
+  const stored = (await messagesTo(EMAIL, 'confirmation'))[0];
+  expect(stored.text).toContain('/newsletter/confirm?t=[redacted]');
+  expect(stored.text).not.toContain(new URL(url).searchParams.get('t')!);
+});
+
+test('pressing "Confirm my subscription" → "You’re subscribed."; the admin shows Confirmed + timeline; the spent link says so', async ({ page }) => {
+  const url = walk.firstConfirmUrl;
 
   const res = await page.goto(pathOf(url));
   expect(res?.status()).toBe(200);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm your subscription');
+  await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
 
   expect((await subscriberByEmail(EMAIL)).status).toBe('confirmed');
@@ -138,10 +164,25 @@ test('the confirm link → "You’re subscribed."; the admin shows Confirmed + t
   ]);
   await expect(dd(main, 'Confirmed at')).not.toHaveText('—');
 
-  // The same link again: used — the expired/used copy, nothing changes.
+  // The same link again: the page offers the button, the click reports it spent, nothing changes.
   await page.goto(pathOf(url));
+  await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_EXPIRED);
   expect(await eventKinds(walk.subscriberId)).toHaveLength(3);
+});
+
+test('/privacy renders the seeded draft text in the site chrome and the footer consent line links to it', async ({ page }) => {
+  const [row] = await withTestDb((sql) => sql<{ privacy_text: string }[]>`select privacy_text from site order by created_at limit 1`);
+  const firstParagraph = row.privacy_text.split(/\n\s*\n/)[0].replace(/\s+/g, ' ').trim();
+  expect(firstParagraph.length).toBeGreaterThan(10);
+
+  await page.goto('/');
+  await page.locator('#newsletter .ft-micro').getByRole('link', { name: 'Privacy' }).click();
+  await expect(page).toHaveURL(/\/privacy$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Privacy' })).toBeVisible();
+  await expect(page.locator('.abt__body')).toContainText(firstParagraph);
+  await expect(page.getByText('Questions or an erasure request:')).toBeVisible();
+  await expect(page.locator('#newsletter')).toBeVisible(); // site chrome (footer) is present
 });
 
 test('Export CSV and Export audit (JSON) download the confirmed address with its events and consent text', async ({ page }) => {
@@ -231,6 +272,56 @@ test('the draft previews as HTML (title + unsubscribe link) and Text; Send test 
   await expect(main.locator('.timeline__label').last()).toHaveText(`Test sent to ${admin.email}`);
 });
 
+test('the issue page and the Send dialog warn while the postal address is empty (Send stays enabled); saving one in Site clears the warning', async ({ page }) => {
+  await signIn(page);
+  const siteForm = () => page.getByRole('form', { name: 'Site settings' });
+  const address = siteForm().locator('#site-newsletterPostalAddress');
+
+  // Start from an empty address (restored at the end whatever the seed was).
+  await page.goto('/admin/site');
+  await expect(address).toBeVisible();
+  const original = await address.inputValue();
+  if (original !== '') {
+    await address.fill('');
+    await siteForm().getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(siteForm().getByText(/^Saved/)).toBeVisible();
+  }
+  await expect(page.getByText(/must be filled before you send/)).toBeVisible();
+  await expect(page.getByText(/Review the wording — the default is a draft/)).toBeVisible();
+
+  try {
+    await page.goto(`/admin/newsletter/${walk.issueId}`);
+    const main = page.locator('main.desk-main');
+    const warning = main.locator('.admin-warn');
+    await expect(warning).toContainText('No postal address is set');
+    await main.getByRole('button', { name: 'Send', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: /^Send to / });
+    await expect(dialog.locator('.admin-warn')).toContainText('No postal address is set');
+    await expect(dialog.getByRole('button', { name: 'Send now' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+    await page.goto('/admin/site');
+    await address.fill('1 Example Street, Springfield');
+    await siteForm().getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(siteForm().getByText(/^Saved/)).toBeVisible();
+
+    await page.goto(`/admin/newsletter/${walk.issueId}`);
+    await expect(main.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+    await expect(main.locator('.admin-warn')).toHaveCount(0);
+    await main.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: /^Send to / }).locator('.admin-warn')).toHaveCount(0);
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  } finally {
+    await page.goto('/admin/site');
+    await expect(address).toBeVisible();
+    await address.fill(original);
+    if ((await address.inputValue()) !== (await address.evaluate((el) => (el as HTMLTextAreaElement).defaultValue))) {
+      await siteForm().getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(siteForm().getByText(/^Saved/)).toBeVisible();
+    }
+  }
+});
+
 test('Send → confirm → Sent · 1 recipient, the send log, stats, and the stub message carries the unsubscribe link', async ({ page }) => {
   const recipients = await confirmedCount();
   expect(recipients, 'this walk’s address is the only confirmed one').toBe(1);
@@ -286,10 +377,18 @@ test('Send → confirm → Sent · 1 recipient, the send log, stats, and the stu
   }
 });
 
-test('the issue’s unsubscribe link → "You’re unsubscribed"; the admin shows Unsubscribed with one suppression entry', async ({ page }) => {
+test('a plain GET of the issue’s unsubscribe link leaves the subscriber Confirmed; pressing "Yes, unsubscribe me" unsubscribes', async ({ page }) => {
   expect(walk.unsubscribeUrl).not.toBe('');
+  const get = await page.request.get(pathOf(walk.unsubscribeUrl));
+  expect(get.status()).toBe(200);
+  expect(await get.text()).toContain(NL_UNSUBSCRIBE_BUTTON);
+  expect((await subscriberByEmail(EMAIL)).status).toBe('confirmed');
+  expect(await suppressionRows(walk.subscriberId)).toEqual([]);
+
   const res = await page.goto(pathOf(walk.unsubscribeUrl));
   expect(res?.status()).toBe(200);
+  await expect(page.getByRole('button', { name: NL_UNSUBSCRIBE_BUTTON })).toBeVisible();
+  await page.getByRole('button', { name: NL_UNSUBSCRIBE_BUTTON }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_UNSUBSCRIBED);
 
   expect((await subscriberByEmail(EMAIL)).status).toBe('unsubscribed');
@@ -320,9 +419,10 @@ test('re-signup of the unsubscribed address starts a fresh double opt-in and kee
   // A new confirmation link, different from the first one.
   const confirmations = await messagesTo(EMAIL, 'confirmation');
   expect(confirmations).toHaveLength(2);
-  const fresh = await latestConfirmUrl(EMAIL, 1);
-  expect(fresh).toBe(confirmUrlIn(confirmations[1].text));
-  expect(fresh).not.toBe(confirmUrlIn(confirmations[0].text));
+  const fresh = await latestConfirmUrl(EMAIL);
+  expect(fresh).not.toBe(walk.firstConfirmUrl);
+  expect(confirmations[1].text).toContain('/newsletter/confirm?t=[redacted]');
+  expect(confirmations[1].text).not.toContain(new URL(fresh).searchParams.get('t')!);
 
   await signIn(page);
   const main = await openSubscriber(page, walk.subscriberId, EMAIL);
@@ -361,4 +461,46 @@ test('a legacy_unconfirmed subscriber gets the one-time confirmation once; the b
   expect(again.status()).toBe(409);
   expect(await again.json()).toMatchObject({ ok: false, error: { code: 'CONFIRMATION_ALREADY_SENT' } });
   expect(await messagesTo(LEGACY_EMAIL, 'confirmation')).toHaveLength(1);
+});
+
+test('Erase personal data: wrong address keeps Erase disabled; the right one erases, the admin shows the tombstone, a re-signup is Pending again', async ({ page }) => {
+  await signupInFooter(page, ERASE_EMAIL, 'Erase Me');
+  const url = await latestConfirmUrl(ERASE_EMAIL);
+  await page.goto(pathOf(url));
+  await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
+  const row = await subscriberByEmail(ERASE_EMAIL);
+  expect(row.status).toBe('confirmed');
+
+  await signIn(page);
+  const main = await openSubscriber(page, row.id, ERASE_EMAIL);
+  await main.getByRole('button', { name: 'Erase personal data' }).click();
+  const dialog = page.getByRole('dialog', { name: new RegExp(`^Erase ${ERASE_EMAIL}\\?`) });
+  const erase = dialog.getByRole('button', { name: 'Erase', exact: true });
+  await expect(erase).toBeDisabled();
+  await dialog.getByLabel('Type the address to confirm').fill('someone-else@example.test');
+  await expect(erase).toBeDisabled();
+  await dialog.getByLabel('Type the address to confirm').fill(ERASE_EMAIL.toUpperCase());
+  await expect(erase).toBeEnabled();
+  await erase.click();
+  await expect(dialog).toHaveCount(0);
+
+  await expect(main.getByText(/^Erased\. Listmonk /)).toBeVisible();
+  await expect(main.getByRole('heading', { level: 1 })).toHaveText(/^erased\+[0-9a-f]+@erased\.invalid$/);
+  await expect(main.locator('.timeline__label').last()).toHaveText('Personal data erased');
+  await expect(main.getByRole('button', { name: 'Erase personal data' })).toHaveCount(0);
+  await expect(main).not.toContainText(ERASE_EMAIL);
+
+  // Reloading shows the same tombstone; no row keeps the address.
+  await page.reload();
+  await expect(main.getByRole('heading', { level: 1 })).toHaveText(/^erased\+[0-9a-f]+@erased\.invalid$/);
+  const left = await withTestDb((sql) => sql`select id from newsletter_subscriber where lower(email) = ${ERASE_EMAIL.toLowerCase()}`);
+  expect(left).toHaveLength(0);
+
+  // The same address signing up again needs a fresh double opt-in.
+  await signupInFooter(page, ERASE_EMAIL.toUpperCase());
+  const again = await subscriberByEmail(ERASE_EMAIL);
+  expect(again.status).toBe('pending');
+  await page.goto('/admin/subscribers?status=pending');
+  await expect(page.locator('.admin-table tbody tr', { hasText: ERASE_EMAIL })).toBeVisible();
 });

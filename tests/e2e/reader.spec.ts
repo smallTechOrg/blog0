@@ -614,7 +614,7 @@ test.describe('reader site (blog0)', () => {
     expect(await meta('meta[name="twitter:card"]')).toBe('summary');
   });
 
-  test('/sitemap.xml lists every published article (the 5 seeded included) plus /, /archive, /about', async ({ request }, testInfo) => {
+  test('/sitemap.xml lists every published article (the 5 seeded included) plus /, /archive, /about, /privacy', async ({ request }, testInfo) => {
     const base = originOf(testInfo);
     const res = await request.get('/sitemap.xml');
     expect(res.status()).toBe(200);
@@ -624,9 +624,9 @@ test.describe('reader site (blog0)', () => {
     for (const slug of SEEDED_SLUGS) expect(locs).toContain(`${base}/p/${slug}`);
     const published = await publishedArticles();
     expect(locs.filter((l) => l.includes('/p/')).sort()).toEqual(published.map((p) => `${base}/p/${p.slug}`).sort());
-    expect(locs).toEqual(expect.arrayContaining([`${base}/archive`, `${base}/about`]));
+    expect(locs).toEqual(expect.arrayContaining([`${base}/archive`, `${base}/about`, `${base}/privacy`]));
     expect(locs.some((l) => l === base || l === `${base}/`)).toBe(true);
-    expect(locs).toHaveLength(published.length + 3);
+    expect(locs).toHaveLength(published.length + 4);
   });
 
   // A seeded article has no recording: Listen is disabled with its reason (in the capsule and in the

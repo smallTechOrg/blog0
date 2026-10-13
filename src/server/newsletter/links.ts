@@ -23,7 +23,7 @@ export function confirmUrl(token: string): string {
   return `${base()}${CONFIRM_PATH}?t=${encodeURIComponent(token)}`;
 }
 
-/** The subscriber's permanent one-click unsubscribe link (signed with the session secret). */
+/** The subscriber's permanent one-click unsubscribe link (signed with `unsubscribeSigningSecret()`). */
 export function unsubscribeUrl(subscriberId: string): string {
   return `${base()}${UNSUBSCRIBE_PATH}?t=${encodeURIComponent(unsubscribeToken(subscriberId))}`;
 }
@@ -41,8 +41,26 @@ export function unsubscribePageUrl(token: string): string {
   return `${base()}${UNSUBSCRIBE_PATH}?t=${encodeURIComponent(token)}`;
 }
 
+/** The secret that signs NEW unsubscribe tokens: BLOG0_UNSUBSCRIBE_SECRET, else the session secret. */
+export function unsubscribeSigningSecret(): string {
+  const config = getConfig();
+  return (config.newsletter.unsubscribeSecret ?? config.sessionSecret).reveal();
+}
+
+/** Every secret an unsubscribe token may verify against: the unsubscribe secret first, then the session secret (deduplicated). */
+export function unsubscribeVerifySecrets(): string[] {
+  const config = getConfig();
+  const secrets = [config.newsletter.unsubscribeSecret?.reveal(), config.sessionSecret.reveal()].filter((s): s is string => s !== undefined);
+  return [...new Set(secrets)];
+}
+
 export function unsubscribeToken(subscriberId: string): string {
-  return signUnsubscribeToken(subscriberId, getConfig().sessionSecret.reveal());
+  return signUnsubscribeToken(subscriberId, unsubscribeSigningSecret());
+}
+
+/** The public privacy page (`/privacy`) under BLOG0_PUBLIC_BASE_URL. */
+export function privacyUrl(): string {
+  return `${base()}/privacy`;
 }
 
 export interface ConsentLineSite {

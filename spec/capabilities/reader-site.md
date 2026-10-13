@@ -81,7 +81,7 @@ link previews — pre-filled with the five smallTech articles.
 - [ ] Changing About strap in Admin → Site changes the text on `/` and `/about` on next load.
 - [ ] Toggling dark mode then reloading keeps `data-theme="dark"`.
 - [ ] `/p/humans-are-software` HTML contains `og:title`, `og:description` (= dek), `og:url` (absolute), `og:type=article`, `twitter:card`.
-- [ ] `/sitemap.xml` lists exactly the published article URLs plus `/`, `/archive`, `/about`.
+- [ ] `/sitemap.xml` lists exactly the published article URLs plus `/`, `/archive`, `/about`, `/privacy`.
 - [ ] Visiting `/#tech-company-first/tldr` ends on `/p/tech-company-first/tldr` with the deck open (when a deck is published).
 - [ ] With 7 published non-featured articles, Latest shows 5, See More shows 7 and "That’s everything in the feed."
 - [ ] Clicking a card's TLDR opens the deck over the home page without leaving it; Escape returns to the same scroll position.
