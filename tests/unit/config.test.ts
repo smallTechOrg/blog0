@@ -321,3 +321,147 @@ describe('loadDatabaseUrl', () => {
     expect(() => loadDatabaseUrl({ BLOG0_DATABASE_URL: 'postgres://localhost:5432/' })).toThrow(/database name/);
   });
 });
+
+describe('loadConfig — newsletter (Phase 7, spec/architecture.md §10)', () => {
+  const SMTP = {
+    BLOG0_SMTP_HOST: 'smtp-relay.gmail.com',
+    BLOG0_SMTP_USER: 'mailer@example.com',
+    BLOG0_SMTP_PASS: 'smtp-app-password-not-real',
+    BLOG0_SMTP_FROM: 'blog0 <newsletter@example.com>',
+  };
+  const LISTMONK = {
+    BLOG0_NEWSLETTER_SENDER: 'listmonk',
+    BLOG0_LISTMONK_URL: 'http://localhost:9000',
+    BLOG0_LISTMONK_API_USER: 'blog0-api',
+    BLOG0_LISTMONK_API_TOKEN: 'listmonk-api-token-not-real',
+    BLOG0_LISTMONK_LIST_ID: '3',
+  };
+
+  it('defaults to the stub transport and stub sender with nothing set (designer mode needs no SMTP)', () => {
+    const designer = loadConfig({}, { designerSessionSecret: () => 'generated-designer-secret-0123456789-abcdefghijklmnop' });
+    const postgres = loadConfig(baseEnv());
+
+    for (const config of [designer, postgres]) {
+      expect(config.newsletter).toEqual({ smtp: null, sender: 'stub', listmonk: null, webhookSecret: null });
+    }
+  });
+
+  it('treats an empty BLOG0_SMTP_HOST as unset and ignores the other SMTP values then', () => {
+    const config = loadConfig(baseEnv({ ...SMTP, BLOG0_SMTP_HOST: '   ', BLOG0_SMTP_PORT: '465' }));
+
+    expect(config.newsletter.smtp).toBeNull();
+  });
+
+  it('builds the SMTP block with port 587 by default and the password wrapped as a Secret', () => {
+    const config = loadConfig(baseEnv(SMTP));
+
+    expect(config.newsletter.smtp).toMatchObject({
+      host: 'smtp-relay.gmail.com',
+      port: 587,
+      user: 'mailer@example.com',
+      from: 'blog0 <newsletter@example.com>',
+    });
+    expect(config.newsletter.smtp?.pass).toBeInstanceOf(Secret);
+    expect(config.newsletter.smtp?.pass?.reveal()).toBe(SMTP.BLOG0_SMTP_PASS);
+  });
+
+  it('allows an unauthenticated relay (user and pass both empty) and a bare From address', () => {
+    const config = loadConfig(
+      baseEnv({ BLOG0_SMTP_HOST: 'relay.internal', BLOG0_SMTP_PORT: '465 # implicit TLS', BLOG0_SMTP_USER: '', BLOG0_SMTP_PASS: '', BLOG0_SMTP_FROM: 'newsletter@example.com' }),
+    );
+
+    expect(config.newsletter.smtp).toEqual({ host: 'relay.internal', port: 465, user: null, pass: null, from: 'newsletter@example.com' });
+  });
+
+  it('requires From with a host, rejects a lone user or pass, a bad port and a malformed From', () => {
+    const missingFrom = problemsOf(baseEnv({ BLOG0_SMTP_HOST: 'relay.internal' }));
+    const loneUser = problemsOf(baseEnv({ BLOG0_SMTP_HOST: 'relay.internal', BLOG0_SMTP_FROM: 'a@b.co', BLOG0_SMTP_USER: 'u' }));
+    const lonePass = problemsOf(baseEnv({ BLOG0_SMTP_HOST: 'relay.internal', BLOG0_SMTP_FROM: 'a@b.co', BLOG0_SMTP_PASS: 'p' }));
+    const badPortAndFrom = problemsOf(baseEnv({ ...SMTP, BLOG0_SMTP_PORT: '70000', BLOG0_SMTP_FROM: 'blog0 <not-an-address>' }));
+
+    expect(missingFrom).toEqual([expect.stringMatching(/^BLOG0_SMTP_FROM is required when BLOG0_SMTP_HOST is set/)]);
+    expect(loneUser).toEqual([expect.stringMatching(/^BLOG0_SMTP_USER and BLOG0_SMTP_PASS must be set together/)]);
+    expect(lonePass).toEqual([expect.stringMatching(/^BLOG0_SMTP_USER and BLOG0_SMTP_PASS must be set together/)]);
+    expect(badPortAndFrom).toEqual([
+      expect.stringMatching(/^BLOG0_SMTP_PORT must be an integer between 1 and 65535/),
+      expect.stringMatching(/^BLOG0_SMTP_FROM must be an email address or `Name <address>`/),
+    ]);
+  });
+
+  it('builds the Listmonk block for sender=listmonk, stripping a trailing slash and wrapping the token', () => {
+    const config = loadConfig(baseEnv({ ...LISTMONK, BLOG0_LISTMONK_URL: 'http://listmonk:9000/' }));
+
+    expect(config.newsletter.sender).toBe('listmonk');
+    expect(config.newsletter.listmonk).toMatchObject({ url: 'http://listmonk:9000', apiUser: 'blog0-api', listId: 3 });
+    expect(config.newsletter.listmonk?.apiToken).toBeInstanceOf(Secret);
+    expect(config.newsletter.listmonk?.apiToken.reveal()).toBe(LISTMONK.BLOG0_LISTMONK_API_TOKEN);
+  });
+
+  it('reports every missing BLOG0_LISTMONK_* value in one error when sender=listmonk', () => {
+    const problems = problemsOf(baseEnv({ BLOG0_NEWSLETTER_SENDER: 'listmonk' }));
+
+    expect(problems).toEqual([
+      expect.stringMatching(/^BLOG0_LISTMONK_URL is required when BLOG0_NEWSLETTER_SENDER=listmonk/),
+      expect.stringMatching(/^BLOG0_LISTMONK_API_USER is required when BLOG0_NEWSLETTER_SENDER=listmonk/),
+      expect.stringMatching(/^BLOG0_LISTMONK_API_TOKEN is required when BLOG0_NEWSLETTER_SENDER=listmonk/),
+      expect.stringMatching(/^BLOG0_LISTMONK_LIST_ID is required when BLOG0_NEWSLETTER_SENDER=listmonk/),
+    ]);
+  });
+
+  it('rejects an unknown sender, a non-http Listmonk URL and a non-integer list id', () => {
+    const sender = problemsOf(baseEnv({ BLOG0_NEWSLETTER_SENDER: 'mailchimp' }));
+    const values = problemsOf(baseEnv({ ...LISTMONK, BLOG0_LISTMONK_URL: 'listmonk:9000', BLOG0_LISTMONK_LIST_ID: 'three' }));
+
+    expect(sender).toEqual([expect.stringMatching(/^BLOG0_NEWSLETTER_SENDER must be one of listmonk\|stub/)]);
+    expect(values).toEqual([
+      expect.stringMatching(/^BLOG0_LISTMONK_URL must be an absolute http\(s\) URL/),
+      expect.stringMatching(/^BLOG0_LISTMONK_LIST_ID must be an integer between 1/),
+    ]);
+  });
+
+  it('ignores stray BLOG0_LISTMONK_* values when the sender is stub', () => {
+    const config = loadConfig(baseEnv({ ...LISTMONK, BLOG0_NEWSLETTER_SENDER: 'stub', BLOG0_LISTMONK_LIST_ID: 'garbage' }));
+
+    expect(config.newsletter.sender).toBe('stub');
+    expect(config.newsletter.listmonk).toBeNull();
+  });
+
+  it('wraps the webhook secret and requires at least 24 characters', () => {
+    const ok = loadConfig(baseEnv({ BLOG0_NEWSLETTER_WEBHOOK_SECRET: 'webhook-secret-that-is-long-enough' }));
+    const short = problemsOf(baseEnv({ BLOG0_NEWSLETTER_WEBHOOK_SECRET: 'too-short' }));
+
+    expect(ok.newsletter.webhookSecret).toBeInstanceOf(Secret);
+    expect(ok.newsletter.webhookSecret?.reveal()).toBe('webhook-secret-that-is-long-enough');
+    expect(short).toEqual([expect.stringMatching(/^BLOG0_NEWSLETTER_WEBHOOK_SECRET must be at least 24 characters/)]);
+  });
+
+  it('rejects the .env.example placeholders for the three newsletter secrets without echoing them', () => {
+    const env = baseEnv({
+      ...SMTP,
+      ...LISTMONK,
+      BLOG0_SMTP_PASS: 'replace-with-smtp-password',
+      BLOG0_LISTMONK_API_TOKEN: 'replace-with-listmonk-api-token',
+      BLOG0_NEWSLETTER_WEBHOOK_SECRET: 'replace-with-output-of-openssl-rand-base64-32',
+    });
+
+    const problems = problemsOf(env);
+
+    expect(problems).toEqual([
+      expect.stringMatching(/^BLOG0_SMTP_PASS still holds the \.env\.example placeholder/),
+      expect.stringMatching(/^BLOG0_LISTMONK_API_TOKEN still holds the \.env\.example placeholder/),
+      expect.stringMatching(/^BLOG0_NEWSLETTER_WEBHOOK_SECRET still holds the \.env\.example placeholder/),
+    ]);
+    expect(problems.join('\n')).not.toMatch(/replace-with-/);
+  });
+
+  it('never prints a newsletter secret through JSON.stringify or util.inspect', () => {
+    const config = loadConfig(baseEnv({ ...SMTP, ...LISTMONK, BLOG0_NEWSLETTER_WEBHOOK_SECRET: 'webhook-secret-that-is-long-enough' }));
+
+    for (const output of [JSON.stringify(config), inspect(config, { depth: 6 })]) {
+      expect(output).not.toContain(SMTP.BLOG0_SMTP_PASS);
+      expect(output).not.toContain(LISTMONK.BLOG0_LISTMONK_API_TOKEN);
+      expect(output).not.toContain('webhook-secret-that-is-long-enough');
+      expect(output).toContain('smtp-relay.gmail.com');
+    }
+  });
+});

@@ -33,7 +33,7 @@ scripts, framing, MIME sniffing and needless powerful features.
 | Database | prune expired windows (at most once per 10 min per process) | logged `rate_limit.prune_failed` at `warn`; the request is unaffected |
 
 ## Business Rules
-- **Caps are unchanged** (`spec/architecture.md` §6, `newsletter-signup.md`, `admin-auth.md`):
+- **Caps are unchanged** (`spec/architecture.md` §6, `newsletter-list.md` — formerly `newsletter-signup.md`, `admin-auth.md`; Phase 7 adds the confirm/unsubscribe link caps in §6):
   login 5 failures per (email, IP) and 20 per email per 15 min; newsletter 3 per email, 300 per
   site, 10 per known client IP per hour. Every bucket is per site.
 - **Atomic check-and-count across buckets:** an attempt is refused if **any** of its buckets is at

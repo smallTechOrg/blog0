@@ -9,7 +9,8 @@
 | Format lifecycle | `format-lifecycle.md` | 1, 3 (statuses) → 4 (Regenerate, on hold) | Extensible formats with computed status; TLDR stale + explicit Regenerate; Listen text-changed warning |
 | AI cost ledger | `ai-cost-ledger.md` | 1 (recording) → 4 (dashboard, on hold) | Per-generation cost and month-to-date total |
 | Reader site | `reader-site.md` | 2 | Home (About, Featured, Latest), Archive + topics, About page, boot strip, theme, OG, seed posts + seeded decks (`seed:tldr`) |
-| Newsletter signup | `newsletter-signup.md` | 2 | Footer signup stored server-side, admin list + CSV |
+| Newsletter list | `newsletter-list.md` | 2 (signup) → 7 (owned list) | blog0-owned list with double opt-in, per-subscriber proof of consent, append-only events + suppression, legacy migration, admin audit view + CSV/JSON audit export (supersedes `newsletter-signup.md`) |
+| Newsletter issues | `newsletter-issues.md` | 7 | Per-post / digest / manual issues, preview HTML + text, send test, one-click send, send log + stats; sender adapter (Listmonk via REST, recording stub); `pnpm newsletter:sync` |
 | Share (paragraph, article, deck) | `paragraph-share.md` | 2 | Highlight a paragraph → copy quote + deep link; share to LinkedIn, X, WhatsApp, Notes, Notion, Copy link; native sheet on touch |
 | Designer mode | `designer-mode.md` | 2 | Zero-install run (Node + pnpm only) on embedded PGlite with the same migrations + seeds; `pnpm dev:design` |
 | Listen audio | `listen-audio.md` | 3 | Upload mp3/m4a (content-probed, limits) ⇒ `ready`, non-blocking text-changed warning, local-disk storage, `/media/` range streaming, real player on article / card overlay / capsule minutes |
@@ -24,4 +25,5 @@
 
 Phases 1–3 and Phase 5 are done (Phase 5: commits 51aad2f, e72ed9d, 7923781 + a follow-up drift-fix
 commit); Phase 4 is on hold (user decision, 2026-10-13) and revision history is
-deferred outright (`spec/roadmap.md` → Phase 4).
+deferred outright (`spec/roadmap.md` → Phase 4). Phase 7 (Newsletter — "own the list, Listmonk
+sends") is specified and next to build; Phase 6 stays planned after it.

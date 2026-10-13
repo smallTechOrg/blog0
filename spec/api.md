@@ -42,7 +42,18 @@ new DTO goes into the matching section.
 | LLM_INVALID_OUTPUT | 502 | Model output invalid twice |
 | LLM_RATE_LIMITED / LLM_UNAVAILABLE / LLM_TIMEOUT | 503 | Transient provider failure |
 | LLM_NOT_CONFIGURED | 503 | Designer mode without an OpenRouter key; Generate refused before any row is written |
-| RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header (Phase 5: counted in Postgres — `spec/capabilities/abuse-protection.md`) |
+| RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header (Phase 5: counted in Postgres — `spec/capabilities/abuse-protection.md`; Phase 7 adds the confirm/unsubscribe link caps) |
+| TOKEN_INVALID | 404 | Phase 7: confirm/unsubscribe token malformed, unknown or tampered (never says which) |
+| TOKEN_EXPIRED | 410 | Phase 7: confirm token past 72 h or already used |
+| CONFIRMATION_ALREADY_SENT | 409 | Phase 7: legacy row already got its one email, or the 3-per-24 h cap for a pending row is reached (`details.retryAt`) |
+| SUBSCRIBER_NOT_ELIGIBLE | 409 | Phase 7: send-confirmation on a `confirmed`/`unsubscribed`/`bounced` row; admin unsubscribe on an already suppressed row |
+| ISSUE_NOT_DRAFT | 409 | Phase 7: edit/delete/send of an issue that is not `draft` (send also refuses `sending`/`sent`; `failed` may be retried) |
+| NO_RECIPIENTS | 409 | Phase 7: send with 0 confirmed subscribers |
+| ISSUE_POSTS_INVALID | 422 | Phase 7: manual issue with 0 or > 10 articles, an unpublished/unknown article, or duplicates; `details.articleIds` |
+| SENDER_UNAVAILABLE | 503 | Phase 7: `BLOG0_NEWSLETTER_SENDER=listmonk` but Listmonk unreachable / misconfigured (`healthcheck` failed); message names the URL host only |
+| SENDER_FAILED | 502 | Phase 7: a provider call failed mid-send (the issue is `failed`, `last_error` holds the provider text, never the token) |
+| MAIL_FAILED | 502 | Phase 7: the SMTP transport rejected a test/confirmation message (resend path); the stub transport never fails |
+| WEBHOOK_UNAUTHORIZED | 401 | Phase 7: `/api/newsletter/webhook` secret missing/wrong |
 | PAYLOAD_TOO_LARGE / UNSUPPORTED_MEDIA | 413 / 415 | Uploads: over `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_IMAGE_MB` (declared `Content-Length` and actual bytes) / content not in the allowlist (detected from bytes; message names the detected type) |
 | DB_UNAVAILABLE | 503 | Health check only |
 | NOT_READY | 503 | `/api/health/ready` only; `details.reason` = `SHUTTING_DOWN` \| `DB_UNAVAILABLE` \| `MIGRATIONS_PENDING` |
@@ -143,10 +154,13 @@ level otherwise (`spec/architecture.md` §7); DTOs live in the health section of
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
 | GET `/api/public/articles/:slug/tldr` | none | — | `PublicTldrDto = { slug, title, topic, dek, meta: string, slides: Array<{ text: string }>, disclosure: string, times: { read: number, tldr: number, listen: number \| null }, shareUrl: string }` — published deck only, else 404. `times.listen` = the published recording's minutes or null. `Cache-Control: public, max-age=60`. |
-| POST `/api/newsletter` | none | `{ email: string, name?: string }` | `{ subscribed: true }` (also for an already-subscribed address — no enumeration). Invalid bodies → 400 `VALIDATION_FAILED` before any rate-limit counting. `RATE_LIMITED` (429 + `Retry-After`) per the caps in `spec/architecture.md` §6. |
-| GET `/api/admin/subscribers` | admin | `?format=csv` optional | `{ subscribers: Array<{ email, name, createdAt, status }>, total }` or CSV download |
-| GET `/api/admin/site` | admin | — | `{ site: { tagline, contactEmail, aboutStrap, aboutStand, aboutBodyMd, socialXUrl, socialLinkedinUrl } }` |
-| PATCH `/api/admin/site` | admin | any subset of the above | `{ site: … }` |
+| POST `/api/newsletter` | none | `{ email: string, name?: string, sourceUrl?: string }` (Phase 7 adds `sourceUrl`: a relative path ≤ 500, default `/`) | `{ subscribed: true }` (the same for a new, pending, confirmed or suppressed address — no enumeration). Phase 7: creates/re-opens a `pending` subscriber and sends the confirmation email (`spec/capabilities/newsletter-list.md`). Invalid bodies → 400 `VALIDATION_FAILED` before any rate-limit counting. `RATE_LIMITED` (429 + `Retry-After`) per the caps in `spec/architecture.md` §6. |
+| GET `/api/admin/subscribers` | admin | see the Phase 7 newsletter section | `SubscriberListResponse` or CSV / audit-JSON download |
+| GET `/api/admin/site` | admin | — | `{ site: SiteSettingsDto }` — Phase 7 adds `newsletter: NewsletterSettingsDto` inside `SiteSettingsDto` (read-only here; edited via `/api/admin/newsletter/settings`) |
+| PATCH `/api/admin/site` | admin | any subset of the editable site fields (never `newsletter`; unknown keys → 400) | `{ site: … }` |
+
+The newsletter confirm/unsubscribe links, the one-click POST, the webhook and every
+`/api/admin/newsletter/*` route are in **Endpoints — newsletter (Phase 7)** below.
 
 ## Listen + media DTOs (listen and media sections of `src/lib/api/dto.ts`)
 
@@ -213,6 +227,116 @@ form parsed; `spec/architecture.md` §9.3).
 | PUT `/api/admin/articles/:id/listen` | admin | `ListenSaveRequest` — `revisionId` must be current | **Aligner-facing** (Phase 6 writes aligned marks here; tests use it; no admin UI calls it). 200 `ListenResponse` (a PUT never changes the status). Errors: `CONFLICT`, `LISTEN_NO_AUDIO`, `MARKS_INVALID` (rules: `spec/capabilities/listen-sync.md`). Stores `marks`, `syncFingerprint` = the revision's paragraphs fingerprint, `syncedAt`/`syncedBy`, `draft_revision_id`; never changes the baseline. |
 | GET `/api/public/articles/:slug/listen` | none | — | `PublicListenDto` — only when the article is published **and** has a published Listen, else 404. `Cache-Control: public, max-age=60`. |
 | GET / HEAD `/media/[...key]` | none | `Range`, `If-None-Match`, `If-Range` optional | Not JSON. 200 / 206 / 304 / 416 per `spec/architecture.md` §9.2. Invalid key, unknown key, or file missing on disk → 404 `NOT_FOUND` as a JSON envelope. Other methods → 405. |
+
+## Newsletter DTOs (Phase 7 — `newsletter` section of `src/lib/api/dto.ts`, owned by slice S7.1)
+
+```ts
+type SubscriberStatus = 'pending' | 'confirmed' | 'unsubscribed' | 'bounced' | 'legacy_unconfirmed';
+type SubscriberEventKind = 'signup' | 'confirmation_sent' | 'confirmed' | 'resubscribed' | 'unsubscribed' | 'bounced'
+  | 'legacy_confirmation_sent' | 'provider_synced' | 'provider_removed' | 'ip_pruned';
+type NewsletterSource = 'footer' | 'email_link' | 'one_click' | 'admin' | 'provider' | 'webhook' | 'migration' | 'system';
+type SuppressionReason = 'unsubscribed' | 'bounced' | 'complaint' | 'admin';
+
+/** POST /api/newsletter — unchanged shape (no enumeration). */
+interface NewsletterSubscribeResponse { subscribed: true }
+
+interface SubscriberDto {                       // list rows (replaces the Phase 2 shape; CSV uses the same fields)
+  id: string; email: string; name: string | null; status: SubscriberStatus; source: string;
+  createdAt: string; consentedAt: string | null; confirmedAt: string | null; unsubscribedAt: string | null;
+  pendingExpired: boolean;                      // status === 'pending' && confirm_token_expires_at < now
+  consentVersion: string | null; sourceUrl: string | null;
+  providerSyncedAt: string | null;
+  canSendConfirmation: boolean;                 // legacy: not yet sent; pending: under the 3-per-24 h cap
+}
+interface SubscriberCounts { all: number; pending: number; confirmed: number; unsubscribed: number; bounced: number; legacy_unconfirmed: number }
+interface SubscriberListResponse { subscribers: SubscriberDto[]; total: number; counts: SubscriberCounts; now: string }
+
+interface SubscriberEventDto { id: string; kind: SubscriberEventKind; source: NewsletterSource; actor: string | null; ip: string | null; userAgent: string | null; details: Record<string, unknown>; createdAt: string }
+interface SuppressionDto { id: string; reason: SuppressionReason; source: NewsletterSource; details: Record<string, unknown>; createdAt: string }
+interface SubscriberDetailDto extends SubscriberDto {
+  signupIp: string | null; signupUserAgent: string | null; consentText: string | null;
+  confirmedIp: string | null; confirmedUserAgent: string | null; confirmTokenExpiresAt: string | null;
+  confirmationSentCount: number; legacyConfirmationSentAt: string | null; providerId: string | null; ipPrunedAt: string | null;
+  events: SubscriberEventDto[];                 // oldest first
+  suppressions: SuppressionDto[];               // for this email, oldest first
+  messages: Array<{ id: string; kind: 'confirmation' | 'issue'; subject: string; transport: string; status: string; createdAt: string }>;
+}
+interface SubscriberDetailResponse { subscriber: SubscriberDetailDto }
+
+/** GET …?format=audit — the whole proof bundle. */
+interface NewsletterAuditBundle {
+  format: 'blog0-newsletter-audit/1'; exportedAt: string; exportedBy: string; site: { slug: string; brandName: string };
+  settings: NewsletterSettingsDto;
+  subscribers: Array<Omit<SubscriberDetailDto, 'messages' | 'canSendConfirmation' | 'pendingExpired'>>;
+  suppressions: Array<SuppressionDto & { email: string; subscriberId: string }>;
+}
+
+type NewsletterMode = 'per_post' | 'digest' | 'manual';
+interface NewsletterSettingsDto { mode: NewsletterMode; autoSend: boolean; digestDays: number; digestPosts: number; consentText: string; consentVersion: string; modeSetAt: string | null }
+type NewsletterSettingsPatch = Partial<NewsletterSettingsDto>;   // modeSetAt is server-set and rejected in a PATCH
+interface NewsletterStatusDto {
+  sender: { kind: 'listmonk' | 'stub'; configured: boolean; listId: string | null; listName: string | null; lastSyncAt: string | null; healthy: boolean | null; message: string | null };
+  mail: { transport: 'smtp' | 'stub'; from: string | null };
+  counts: SubscriberCounts;
+  digest: { lastIssueAt: string | null; newPostsSince: number; dueAt: string | null } | null;   // only in digest mode
+}
+interface NewsletterSettingsResponse { settings: NewsletterSettingsDto; status: NewsletterStatusDto }
+const NEWSLETTER_SETTINGS_LIMITS = { consentText: 300, consentVersion: 20, digestDays: [1, 60], digestPosts: [1, 20], issueTitle: 150, issueIntroMd: 5_000, issuePosts: [1, 10] } as const;
+
+type IssueStatus = 'draft' | 'sending' | 'sent' | 'failed';
+type IssueOrigin = NewsletterMode;
+type IssueEventKind = 'created' | 'updated' | 'test_sent' | 'send_requested' | 'provider_created' | 'provider_started' | 'sent' | 'failed' | 'stats_fetched' | 'deleted';
+interface IssuePost { articleId: string; slug: string; title: string; dek: string; excerpt: string; topic: string; publishedLabel: string; readUrl: string; tldrUrl: string | null; listenUrl: string | null }
+interface IssueStatsDto { recipients: number; sent: number; delivered: number | null; opens: number | null; clicks: number | null; bounces: number | null; unsubscribes: number | null; fetchedAt: string }
+interface IssueListItemDto { id: string; number: number; status: IssueStatus; origin: IssueOrigin; title: string; postCount: number; recipientCount: number | null; createdAt: string; sentAt: string | null; lastError: string | null }
+interface IssueListResponse { issues: IssueListItemDto[]; total: number; confirmedCount: number }
+interface IssueEventDto { id: string; kind: IssueEventKind; actor: string | null; details: Record<string, unknown>; createdAt: string }
+interface IssueDetailDto extends IssueListItemDto {
+  introMd: string; posts: IssuePost[]; providerCampaignId: string | null; stats: IssueStatsDto | null;
+  createdBy: string | null; sentBy: string | null; events: IssueEventDto[];   // oldest first
+  editable: boolean;                            // status === 'draft'
+}
+interface IssueDetailResponse { issue: IssueDetailDto }
+interface IssueCreateRequest { title: string; introMd?: string; articleIds: string[] }
+interface IssueUpdateRequest { title?: string; introMd?: string; articleIds?: string[] }   // articleIds = new order / subset (manual + automatic drafts alike)
+interface IssuePreviewDto { subject: string; html: string; text: string; sampleRecipient: { email: string; consentLine: string } }
+interface IssueSendRequest { confirm: true }
+interface IssueTestResponse { sentTo: string; transport: 'smtp' | 'stub'; messageId: string }
+interface NewsletterWebhookRequest { event: 'unsubscribe' | 'bounce' | 'complaint'; email: string; reason?: string; occurredAt?: string; providerRef?: string }
+interface NewsletterWebhookResponse { accepted: boolean }
+```
+
+## Endpoints — newsletter (Phase 7)
+
+Public link pages are **HTML in the site chrome**, not JSON (they are what readers land on from an
+email); their outcomes also exist as JSON routes for RFC 8058 and tests. Rate caps:
+`spec/architecture.md` §6 (link caps). Every link route sends `Cache-Control: no-store` and
+`X-Robots-Tag: noindex`.
+
+| Method & path | Auth | Request | Response / notes |
+|---|---|---|---|
+| GET `/newsletter/confirm?t=<token>` | none | token in the query | Page (`src/app/(site)/newsletter/confirm/page.tsx`, server component calling `confirmByToken`): 200 "You’re subscribed." (+ brand, link home) on success; 410 "This link has expired or was already used — sign up again from the footer." (`TOKEN_EXPIRED`); 404 "That link isn’t valid." (`TOKEN_INVALID`); 429 "Too many requests — try again in N minutes." |
+| GET `/newsletter/unsubscribe?t=<token>` | none | signed token | Page: 200 "You’re unsubscribed. Sorry to see you go." (idempotent — the same page for an already-unsubscribed address, no new suppression row); 404 on a bad signature; 429 as above. |
+| POST `/api/newsletter/confirm` | none (`csrf: false` — the token is the authority) | `{ token: string }` | `{ confirmed: true, alreadyConfirmed: boolean }`; `TOKEN_EXPIRED`, `TOKEN_INVALID`, `RATE_LIMITED`. Used by tests and by a future JS fallback; the page does not call it. |
+| POST `/api/newsletter/unsubscribe` | none (`csrf: false`) | JSON `{ token }` **or** form-encoded `List-Unsubscribe=One-Click` with `t` in the query (RFC 8058) | `{ unsubscribed: true, alreadyUnsubscribed: boolean }`; `TOKEN_INVALID`, `RATE_LIMITED`. Source `one_click`. |
+| POST `/api/newsletter/webhook` | shared secret: `Authorization: Bearer <BLOG0_NEWSLETTER_WEBHOOK_SECRET>` (`csrf: false`; 401 `WEBHOOK_UNAUTHORIZED`; 404 when the secret is unset) | `NewsletterWebhookRequest` | `NewsletterWebhookResponse` — `accepted: true` when the email is a known subscriber of this site (suppression + event written, status set, `removeSubscriber` called); `false` otherwise (nothing written). Idempotent for an already-suppressed address. |
+| GET `/api/admin/subscribers` | admin | `?status=<SubscriberStatus>` (default all) `&q=<email substring, ≤ 100>` `&format=csv` \| `audit` | `SubscriberListResponse` newest first (`createdAt` desc). `format=csv` → `text/csv`, header `email,name,status,subscribed_at,confirmed_at,unsubscribed_at,source,source_url,consent_version` (the filter applies; formula-neutralised as before), filename `<slug>-subscribers-<yyyy-mm-dd>.csv`. `format=audit` → `application/json` download `<slug>-newsletter-audit-<yyyy-mm-dd>.json` (`NewsletterAuditBundle`; filters ignored — always everything). |
+| GET `/api/admin/subscribers/:id` | admin | — | `SubscriberDetailResponse` |
+| POST `/api/admin/subscribers/:id/send-confirmation` | admin | — | `{ subscriber: SubscriberDetailDto, sentTo: string, transport: 'smtp' \| 'stub' }`. Legacy: one-time (`legacy_confirmation_sent_at` set; event `legacy_confirmation_sent`; the row stays `legacy_unconfirmed` until the click). Pending: new token + email under the 3-per-24 h cap (`CONFIRMATION_ALREADY_SENT` with `details.retryAt` beyond it). Other statuses → `SUBSCRIBER_NOT_ELIGIBLE`. `MAIL_FAILED` if SMTP rejects (nothing else changes). |
+| POST `/api/admin/subscribers/send-legacy-confirmations` | admin | `{ confirm: true }` | `{ sent: number, skipped: number }` — one email per `legacy_unconfirmed` row not yet mailed (each row's one-time rule), in batches of 20 with a 200 ms pause; a mail failure skips that row (logged) and continues. Nothing happens without `confirm: true` (400). |
+| POST `/api/admin/subscribers/:id/unsubscribe` | admin | `{ note?: string ≤ 300 }` | `{ subscriber }` — suppression `reason: 'admin'`, `source: 'admin'`, status `unsubscribed`, `removeSubscriber`; already suppressed → `SUBSCRIBER_NOT_ELIGIBLE`. |
+| GET `/api/admin/newsletter/settings` | admin | — | `NewsletterSettingsResponse` (`status.sender.healthy` is from a 3 s `healthcheck` on the listmonk adapter, `null` for the stub) |
+| PATCH `/api/admin/newsletter/settings` | admin | `NewsletterSettingsPatch` | `NewsletterSettingsResponse`. Changing `mode` sets `modeSetAt = now`. Changing `consentText` without `consentVersion` bumps the version (`v1` → `v2`; a non-`vN` version gets `-2` appended). Never sends anything. |
+| POST `/api/admin/newsletter/sync` | admin | `{ confirm: true }` | `{ synced: number, blocklisted: number, skipped: number, changed: number, errors: Array<{ email: string, message: string }> }` — the same operation as `pnpm newsletter:sync`. With the stub sender every row is `skipped` and `changed` is 0 (the button is harmless in designer mode); with listmonk unreachable → `SENDER_UNAVAILABLE`. `maxDuration = 120`. |
+| GET `/api/admin/newsletter/issues` | admin | `?status=` optional | `IssueListResponse`, newest first |
+| POST `/api/admin/newsletter/issues` | admin | `IssueCreateRequest` | 201 `IssueDetailResponse` (`origin: 'manual'`, `status: 'draft'`, event `created`); `ISSUE_POSTS_INVALID` |
+| GET `/api/admin/newsletter/issues/:id` | admin | — | `IssueDetailResponse` |
+| PATCH `/api/admin/newsletter/issues/:id` | admin | `IssueUpdateRequest` | `IssueDetailResponse` (event `updated`); `ISSUE_NOT_DRAFT`; `ISSUE_POSTS_INVALID` |
+| DELETE `/api/admin/newsletter/issues/:id` | admin | — | `{ deleted: true }` (draft only, else `ISSUE_NOT_DRAFT`; events cascade) |
+| GET `/api/admin/newsletter/issues/:id/preview` | admin | — | `IssuePreviewDto` — for a `draft`, re-snapshots the posts from their current published revisions first (persisted); for other statuses returns the frozen bodies. |
+| POST `/api/admin/newsletter/issues/:id/test` | admin | — | `IssueTestResponse` — to the signed-in admin's email through the transactional transport; event `test_sent`; status unchanged; `MAIL_FAILED`. |
+| POST `/api/admin/newsletter/issues/:id/send` | admin | `IssueSendRequest` | `IssueDetailResponse` with status `sent` (or `failed` + `lastError`, HTTP 502 `SENDER_FAILED` with the detail in `error.details.issue`). `ISSUE_NOT_DRAFT` unless `draft` or `failed`; `NO_RECIPIENTS`; `SENDER_UNAVAILABLE`. Runs the blog0→provider sync for confirmed subscribers first (listmonk only). `maxDuration = 120`. |
+| POST `/api/admin/newsletter/issues/:id/stats` | admin | — | `IssueDetailResponse` with fresh `stats` (event `stats_fetched`); `ISSUE_NOT_DRAFT` for drafts; `SENDER_FAILED` on a provider error (status unchanged). |
 
 ## Endpoints — Phase 4 (on hold)
 

@@ -2,7 +2,9 @@
 
 PostgreSQL 18 in production and in every gate; the identical schema also runs on embedded PGlite
 (PG 17 WASM) in designer mode (`spec/architecture.md` §11). All v0.1 tables are created by
-migration `0000_init`; Phase 5 adds `0001_rate_limit_bucket` (slice S5.3); Phase 6 adds its own
+migration `0000_init`; Phase 5 adds `0001_rate_limit_bucket` (slice S5.3); Phase 7 adds
+`0002_newsletter` (slice S7.1: new `newsletter_*` tables, new `newsletter_subscriber` columns and
+status set, `site` newsletter settings columns, the legacy status backfill); Phase 6 adds its own
 (Phase 4 needs none). Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
@@ -32,6 +34,13 @@ One row per tenant; v0.1 has one (`slug = BLOG0_SITE_SLUG`, default `blog0`).
 | social_x_url | text null | footer icon hidden when null |
 | social_linkedin_url | text null | footer icon hidden when null |
 | timezone | text not null default `Asia/Kolkata` | public date formatting. > **Assumed:** smallTech is India-based (smalltech.in). |
+| newsletter_mode | text not null default `manual` | Phase 7 (`0002_newsletter`): check in (`per_post`,`digest`,`manual`) — `spec/capabilities/newsletter-issues.md` |
+| newsletter_auto_send | boolean not null default false | Phase 7: automatic issues are sent without a click only when true |
+| newsletter_digest_days | integer not null default 7 | Phase 7: check 1–60 |
+| newsletter_digest_posts | integer not null default 3 | Phase 7: check 1–20 |
+| newsletter_consent_text | text not null default `One issue a week at most. Unsubscribe in one click; we never share the list.` | Phase 7: the line shown under the footer form and copied onto every signup (≤ 300) |
+| newsletter_consent_version | text not null default `v1` | Phase 7: ≤ 20; bumped when the text changes |
+| newsletter_mode_set_at | timestamptz null | Phase 7: when `newsletter_mode` last changed — the digest window's start when no digest issue exists yet |
 | created_at, updated_at | timestamptz | |
 
 ### app_user
@@ -202,15 +211,148 @@ step; guard failures that make no call create no row).
 Index (site_id, started_at desc); (article_id, started_at desc).
 
 ### newsletter_subscriber
+The owned list (`spec/capabilities/newsletter-list.md`). Phase 2 created it with `status in
+('subscribed','unsubscribed')`; migration `0002_newsletter` widens it as below and backfills
+`subscribed` → `legacy_unconfirmed` (existing `unsubscribed` rows keep their status and get one
+`newsletter_suppression` row with `source = 'migration'` plus one `unsubscribed` event).
+
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid pk | |
 | site_id | uuid fk | |
 | email | text not null | lower-cased, trimmed; unique (site_id, email) |
 | name | text null | ≤ 120 chars |
-| status | text not null default `subscribed` | check in (`subscribed`,`unsubscribed`) |
-| source | text not null default `footer` | |
+| status | text not null default `pending` | check in (`pending`,`confirmed`,`unsubscribed`,`bounced`,`legacy_unconfirmed`) — the **current** state; history is in the event table |
+| source | text not null default `footer` | `footer` \| `legacy` \| `admin` |
+| signup_source_url | text null | relative path the form was on (≤ 500) |
+| signup_ip | text null | real client address only (§6 derivation), else null; nulled by the 12-month prune |
+| signup_user_agent | text null | ≤ 300 chars |
+| consent_text | text null | the consent line exactly as shown at (re)signup; null for legacy rows until they confirm via a new signup |
+| consent_version | text null | |
+| consented_at | timestamptz null | = the (re)signup time that produced the current consent |
+| confirm_token_hash | text null | sha256 hex of the one-time token; unique partial index where not null; cleared on confirm |
+| confirm_token_expires_at | timestamptz null | signup + 72 h |
+| confirmation_sent_count | integer not null default 0 | all-time; the 3-per-24 h cap is computed from `confirmation_sent` events |
+| legacy_confirmation_sent_at | timestamptz null | the one admin-triggered email for a legacy row (spent once set) |
+| confirmed_at | timestamptz null | latest confirmation |
+| confirmed_ip, confirmed_user_agent | text null | at confirmation; IP pruned at 12 months |
+| unsubscribed_at | timestamptz null | latest suppression that set the status |
+| provider_id | text null | Listmonk subscriber id (string) once synced; null for the stub |
+| provider_synced_at | timestamptz null | last successful `syncSubscriber`/`removeSubscriber` |
+| ip_pruned_at | timestamptz null | |
+| created_at, updated_at | timestamptz | `created_at` = first-ever signup |
+
+Indexes: (site_id, status); (site_id, confirmed_at desc); unique (site_id, email) as before.
+
+### newsletter_subscriber_event
+Append-only (`spec/capabilities/newsletter-list.md`): a trigger (`newsletter_ledger_guard`,
+created by `0002_newsletter`) raises on `UPDATE`/`DELETE` of this table and of
+`newsletter_suppression`; the app never tries. Rows reference the subscriber with
+`on delete restrict`, so a subscriber row cannot be deleted either (there is no delete path).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid pk | |
+| site_id | uuid fk | |
+| subscriber_id | uuid fk → newsletter_subscriber on delete restrict | |
+| email | text not null | copied at write time |
+| kind | text not null | check in (`signup`,`confirmation_sent`,`confirmed`,`resubscribed`,`unsubscribed`,`bounced`,`legacy_confirmation_sent`,`provider_synced`,`provider_removed`,`ip_pruned`) |
+| source | text not null | check in (`footer`,`email_link`,`one_click`,`admin`,`provider`,`webhook`,`migration`,`system`) |
+| actor_user_id | uuid null fk → app_user | admin actions |
+| ip, user_agent | text null | of the request that caused it (IP only when real; pruned with the subscriber's) |
+| details | jsonb not null default `'{}'` | e.g. `{ resignup: true }`, `{ outcome: 'sent' \| 'failed' \| 'stubbed', transport, error? }`, `{ providerId }`, `{ reason }` |
+| created_at | timestamptz | |
+
+Index (subscriber_id, created_at); (site_id, created_at desc).
+
+### newsletter_suppression
+Append-only, never deleted — the permanent do-not-send ledger. Status on the subscriber row is the
+current state; this table is the proof.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid pk | |
+| site_id | uuid fk | |
+| subscriber_id | uuid fk → newsletter_subscriber on delete restrict | |
+| email | text not null | |
+| reason | text not null | check in (`unsubscribed`,`bounced`,`complaint`,`admin`) |
+| source | text not null | same set as the event `source` |
+| details | jsonb not null default `'{}'` | provider payload / bounce reason / admin note |
+| created_at | timestamptz | |
+
+Index (site_id, email, created_at desc).
+
+### newsletter_message
+Every transactional message blog0 itself composed, plus the stub sender's deliveries. With the
+SMTP transport the row records the send (bodies kept, so a confirmation can be audited); with the
+stub transport the row **is** the delivery. Ephemeral-ish: kept, backed up, never pruned in v0.1.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid pk | |
+| site_id | uuid fk | |
+| kind | text not null | check in (`confirmation`,`test_issue`,`issue`) |
+| subscriber_id | uuid null fk → newsletter_subscriber on delete restrict | null for test messages |
+| issue_id | uuid null fk → newsletter_issue on delete restrict | for `test_issue` / `issue` |
+| to_email | text not null | |
+| subject | text not null | |
+| html, text | text not null | as sent |
+| transport | text not null | `smtp` \| `stub` \| `stub_sender` |
+| status | text not null | check in (`sent`,`failed`,`stubbed`) |
+| provider_message_id | text null | SMTP message id |
+| error | text null | |
+| created_at | timestamptz | |
+
+Index (site_id, created_at desc); (subscriber_id, created_at desc); (issue_id).
+
+### newsletter_issue
+One issue (`spec/capabilities/newsletter-issues.md`).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid pk | |
+| site_id | uuid fk | |
+| number | integer not null | per site, 1-based; unique (site_id, number); assigned at creation (`max + 1` under the site row lock) |
+| status | text not null default `draft` | check in (`draft`,`sending`,`sent`,`failed`) |
+| origin | text not null | check in (`per_post`,`digest`,`manual`) — the mode that created it |
+| title | text not null | ≤ 150; the subject |
+| intro_md | text not null default '' | ≤ 5 000 |
+| posts | jsonb not null | `IssuePost[]` snapshot (shape in `spec/api.md`); 1–10 entries; refreshed on preview while `draft`, frozen at send |
+| article_ids | uuid[] not null | the same ids, for the "at most one automatic issue per article" check (`origin <> 'manual'`) |
+| rendered_html, rendered_text | text null | frozen at send (the exact bodies given to the sender) |
+| provider_campaign_id | text null | set by `createIssue`; reused on retry |
+| recipient_count | integer null | confirmed subscribers at send |
+| stats | jsonb null | `IssueStatsDto` (last fetch) |
+| last_error | text null | |
+| created_by | uuid null fk → app_user | null when created by a publish hook / tick |
+| sent_by | uuid null fk → app_user | null for auto-send |
+| sent_at | timestamptz null | |
 | created_at, updated_at | timestamptz | |
+
+Index (site_id, created_at desc); (site_id, status).
+
+### newsletter_issue_event
+The send log — append-only (same trigger guard).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid pk | |
+| site_id | uuid fk | |
+| issue_id | uuid fk → newsletter_issue on delete cascade | a draft may be deleted; a sent issue never is (the API refuses) |
+| kind | text not null | check in (`created`,`updated`,`test_sent`,`send_requested`,`provider_created`,`provider_started`,`sent`,`failed`,`stats_fetched`,`deleted`) |
+| actor_user_id | uuid null fk → app_user | |
+| details | jsonb not null default `'{}'` | e.g. `{ recipientCount }`, `{ campaignId }`, `{ error }`, `{ stats }`, `{ toEmail }` |
+| created_at | timestamptz | |
+
+Index (issue_id, created_at).
+
+Drizzle (`src/server/db/schema.ts`, slice S7.1): `newsletterSubscriberEvent`,
+`newsletterSuppression`, `newsletterMessage`, `newsletterIssue`, `newsletterIssueEvent`;
+`ALL_TABLE_NAMES` becomes (children first):
+`rate_limit_bucket, newsletter_message, newsletter_issue_event, newsletter_issue, newsletter_subscriber_event, newsletter_suppression, media_asset, newsletter_subscriber, ai_generation, article_format, article_revision, article, session, app_user, site`.
+`BACKUP_TABLES` (= `ALL_TABLE_NAMES` minus `rate_limit_bucket`) therefore includes every
+newsletter table — the consent ledger is part of every backup.
+`rate_limit_bucket.scope` gains `newsletter.link.ip` and `newsletter.link.site` (no migration).
 
 ### media_asset
 | Column | Type | Notes |
@@ -263,6 +405,9 @@ article ─ current_revision_id ─► article_revision ; article ─ published_
 article 1─* article_format (one per kind)      article 1─* ai_generation ─► article_revision
 site 1─* newsletter_subscriber                  site 1─* media_asset ─(0..1)► article
 site 1─* rate_limit_bucket                      (Phase 5)
+newsletter_subscriber 1─* newsletter_subscriber_event   newsletter_subscriber 1─* newsletter_suppression   (Phase 7, append-only)
+newsletter_subscriber 1─* newsletter_message ◄─(0..1) newsletter_issue 1─* newsletter_issue_event         (Phase 7)
+site 1─* newsletter_issue                       (article ids snapshotted in newsletter_issue.article_ids — no FK)
 ```
 
 ## Lifecycles
@@ -294,6 +439,18 @@ reported as abandoned/failed and no longer blocks a new Generate.
 
 **Session:** created at login, slid on use, deleted at logout or expiry (expired rows purged
 lazily at login).
+
+**Newsletter subscriber (Phase 7):** `pending` ─confirm link─► `confirmed` ─unsubscribe link /
+one-click / admin / provider─► `unsubscribed` (or ─provider bounce─► `bounced`); any of
+`unsubscribed` \| `bounced` \| `legacy_unconfirmed` ─footer signup (fresh consent)─► `pending`
+again (history kept; confirming appends `resubscribed`). `legacy_unconfirmed` ─admin **Send
+confirmation** (once) → confirm link─► `confirmed`. A `pending` row whose token expired is still
+`pending` ("expired" is computed from `confirm_token_expires_at < now`); a new signup refreshes
+it. Rows are never deleted; suppression and event rows are never updated or deleted.
+
+**Newsletter issue (Phase 7):** `draft` ─Send─► `sending` ─► `sent` | `failed` ─Try again─►
+`sending` ─► `sent`. Only `draft` can be edited or deleted; `sent` is final. Automatic issues are
+created `draft` and move on by themselves only when `site.newsletter_auto_send` is true.
 
 ## Seed data
 

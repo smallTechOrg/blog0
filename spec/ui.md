@@ -82,6 +82,26 @@ contact mail, X/LinkedIn icons only when the site has URLs, no RSS, "> end of bl
 view, `© <year> blog0 | smallTech`). `PrintIn` runs on every pathname change. The theme toggle
 flips `data-theme` and persists it.
 
+**Newsletter form (Phase 7, `NewsletterForm.tsx` takes over).** Same markup as the design; the
+`.ft-micro` line renders `site.newsletterConsentText` (the consent line the signup records); the
+request body adds `sourceUrl: location.pathname + location.search`; success (`.ft-done`,
+`role=status`) reads "Almost there — check your inbox and confirm." (div. 15 amended); the invalid
+and try-again messages are unchanged.
+
+### Newsletter link pages `/newsletter/confirm`, `/newsletter/unsubscribe` (Phase 7)
+Server components in the site chrome (`src/app/(site)/newsletter/{confirm,unsubscribe}/page.tsx`,
+`dynamic = 'force-dynamic'`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`, `<title>` "Subscription — blog0").
+One `.surface` card centred in `main`: an eyebrow `.tag` ("Newsletter"), a plain `h1` and one
+paragraph, then a `.btn-outline` link **Back to blog0** (`/`). Copy per outcome
+(`spec/api.md` → newsletter): confirm 200 "You’re subscribed." / "Thanks — <brand> issues will
+land in this inbox. Unsubscribe any time from the link at the bottom of each one."; 410 "This
+link has expired or was already used." / "Sign up again from the footer of any page and we’ll
+send a fresh link."; 404 "That link isn’t valid." / "Check the address you were sent, or sign up
+again from the footer."; unsubscribe 200 "You’re unsubscribed. Sorry to see you go." / "You
+won’t get another issue. Changed your mind? Sign up again from the footer any time."; 429 "Too
+many requests." / "Try the link again in N minutes." No typing animation on these pages
+(`PrintIn` still runs; reduced motion honoured).
+
 ### Home `/`
 Exactly the design `Home`: About section (`Typewriter` heading "About Us", strap/stand/body typed
 on the shared clock), **Featured Editorial** pinned head + scroll stack of up to 4 `card-lead`
@@ -188,8 +208,8 @@ Player only — no text, no highlight, no follow.
 ## 4. Admin screens
 
 All admin pages import `src/styles/admin.css` and reuse design tokens/components. Header bar
-(`DeskHeader`): small wordmark "blog0 · desk", links **Desk**, **Site**, **Subscribers** (Phase 4
-would add AI usage, Team), the user's name, **Sign out**.
+(`DeskHeader`): small wordmark "blog0 · desk", links **Desk**, **Site**, **Subscribers**,
+**Newsletter** (Phase 7; Phase 4 would add AI usage, Team), the user's name, **Sign out**.
 
 **Load pattern (every admin screen).** Data is fetched client-side through
 `src/components/admin/api.ts` and `useAdminLoad(fetcher, key?, onData?)`
@@ -299,9 +319,118 @@ design's `.audio` player. Loads `GET /api/admin/articles/:id/listen` via `useAdm
   text follow along with the paragraph timings saved for this recording."
 - Every control is a `<button>`; no page-level shortcuts in this tab.
 
-### Site `/admin/site`, Subscribers `/admin/subscribers`
-Site: form for tagline, contact email, About strap/stand/body, social URLs with a live preview of
-the About block. Subscribers: count, table, **Export CSV**.
+### Site `/admin/site`
+Form for tagline, contact email, About strap/stand/body, social URLs with a live preview of the
+About block (unchanged). **Phase 7 adds a second card, "Newsletter"** (`NewsletterSettings.tsx`,
+own `useAdminLoad` of `GET /api/admin/newsletter/settings`, own **Save** → `PATCH …/settings`;
+behaviour: `spec/capabilities/newsletter-issues.md`):
+- **Status strip** (read-only, top of the card): "Sender: **Listmonk** · list <name> · healthy" /
+  "Sender: **Stub** — issues are recorded, not delivered" (with a `.stub`-styled hint in designer
+  mode: "Set `BLOG0_NEWSLETTER_SENDER=listmonk` and the `BLOG0_LISTMONK_*` values to send for
+  real"); "Confirmation mail: **SMTP** from <address>" / "**Stub** — confirmation links are written
+  to the server log and the subscriber's audit view"; counts "<n> confirmed · <n> pending · <n>
+  legacy"; **Sync to Listmonk** button (confirm "Push every confirmed subscriber to Listmonk and
+  blocklist the unsubscribed ones?") → "Synced N, blocklisted N, N changed" / inline error.
+- **Mode** radio group: **Manual** ("Issues are created only by hand."), **Per post** ("Every first
+  publish creates an issue."), **Digest** ("One issue every <days> days or <posts> posts, whichever
+  first." with two number inputs 1–60 / 1–20 shown only when selected; a live hint "Next digest:
+  due <date> · <n> new posts since <date>" from `status.digest`).
+- **Auto-send** checkbox, default off, with the warning label "Send automatic issues without
+  review. Off: every issue waits as a draft until you click Send." — turning it on asks "Issues
+  will go out to <n> confirmed subscribers with no review. Turn auto-send on?".
+- **Consent text** (textarea ≤ 300, shown under the footer form and stored on every signup) and
+  **Consent version** (≤ 20; helper "Bumped automatically when the text changes — leave as is").
+- **Legacy subscribers** row, only when `counts.legacy_unconfirmed > 0`: "<n> subscribers from
+  before double opt-in have not confirmed. They never receive issues until they do." + button
+  **Send confirmation to all legacy** (confirm "Send one confirmation email to <n> addresses? Each
+  address gets it once.") → "Sent N, skipped N".
+- Save state as the site form ("Saved" / "Couldn’t save — Retry"); errors inline.
+
+### Subscribers `/admin/subscribers` (Phase 7 rewrite of `SubscribersView.tsx`)
+Behaviour: `spec/capabilities/newsletter-list.md`. Loads `GET /api/admin/subscribers?status=&q=`
+via `useAdminLoad` keyed on the filter + query.
+- **Head**: title "Subscribers · <counts.all>", buttons **Export CSV** (`?format=csv` + the active
+  filter) and **Export audit (JSON)** (`?format=audit`, always everything; title "Every
+  subscriber, event and suppression — the proof of consent").
+- **Status filter** (`StatusFilter.tsx`, `role=tablist` of `.pill` buttons): **All** <n> ·
+  **Confirmed** <n> · **Pending** <n> · **Legacy** <n> · **Unsubscribed** <n> · **Bounced** <n>;
+  the active one `is-on`; filter in `?status=` of the admin URL. A search `<input type=search>`
+  "Find by email" (debounced 300 ms → `q`).
+- **Table** (`table.data.admin-table`): Email (link to the detail page, mono) · Name · Status
+  pill (`.tag` + modifier: `confirmed` solid, `pending` dashed + "expired" suffix when
+  `pendingExpired`, `legacy_unconfirmed` → "Legacy", `unsubscribed`, `bounced`) · Signed up
+  (relative, title = ISO) · Confirmed (relative or —) · Source (`footer` + the `sourceUrl` path in
+  `.admin-faint`, or `legacy`) · Synced (✓ with relative time, or —).
+- **Empty**: "No subscribers yet. Signups from the footer form on every public page land here."
+  (filtered: "Nothing with that status." / "No address matches.").
+- **Legacy banner** above the table when `counts.legacy_unconfirmed > 0`: the same sentence as the
+  Site card + a link **Manage in Site → Newsletter**.
+
+### Subscriber `/admin/subscribers/[id]` (Phase 7, `SubscriberDetail.tsx`)
+`GET /api/admin/subscribers/:id` → one column, max-width 820 px:
+- **Head**: email (mono h1), status pill, name, "Signed up <date> from <sourceUrl>" and, when
+  confirmed, "Confirmed <date>".
+- **Actions** (`.admin-btn`): **Send confirmation** — shown for `legacy_unconfirmed` (label
+  "Send the one-time confirmation", disabled with title "Already sent <date>" once
+  `legacyConfirmationSentAt` is set) and for `pending` ("Resend confirmation", disabled with
+  "Limit reached — try after <retryAt>" when `canSendConfirmation` is false) → success notice
+  "Confirmation sent to <email> (<smtp|stub>)" and the timeline refreshes; **Unsubscribe** (not
+  for `unsubscribed`/`bounced`) → `.admin-dialog` "Unsubscribe <email>? This writes a permanent
+  suppression entry." with an optional note → `POST …/unsubscribe`.
+- **Proof of consent** card (definition list): consent text (verbatim, quoted), consent version,
+  consented at, signup IP (or "pruned <date>" / "not recorded — no trusted proxy"), signup user
+  agent, source page, confirmation IP + user agent + time, token expiry (pending only, with
+  "expired" when past), confirmation emails sent (count), provider id + last sync.
+- **Timeline** (`SubscriberTimeline.tsx`, `<ol>`): every event oldest first — icon by kind,
+  label ("Signed up from /p/…", "Confirmation email sent (smtp)", "Confirmed", "Unsubscribed via
+  email link", "Re-subscribed", "Bounced (provider)", "Synced to Listmonk", "IP pruned"), source,
+  actor, time; `details` as a `<details>` JSON block.
+- **Suppression entries** card: a small table (reason, source, when, details) with the caption
+  "Append-only — these entries are never removed."; "None" when empty.
+- **Messages** card: confirmation/issue messages sent to this address (kind, subject, transport,
+  status, when); with the stub transport each confirmation row has **Open confirm link** (the
+  stub's `confirmUrl` from the message, designer mode's way to confirm by hand).
+
+### Newsletter `/admin/newsletter` (Phase 7, `IssueList.tsx`)
+`GET /api/admin/newsletter/issues`. Head: "Newsletter · <total> issues", `.admin-faint`
+"<confirmedCount> confirmed subscribers", primary **New issue** (→ `/admin/newsletter/new`), link
+**Settings** (→ `/admin/site#newsletter`). Table: # · Title (link) · Status pill (`draft`,
+`sending` with a spinner, `sent`, `failed` with the error in a title) · Origin (Per post / Digest
+/ Manual) · Posts · Recipients · Created · Sent. Empty: "No issues yet. In **Per post** or
+**Digest** mode they appear here when you publish; or write one with **New issue**." Rows of
+status `sending` poll every 3 s until they settle.
+
+### New issue `/admin/newsletter/new` (`IssueCompose.tsx`)
+Title (required, ≤ 150), Intro (Markdown textarea ≤ 5 000, hint "Paragraphs, emphasis and links
+only"), **Posts**: a checklist of published articles (newest first: title · topic · date) with
+↑ ↓ to order the checked ones (1–10) → **Create draft** → `POST …/issues` → redirect to the
+issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
+
+### Issue `/admin/newsletter/[id]` (`IssueDetail.tsx`)
+`GET …/issues/:id`; one column, max-width 900 px.
+- **Head**: "#<number> · <title>", status pill, origin, "Created <relative> by <name>" / "Sent
+  <date> by <name> · <recipientCount> recipients". While `draft`: title and intro are editable
+  inline (**Save** → PATCH), posts list with ↑ ↓ ✕ and **Add post** (the compose checklist in an
+  `.admin-dialog`); otherwise read-only.
+- **Actions bar**: **Send test to me** (any status; → "Test sent to <email> (<smtp|stub>)";
+  error inline) · **Send** (`draft`/`failed` only; primary; opens `SendDialog.tsx`: "Send to
+  <n> confirmed subscribers?" with the sender line "via Listmonk · list <name>" or "via the stub
+  sender — recorded, not delivered", buttons **Send now** / Cancel; while sending the button reads
+  "Sending…" and the page polls; result "Sent to <n> subscribers" or the failure card "Couldn’t
+  send: <lastError>" + **Try again**) · **Refresh stats** (sent only) · **Delete draft** (draft
+  only, confirm) · menu **Open preview in new tab** (`…/preview` → a `/admin/newsletter/[id]/preview`
+  route that serves the HTML with `Content-Type: text/html`; admin-gated).
+- **Preview** (`IssuePreview.tsx`): tabs **HTML** / **Text**. HTML = `<iframe sandbox srcdoc={html} title="Issue preview">`
+  sized to its content (600 px column, light and dark toggles that set `color-scheme` on the
+  iframe); Text = `<pre>` of `text`. Above it: "Preview uses sample values for the unsubscribe
+  link and consent line." Loads `GET …/preview` (re-snapshots a draft — the note "Posts refreshed
+  from their published versions" appears when something changed).
+- **Send log** (`SendLog.tsx`, `<ol>`): events oldest first with time, actor, label (Created ·
+  Updated · Test sent to <email> · Send requested (<n> recipients) · Campaign created <id> ·
+  Campaign started · Sent · Failed: <error> · Stats fetched).
+- **Stats** (`IssueStats.tsx`, sent only): six `.statbox` tiles (Recipients, Sent, Opens, Clicks,
+  Bounces, Unsubscribes — "n/a" for null) + "as of <relative time>".
+- States: loading "Loading the issue…", `AdminLoadError` + Retry, 404 → "That issue isn’t here."
 
 ### Phase 4 screens (on hold)
 TLDR stale banner with **Regenerate**, AI usage (month picker, total, table), Team. History tab
@@ -347,6 +476,14 @@ browsing/restore is deferred (`spec/capabilities/revision-history.md`).
 `--accent-ink` text — a caution, not the solid failed/stale look); `.dropzone` (+ `.is-dropping`,
 `[aria-disabled=true]` dimmed); `.listentab__timing` (muted 13.5 px head font);
 `.admin-alert.is-warn`; `.admin-dialog`; `.mdedit__tools`; `.mdedit__area.is-dropping`.
+Phase 7 (tokens only, `admin.css`): `.pill` filter row (+ `.is-on`), status `.tag` modifiers
+`.tag--pending` (dashed `--border-strong`), `.tag--confirmed` (`--accent-soft` fill),
+`.tag--unsubscribed` / `.tag--bounced` (`--muted` ink), `.tag--legacy` (dotted); `.timeline`
+(`<ol>` with a 1 px `--border` rail, 18 px dots); `.statbox` grid (6 → 3 → 2 columns);
+`.issue-preview` (`iframe` 100 % width, 1 px `--border`, 4 px radius, `min-height: 480px`);
+`.consent-quote` (serif italic, `--surface-2` background, 12 px 16 px padding). The link pages
+reuse `.surface`, `.tag`, `.btn-outline` from `design.css` with one rule
+`.nl-page { max-width: 560px; margin: 64px auto; }` in `additions.css`.
 
 ## 6. Accessibility & states checklist (every screen)
 

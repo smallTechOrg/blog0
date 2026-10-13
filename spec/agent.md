@@ -17,6 +17,8 @@ TLDR line selector. Everything else is deterministic code. LLM provider: **OpenR
 | Search / recommendations | Rejected | Search dropped by user; < 100 articles. |
 | Proofreading / style checks | Not now | Not requested; candidate for a later explicit-click helper. |
 | Alt-text for images | Not now | Images are writer-uploaded with writer alt text. |
+| Newsletter issue intro / subject lines (Phase 7) | Rejected for Phase 7 | Issues are assembled deterministically from published posts (title, dek, excerpt, links); the dek already is the writer's own one-line pitch, and generated prose in a mass email would need review per issue for little gain at ≤ 1 issue/week. A later explicit-click "suggest an intro" helper could reuse the Jev call shape. |
+| Newsletter send-time optimisation, segmenting | Rejected | One list, one send; the provider (Listmonk) owns delivery mechanics. |
 
 ## 2. Jev — composition
 

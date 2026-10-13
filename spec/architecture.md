@@ -51,7 +51,7 @@ One Next.js (App Router) process serves everything on a single origin (default
 | Jev | `src/server/jev/*` | The TLDR selection agent (see `spec/agent.md`). |
 | Listen | `src/server/listen/*` | Audio probe + ingest, Listen state, aligner-facing marks save (§9.5). |
 | Media | `src/server/media/*`, `src/server/storage/*` | Upload pipeline, image probe, byte ranges, cleanup; `Storage` interface + `LocalDiskStorage` (§9). |
-| Newsletter | `src/server/newsletter/*` | Signup service + its throttle. |
+| Newsletter | `src/server/newsletter/*` | Phase 7 (§13): owned list (signup → pending, tokens, confirm/unsubscribe, events + suppression, legacy, prune), transactional mail (`mail/`: nodemailer SMTP or recording stub), sender adapter (`sender/`: Listmonk REST or stub), issues (`issues/`: snapshot, render, triggers, send, stats), throttles. |
 | Designer | `src/server/designer/*` | Generated session secret + designer admin, in-process `dev:design` setup (§11). |
 | Public queries | `src/server/public/*` | Published-only reads → view models for reader components. |
 | Reader UI | `src/components/{design,site,reader,figures}` | Faithful port of `spec/design/design-app.js` (mapping in `spec/ui.md`). |
@@ -108,7 +108,8 @@ View-model contract (`src/lib/view-models.ts`):
 ```ts
 export interface SiteViewModel { wordmark: string; tagline: string; publisherName: string; contactEmail: string;
   aboutStrap: string; aboutStand: string; aboutBodyParagraphs: string[]; socialXUrl: string | null; socialLinkedinUrl: string | null;
-  topics: string[]; year: number }
+  topics: string[]; year: number;
+  newsletterConsentText: string }   // Phase 7: the line under the footer form (site.newsletter_consent_text)
 export interface DeckViewModel { slides: Array<{ text: string }>; disclosure: string; shareUrl: string }   // shareUrl absolute …/p/<slug>/tldr
 export interface ListenViewModel {
   audioUrl: string;                  // '/media/' + key (same-origin)
@@ -277,7 +278,8 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `abuse-protection.md`):
 
   ```ts
-  export type RateScope = 'login.pair' | 'login.email' | 'newsletter.ip' | 'newsletter.email' | 'newsletter.site';
+  export type RateScope = 'login.pair' | 'login.email' | 'newsletter.ip' | 'newsletter.email' | 'newsletter.site'
+    | 'newsletter.link.ip' | 'newsletter.link.site';   // Phase 7: confirm + unsubscribe links
   export interface RateBucket { scope: RateScope; key: string; max: number; windowMs: number }
   export type RateCheck = { limited: false } | { limited: true; retryAfterSec: number; scope: RateScope };
   export interface RateLimitStore {
@@ -326,6 +328,14 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   is skipped (a shared constant would otherwise let one caller exhaust it for everyone). Any cap →
   429 `RATE_LIMITED` with `Retry-After`. Production behind a reverse proxy MUST set
   `BLOG0_TRUSTED_PROXY_HOPS`, or the per-IP cap is inert.
+- **Newsletter link throttling (Phase 7)** — `src/server/newsletter/rate-limit.ts`
+  `getNewsletterLinkThrottle()`: the confirm and unsubscribe routes (pages and JSON, one shared
+  pair of buckets) count 30 per known client IP per hour (`newsletter.link.ip`, skipped for
+  `direct`/`unknown` exactly like signup) and 1 000 per site per hour (`newsletter.link.site`).
+  The token is parsed and shape-checked first (a malformed token → 404 without counting); a
+  well-formed token counts whether or not it turns out valid. The pages render the 429 copy in
+  site chrome; the JSON routes answer `RATE_LIMITED` + `Retry-After`. The webhook route is not
+  throttled (secret-gated). The admin routes are session-gated and not throttled.
 - **Security headers (Phase 5).** Static, env-independent headers come from `next.config.ts`
   `headers()` for `source: '/:path*'` (every response: pages, API, `/media`, `/_next/static`):
   `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
@@ -379,6 +389,14 @@ tests (`captureLogs()`).
 | `media.remove` / `media.cleanup` / `listen.sync` | `removeAudio` / file cleanup failures (`warn`) / `saveMarks` | ids and counts only |
 | `app.shutdown` | `src/server/ops/lifecycle.ts` (production only) | `signal, phase ('draining'\|'closed'), timeout_ms` (draining); `outcome ('drained'\|'timeout'), duration_ms, exit_code` (closed) |
 | `rate_limit.prune_failed` | `DbRateLimitStore` (`warn`) | `err_code` |
+| `newsletter.signup` | signup service (Phase 7) | `request_id, email_masked, outcome ('pending_created'\|'pending_renewed'\|'noop_confirmed'\|'noop_capped'\|'resignup'), source_url, consent_version` |
+| `newsletter.mail` | transactional transport (`mail/transport.ts`) | `request_id?, kind ('confirmation'\|'test_issue'), to_masked, transport ('smtp'\|'stub'), outcome ('sent'\|'failed'\|'stubbed'), latency_ms, message_id?, err_code?` — **stub only** adds `confirm_url` (the full link) so designer mode and E2E can follow it; the SMTP transport never logs a token |
+| `newsletter.link` | confirm/unsubscribe routes | `request_id, kind ('confirm'\|'unsubscribe'\|'one_click'), outcome ('ok'\|'already'\|'expired'\|'invalid'\|'rate_limited'), subscriber_id?` |
+| `newsletter.provider` | listmonk adapter (one line per HTTP call) | `op ('ensureList'\|'ensureTemplate'\|'upsertSubscriber'\|'blocklist'\|'createCampaign'\|'startCampaign'\|'campaignStats'\|'listBlocklisted'\|'listBounces'\|'health'), http_status, latency_ms, outcome ('ok'\|'http_error'\|'timeout'\|'invalid_json'), campaign_id?` — never the token, never subscriber emails in clear |
+| `newsletter.sync` | `pnpm newsletter:sync` / admin sync / live sync after confirm-unsubscribe | `trigger ('script'\|'admin'\|'confirm'\|'unsubscribe'\|'webhook'\|'tick'), synced, blocklisted, skipped, changed, errors, latency_ms` (`warn` when `errors > 0`) |
+| `newsletter.issue` | issues service | `issue_id, number, origin, action ('created'\|'updated'\|'deleted'\|'test_sent'\|'send'\|'stats'), outcome ('ok'\|'sent'\|'failed'\|'skipped'), recipient_count?, campaign_id?, user_id?, err_code?` |
+| `newsletter.tick` | `pnpm newsletter:tick` | `digest_created (bool), suppressions_pulled, stats_refreshed, ips_pruned, latency_ms` |
+| `newsletter.mail_not_configured` | first transactional send in a production process without `BLOG0_SMTP_HOST` (`warn`, once per process) | `hint` |
 | `error` | anywhere unexpected | `err_message, err_stack (non-prod only), request_id` |
 
 `input_summary` / `output_summary` are small objects of counts and ids (e.g.
@@ -613,6 +631,15 @@ payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`
 | `BLOG0_E2E_LOG_FILE` | no | — | test harness only: host path of the external server's JSON log (the container writes it through a bind mount); with `BLOG0_E2E_BASE_URL` set, the log-asserting E2E tests run only when this is set (else they skip with a reason) |
 | `BLOG0_REQUIRE_REAL_KEY` | no | — | test harness/scripts only: `1` → a missing/placeholder OpenRouter key FAILS the real-key tests; `0` → it SKIPS as `PENDING KEY`; unset → `CI === 'true'` decides (Conventions → Real-key tests). CI sets it from secret presence |
 | `BLOG0_CONTAINER_BUILD` | no | `auto` | read only by `scripts/container-e2e.sh` (§12.5 step 2): `auto` = rebuild `blog0:local` only when it is missing or a build-context file is newer than the image; `always` = always `docker build`; `never` = reuse the existing image (fail when it does not exist) |
+| `BLOG0_SMTP_HOST` | no | — | Phase 7 (§13.2). Set ⇒ the transactional transport is nodemailer SMTP; unset/empty ⇒ the **stub** transport (designer mode, tests, E2E; also a production process, with one `newsletter.mail_not_configured` warning). Config field `newsletter.smtp: { host, port, user, pass, from } \| null` |
+| `BLOG0_SMTP_PORT` | no | `587` | integer 1–65535; 465 ⇒ implicit TLS (`secure: true`), otherwise STARTTLS (`requireTLS: true`) |
+| `BLOG0_SMTP_USER` / `BLOG0_SMTP_PASS` | with `BLOG0_SMTP_HOST` | — | SMTP credentials; `PASS` is a secret field (redacted, placeholder-rejected). Both empty ⇒ unauthenticated relay (allowed — Google Workspace IP-allowlisted relay) |
+| `BLOG0_SMTP_FROM` | with `BLOG0_SMTP_HOST` | — | `Name <address>` or bare address; the From of every confirmation / test message. Must be set when `BLOG0_SMTP_HOST` is (ConfigError otherwise). Stub transport uses `blog0 <newsletter@localhost>` |
+| `BLOG0_NEWSLETTER_SENDER` | no | `stub` | `listmonk` \| `stub` (§13.3). `listmonk` requires the four `BLOG0_LISTMONK_*` values (aggregated ConfigError) |
+| `BLOG0_LISTMONK_URL` | with sender `listmonk` | — | Listmonk base URL, e.g. `http://localhost:9000` (compose) or `http://listmonk:9000` (same network); no trailing slash |
+| `BLOG0_LISTMONK_API_USER` / `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | a Listmonk **API user** + its token (Listmonk ≥ v4, Settings → Users); `TOKEN` is a secret field |
+| `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | integer id of the list blog0 mirrors into (created once by hand or by `pnpm newsletter:sync --create-list`); blog0 never sends to any other list |
+| `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | no | — | ≥ 24 chars; secret field. Unset ⇒ `POST /api/newsletter/webhook` answers 404 |
 | `BLOG0_DIST_DIR` | no | `.next` | not read by `config.ts`: `next.config.ts` `distDir`. A separate build dir (e.g. `.next-gate`) so a gate/CI `pnpm build` never overwrites the `.next` a running `pnpm start` serves; build and start with the same value (`scripts/serve.mjs` and the E2E `webServer` inherit it); `.next-*/` is gitignored |
 | `CI` | no | — | not a `BLOG0_*` setting: enables Playwright `forbidOnly`; when `BLOG0_REQUIRE_REAL_KEY` is unset, `CI=true` turns a missing/placeholder OpenRouter key from a `PENDING KEY` skip into a failure (Conventions → Real-key tests) |
 | (derived) `dbEngine` | — | — | not an env var: `getConfig().dbEngine` is `'postgres' \| 'pglite'`, from the URL scheme; reported by `app.boot` and `/api/health` |
@@ -933,6 +960,284 @@ and exits 1; a `trap` always runs `docker rm -f blog0-e2e`:
 > user's directories (Colima maps them to the host user); a Linux host with a different uid must
 > `chmod`/`chown` `var/storage-e2e` and `test-results` first (the runbook notes it).
 
+### 12.6 docker-compose: Listmonk beside blog0 (Phase 7)
+
+`docker-compose.yml` at the repo root (slice S7.2) — the local Listmonk for the adapter
+integration test and the reference shape for a production deploy where Listmonk shares the
+Postgres **instance** with blog0 but has its **own database**:
+
+```yaml
+name: blog0
+services:
+  postgres:                     # one instance, two databases (blog0 + listmonk)
+    image: postgres:18
+    environment: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: postgres }
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/compose/init-db.sh:/docker-entrypoint-initdb.d/10-init-db.sh:ro   # creates blog0, blog0_test, listmonk (+ role listmonk)
+    ports: ["127.0.0.1:5433:5432"]            # 5433: never clashes with the Homebrew Postgres on 5432
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 5s, timeout: 3s, retries: 20 }
+  listmonk:
+    image: listmonk/listmonk:v5.1.0          # pinned; bump deliberately (the adapter test pins the API shape)
+    depends_on: { postgres: { condition: service_healthy } }
+    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      LISTMONK_app__root_url: http://localhost:9000
+      LISTMONK_db__host: postgres
+      LISTMONK_db__port: "5432"
+      LISTMONK_db__user: listmonk
+      LISTMONK_db__password: listmonk
+      LISTMONK_db__database: listmonk
+      LISTMONK_db__ssl_mode: disable
+      LISTMONK_ADMIN_USER: ${LISTMONK_ADMIN_USER:-admin}
+      LISTMONK_ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-listmonk-admin-dev-password}
+      TZ: Etc/UTC
+    ports: ["127.0.0.1:9000:9000"]
+    volumes: [listmonk-uploads:/listmonk/uploads]
+    healthcheck: { test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/api/health >/dev/null || exit 1"], interval: 5s, timeout: 3s, retries: 30 }
+  blog0:                                      # optional — `docker compose --profile app up`
+    profiles: [app]
+    build: .
+    image: blog0:local
+    depends_on: { postgres: { condition: service_healthy } }
+    env_file: [blog0.env]                     # the runbook's env file (never committed)
+    environment:
+      BLOG0_DATABASE_URL: postgres://postgres:postgres@postgres:5432/blog0
+      BLOG0_NEWSLETTER_SENDER: listmonk
+      BLOG0_LISTMONK_URL: http://listmonk:9000
+    ports: ["127.0.0.1:3410:3410"]
+    volumes: [blog0-storage:/data/storage]
+volumes: { pgdata: {}, listmonk-uploads: {}, blog0-storage: {} }
+```
+
+`scripts/listmonk-dev.sh up|down|reset|token` (`pnpm listmonk:up` = `up`): `up` runs
+`docker compose up -d --wait postgres listmonk` (exit 3 + `PENDING DOCKER` when `docker info`
+fails, same contract as `container-e2e.sh`), then — idempotently, through the admin
+basic-auth API — ensures an API user `blog0` with a token stored in `var/listmonk-dev.env`
+(`BLOG0_LISTMONK_URL`, `BLOG0_LISTMONK_API_USER`, `BLOG0_LISTMONK_API_TOKEN`,
+`BLOG0_LISTMONK_LIST_ID` of a list named `blog0-test`, mode 0600) which the integration test and
+the gate source; `reset` drops and recreates the `listmonk` database (fresh state for the test);
+`token` prints the env file. Listmonk's own SMTP is left unconfigured in compose: `sendIssue`
+starts a campaign that Listmonk "sends" to its (unconfigured) default messenger, which is
+enough to observe `running`/`finished` and stats; a real deploy configures Listmonk's SMTP in
+its UI (runbook).
+
+> **Assumed:** Listmonk `v5.1.0` image tag; the orchestrator verifies the tag exists before the
+> before-fan-out commit and pins the newest v5 patch if not. API-user auth (`Authorization: token
+> user:token`) is used throughout; the admin password is used only by `listmonk-dev.sh` to create
+> that API user.
+> **Assumed:** host port 5433 for the compose Postgres so the local Homebrew instance (5432,
+> `blog0_dev`/`blog0_test`) stays the gate database; the compose `blog0`/`blog0_test` databases
+> exist only for the `--profile app` path.
+
+## 13. Newsletter (Phase 7)
+
+Product rules: `spec/capabilities/newsletter-list.md`, `spec/capabilities/newsletter-issues.md`;
+tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` §4.
+
+### 13.1 List service (`src/server/newsletter/{constants,tokens,service,links,legacy,prune,audit,repo,schemas,sender-hook}.ts`)
+
+- `constants.ts`: `CONFIRM_TOKEN_TTL_MS = 72 h`, `CONFIRMATION_SENDS_PER_DAY = 3`,
+  `IP_RETENTION_MS = 365 d`, `SIGNUP_SOURCE_URL_MAX = 500`, `USER_AGENT_MAX = 300`,
+  `CONSENT_TEXT_MAX = 300`, `LINK_CAP_PER_IP = 30`, `LINK_CAP_PER_SITE = 1000`.
+- `tokens.ts` (pure): `newConfirmToken(): { token, hash }` (32 random bytes → base64url;
+  `hash = sha256hex(token)`), `hashConfirmToken(token)`, `signUnsubscribeToken(subscriberId, secret)`
+  → `<uuid-as-base64url>.<base64url(HMAC-SHA256(secret, 'blog0.newsletter.unsubscribe:' + id))>`,
+  `verifyUnsubscribeToken(token, secret): string | null` (constant-time compare), `isWellFormed*`.
+  The secret is `getConfig().sessionSecret` (one secret, domain-separated).
+- `schemas.ts` (zod): `subscribeBody` gains `sourceUrl` (string, trimmed, must start with `/`, no
+  `//`, ≤ 500, default `/`); `settingsPatch`, `issueCreate`, `issueUpdate`, `webhookBody`.
+- `service.ts` — `subscribe(ctx: SignupContext, input)` in **one transaction** (lock the
+  subscriber row if it exists): decide the outcome (`newsletter.signup` outcomes in §7) → upsert
+  the row (status `pending`, new token + expiry, signup metadata, consent copied from the current
+  site row, `consented_at = now`; a `confirmed` row is untouched) → append `signup` (+
+  `details.resignup` when the previous status was suppressed/legacy) → commit → **after commit**
+  send the confirmation (`mail/`) and append `confirmation_sent` with the outcome (a failed send
+  never rolls back the signup). `confirmByToken(token, ctx)`: hash → row by `(site_id, hash)`
+  (none → `TOKEN_INVALID`; expiry passed → `TOKEN_EXPIRED`; the row is `pending` by construction
+  since confirmation clears the hash) → one transaction: status `confirmed`, `confirmed_*`, clear
+  token, append `confirmed` or `resubscribed` (when a suppression exists for the row) → after
+  commit `afterConfirm(subscriber)` (`sender-hook.ts`, below; failure logged, never surfaced to
+  the reader) → `{ alreadyConfirmed: false }`. `unsubscribeByToken(token, source)`: verify → row
+  by id → already `unsubscribed`/`bounced` → `{ alreadyUnsubscribed: true }` (no rows written) →
+  else `suppress(row, { reason: 'unsubscribed', source })`. `suppress(row, { reason, source,
+  details, actor })` = one transaction: status (`bounced` for reason `bounced`, else
+  `unsubscribed`), `unsubscribed_at`, append suppression + event → after commit
+  `afterSuppress(subscriber)`. Every write path appends its event in the same transaction as the
+  row change.
+- `sender-hook.ts`: `afterConfirm(subscriber)` / `afterSuppress(subscriber)` — the list
+  service's only link to the provider. Slice S7.1 ships them as no-ops logging at `debug`; S7.3
+  wires them to `sender/sync.ts` (`syncOne` / `removeOne`, 13.3). Both swallow and log
+  (`newsletter.sync` at `warn`) — a provider outage never fails a reader's click.
+- `legacy.ts`: `sendLegacyConfirmation(id)` (one-time rule), `sendAllLegacyConfirmations()`
+  (batches of 20, 200 ms pause, continues on mail failure). A legacy row that gets its email
+  receives a **token** like a pending row but keeps status `legacy_unconfirmed` (so the admin list
+  still shows it as legacy) until the click flips it to `confirmed`.
+- `prune.ts`: `pruneIps(now)` — rows with `confirmed_at < now − 365 d` (or never confirmed and
+  `created_at < now − 365 d`) and a non-null IP → null both IPs on the row and on their events
+  (events' `ip` column is updated by a `SECURITY DEFINER` function `newsletter_prune_event_ips`
+  that bypasses the ledger guard — the only sanctioned update of an event row; it touches `ip`
+  only), append `ip_pruned`, set `ip_pruned_at`.
+- `audit.ts`: `buildAuditBundle(siteId, actor)` → `NewsletterAuditBundle` (streams nothing —
+  < 10 k subscribers assumed); `subscribersToCsv` grows the columns of `spec/api.md`.
+- `links.ts`: `confirmUrl(token)` / `unsubscribeUrl(subscriberId)` → absolute under
+  `getConfig().publicBaseUrl`; `consentLine(subscriber, site)` → "You’re getting this because
+  you subscribed at <brand> on <date> and confirmed on <date>." (site timezone; legacy-confirmed
+  rows read "…subscribed at <brand> and confirmed on <date>").
+
+### 13.2 Transactional mail (`src/server/newsletter/mail/{transport,templates,index}.ts`)
+
+```ts
+export interface MailMessage { to: string; subject: string; html: string; text: string; kind: 'confirmation' | 'test_issue'; subscriberId?: string; issueId?: string; confirmUrl?: string }
+export interface MailResult { outcome: 'sent' | 'stubbed'; transport: 'smtp' | 'stub'; messageId: string; messageRowId: string }
+export interface MailTransport { readonly kind: 'smtp' | 'stub'; send(msg: MailMessage): Promise<MailResult> }   // throws MailError on failure
+export function getMailTransport(): MailTransport;          // globalThis singleton from getConfig().newsletter.smtp; resetMailTransportForTests(t?)
+```
+
+`SmtpTransport` wraps `nodemailer.createTransport({ host, port, secure: port === 465, requireTLS: port !== 465, auth?, connectionTimeout: 10_000, socketTimeout: 20_000 })`,
+`from = BLOG0_SMTP_FROM`, `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+headers on confirmation messages (pointing at the subscriber's unsubscribe link), and inserts the
+`newsletter_message` row (`transport 'smtp'`, `status 'sent' | 'failed'`, provider message id /
+error) **after** the SMTP result. `StubTransport` inserts the row with `transport 'stub'`,
+`status 'stubbed'` and logs `newsletter.mail` with `confirm_url` (when present). Both log
+`newsletter.mail`. `nodemailer` is a main dependency and goes in `serverExternalPackages`
+(it `require`s optional peer modules at runtime). `templates.ts` (pure, no I/O):
+`confirmationEmail({ brand, confirmUrl, unsubscribeUrl, consentText, expiresHours, publicBaseUrl })`
+→ `{ subject: 'Confirm your subscription to <brand>', html, text }` — single-column table, inline
+styles, a button + the raw link, the expiry note, "If you didn’t ask for this, ignore this
+email.", the consent line; `issueEmail(IssueRenderInput)` (13.4). HTML is built with a tiny
+escaping helper (`esc()`), never with the Markdown pipeline except `intro_md` (rendered through
+`renderArticle`'s inline subset: paragraphs, emphasis, links; figures/code stripped).
+
+### 13.3 Sender adapter (`src/server/newsletter/sender/{types,listmonk,stub,index}.ts`)
+
+```ts
+export interface SenderSubscriber {
+  subscriberId: string; email: string; name: string | null;
+  status: 'enabled' | 'blocklisted';
+  attribs: { blog0_subscriber_id: string; blog0_unsubscribe_url: string; blog0_consent_line: string;
+             consent_version: string | null; consented_at: string | null; confirmed_at: string | null; signup_source_url: string | null };
+}
+export interface SenderIssue { issueId: string; number: number; subject: string; html: string; text: string }   // html already contains the provider placeholders (13.4)
+export interface SenderStats { recipients: number; sent: number; delivered: number | null; opens: number | null; clicks: number | null; bounces: number | null; unsubscribes: number | null }
+export interface SenderSuppression { email: string; reason: 'unsubscribed' | 'bounced' | 'complaint'; at: Date; details: Record<string, unknown> }
+export interface NewsletterSender {
+  readonly kind: 'listmonk' | 'stub';
+  healthcheck(): Promise<{ ok: boolean; message: string; listName?: string }>;
+  syncSubscriber(s: SenderSubscriber): Promise<{ providerId: string; changed: boolean }>;   // upsert, idempotent
+  removeSubscriber(email: string): Promise<{ changed: boolean }>;                          // blocklist — never delete
+  createIssue(i: SenderIssue): Promise<{ campaignId: string }>;
+  sendIssue(campaignId: string): Promise<void>;                                            // start; idempotent for a running/finished campaign
+  fetchStats(campaignId: string): Promise<SenderStats>;
+  fetchSuppressions(since: Date): Promise<SenderSuppression[]>;
+}
+export class SenderError extends Error { constructor(public code: 'UNAVAILABLE' | 'HTTP' | 'TIMEOUT' | 'INVALID', message: string, public httpStatus?: number) }
+export function getNewsletterSender(): NewsletterSender;   // from getConfig().newsletter.sender; resetNewsletterSenderForTests(s?)
+```
+
+**Listmonk adapter** (`listmonk.ts`, plain `fetch`, 15 s timeout per call, one retry on
+network error/5xx with 500 ms backoff, every call logged `newsletter.provider`):
+`Authorization: token <apiUser>:<apiToken>`, JSON. Mapping:
+
+| Method | Listmonk REST |
+|---|---|
+| `healthcheck` | `GET /api/health`, then `GET /api/lists/<listId>` → `listName` (404 → `ok: false`, "list <id> not found") |
+| `syncSubscriber` | `POST /api/subscribers { email, name, status: 'enabled', lists: [listId], attribs, preconfirm_subscriptions: true }`; on 409 (exists) → `GET /api/subscribers?query=subscribers.email='<escaped>'` → `PUT /api/subscribers/<id>` with the same body (status `enabled` lifts a blocklist) → `changed` = any field differed (compare `name`, `status`, `attribs`, list membership); for `status: 'blocklisted'` input → the blocklist call below |
+| `removeSubscriber` | lookup by email → `PUT /api/subscribers/blocklist { ids: [id] }` (unknown email → `changed: false`) |
+| `createIssue` | ensure template `blog0-issue` exists (`GET /api/templates` by name, else `POST /api/templates { name, type: 'campaign', body: '{{ template "content" . }}' }`) → `POST /api/campaigns { name: 'blog0 #<number> — <subject>', subject, lists: [listId], type: 'regular', content_type: 'html', body: html, altbody: text, template_id, tags: ['blog0', 'issue:<issueId>'] }` → `campaignId = String(data.id)`; the blog0 placeholders in `html`/`text` are replaced **before** the POST with Listmonk expressions (13.4) |
+| `sendIssue` | `PUT /api/campaigns/<id>/status { status: 'running' }` (a campaign already `running`/`finished` → no-op) |
+| `fetchStats` | `GET /api/campaigns/<id>` → `{ recipients: to_send, sent, delivered: null, opens: views, clicks, bounces, unsubscribes: null }` |
+| `fetchSuppressions` | `GET /api/subscribers?query=subscribers.status='blocklisted' AND subscribers.updated_at > '<since ISO>'&per_page=all` → `unsubscribed`; `GET /api/bounces?...` (rows with `created_at > since`, `type = 'hard'`) → `bounced`; `complaint` type → `complaint` |
+
+**Stub adapter** (`stub.ts`): keeps subscribers in a `Map` (`providerId = 'stub-' + subscriberId`),
+`createIssue` returns `'stub-' + issueId`, `sendIssue` inserts one `newsletter_message` row per
+**currently confirmed** subscriber (`kind 'issue'`, `transport 'stub_sender'`, `status 'stubbed'`,
+placeholders filled per recipient with blog0's own links) and logs `newsletter.issue`,
+`fetchStats` counts those rows, `fetchSuppressions` returns `[]`. It is the default sender and
+what designer mode, integration tests and E2E use; `resetNewsletterSenderForTests()` clears it.
+
+**Sync** (`src/server/newsletter/sender/sync.ts`): `syncOne(subscriber)` (after confirm) /
+`removeOne(subscriber)` (after suppress) / `syncAll(trigger)` (script, admin button, before a
+listmonk send): for every `confirmed` row → `syncSubscriber` (sets `provider_id`,
+`provider_synced_at`, appends `provider_synced` only when `changed`); every
+`unsubscribed`/`bounced` row → `removeSubscriber` (appends `provider_removed` when `changed`);
+`pending`/`legacy_unconfirmed` → skipped; stub → everything skipped. blog0 → provider only: the
+sync never reads provider state into blog0 rows except `provider_id`. `scripts/newsletter-sync.ts`
+(`pnpm newsletter:sync [--create-list]`) prints `synced N, blocklisted N, skipped N, N changed`
+and exits 1 on any error. `scripts/newsletter-tick.ts` (`pnpm newsletter:tick`): digest-due
+check (13.5) → `fetchSuppressions(lastTickAt)` → `suppress()` each unknown-to-blog0 suppression
+(`source 'provider'`) → `fetchStats` for issues sent in the last 30 days → `pruneIps(now)` → one
+`newsletter.tick` line. Scheduling is external (runbook: hourly cron / platform scheduler); the
+app has no timer.
+
+**Webhook** (`src/app/api/newsletter/webhook/route.ts`): bearer secret (constant-time compare),
+`csrf: false`, body `NewsletterWebhookRequest` → `suppress(row, { reason, source: 'webhook',
+details: { providerRef, reason, occurredAt } })`.
+
+### 13.4 Issue rendering (`src/server/newsletter/issues/render.ts`, pure)
+
+```ts
+export interface IssueRenderInput { brand: string; publisherName: string; publicBaseUrl: string; title: string; introHtml: string; introText: string; posts: IssuePost[]; number: number; year: number }
+export const UNSUBSCRIBE_PLACEHOLDER = '%%BLOG0_UNSUBSCRIBE_URL%%';
+export const CONSENT_PLACEHOLDER = '%%BLOG0_CONSENT_LINE%%';
+export function renderIssueHtml(input: IssueRenderInput): string;   // contains both placeholders exactly once each
+export function renderIssueText(input: IssueRenderInput): string;   // same, from the model (not from the HTML)
+export function fillPlaceholders(body: string, values: { unsubscribeUrl: string; consentLine: string }): string;   // stub sender, test message, preview
+export function toListmonkExpressions(body: string): string;        // placeholders → {{ .Subscriber.Attribs.blog0_unsubscribe_url }} / {{ .Subscriber.Attribs.blog0_consent_line }}
+```
+
+HTML: `<table role="presentation" width="100%">` wrapper, inner table max-width 600, wordmark
+line "blog0" (the brand, last character in `--accent`-equivalent `#d64545`), the title, intro,
+then per post: topic + date eyebrow, title linked to `readUrl`, dek, excerpt, a link row
+`Read · TLDR · Listen` (only those present), hairline; footer: unsubscribe link, consent line,
+`© <year> <brand> | <publisher>`. Fonts: `'Space Grotesk', 'Helvetica Neue', Arial` for heads,
+`'Source Serif 4', Georgia, serif` for body (system fallbacks — no web fonts in email). Dark mode
+via `@media (prefers-color-scheme: dark)` in a `<style>` block plus explicit light colours inline.
+`excerpt` = `renderArticle(published)` → first `Paragraph.text` → first 60 words + `…`.
+
+### 13.5 Issues service and triggers (`src/server/newsletter/issues/{repo,service,snapshot,triggers,digest,send}.ts`)
+
+- `snapshot.ts`: `snapshotPosts(siteId, articleIds)` → `IssuePost[]` from the **published**
+  revisions (404-style `ISSUE_POSTS_INVALID` for an unpublished id), `tldrUrl`/`listenUrl` from
+  the published format payloads, `publishedLabel` via `fmtDate`.
+- `service.ts`: `createIssue(ctx, { origin, title, introMd, articleIds, createdBy })` (site row
+  lock → `number = max + 1`; event `created`), `updateIssue` (draft only; event `updated`),
+  `deleteIssue` (draft only), `previewIssue` (draft → re-snapshot + persist; render + fill sample
+  values), `sendTest(ctx, id)` (render, fill the admin's sample values, `getMailTransport().send`,
+  event `test_sent`).
+- `send.ts`: `sendIssue(ctx, id)` — one transaction: lock the issue, require `draft` or `failed`,
+  count confirmed subscribers (0 → `NO_RECIPIENTS`), freeze `rendered_html/text` (re-snapshot
+  first when draft), status `sending`, event `send_requested` → commit → outside the transaction:
+  listmonk only: `syncAll('send')`; `provider_campaign_id ?? createIssue()` (persist at once, event
+  `provider_created`) → `sendIssue(campaignId)` (event `provider_started`) → status `sent`,
+  `sent_at/by`, `recipient_count`, event `sent`, log `newsletter.issue action 'send' outcome 'sent'`.
+  Any throw → status `failed`, `last_error`, event `failed`, rethrown as `SENDER_FAILED` (or
+  `SENDER_UNAVAILABLE` when `healthcheck` failed before any step). `refreshStats(id)` → event
+  `stats_fetched`.
+- `triggers.ts`: `onArticleFirstPublished({ siteId, articleId, now, requestId })` — called by
+  `publishArticle` **after** its transaction commits and only when `first_publish` is true (the
+  hook never runs inside the article transaction and never throws into the publish: errors are
+  logged `newsletter.issue outcome 'failed'`; the publish is already done). Reads the site
+  settings: `manual` → nothing; `per_post` → `createIssue({ origin: 'per_post', title: article
+  title, introMd: dek, articleIds: [id] })`; `digest` → `digest.ts` `dueDigest(settings,
+  lastDigestIssueAt ?? modeSetAt, newPostIdsSince, now)` → when due, one issue with every
+  first-published article since the anchor that is not yet in an automatic issue (`article_ids`
+  overlap check). Then, **only if `newsletter_auto_send`** is true → `sendIssue` with a system
+  actor (`sent_by null`). `digest.ts` is pure: `dueDigest({ digestDays, digestPosts }, anchorAt,
+  newPostCount, now): { due: boolean; reason: 'posts' | 'days' | null; dueAt: Date | null }`.
+- `src/server/articles/service.ts` (takes over, S7.3): after `deleteStoredFiles(...)` in
+  `publishArticle`, `await onArticleFirstPublished(...)` guarded by `firstPublish` (captured from
+  `row.firstPublishedAt === null` inside the transaction).
+
+> **Assumed:** the publish hook runs synchronously after commit (no queue): creating a draft is
+> one insert; an auto-send with Listmonk is 2–4 HTTP calls (< 5 s) inside the publish request —
+> acceptable for a handful of writers; the publish response is not delayed by the stub.
+> **Assumed:** one secret (`BLOG0_SESSION_SECRET`) signs unsubscribe tokens; rotating it (runbook)
+> invalidates unsubscribe links in already-sent issues — the runbook says to re-sync
+> (`pnpm newsletter:sync`) after a rotation so the Listmonk attribute carries fresh links, and
+> Listmonk's own `{{ UnsubscribeURL }}` remains in the `List-Unsubscribe` header it sets.
+
 ---
 
 ## Stack
@@ -976,9 +1281,11 @@ added there in the same commit.
 Deploy-time dependencies (`dependencies`, not `devDependencies`): `next`, `react`, `react-dom`,
 `drizzle-orm`, `postgres`, `@electric-sql/pglite` (so `pnpm dev:design` works on a plain
 `pnpm install`), `tsx`, `zod`, `@node-rs/argon2`, all unified/remark/rehype packages, `shiki`,
-`@shikijs/rehype`, `@next/env`, `music-metadata`, `image-size`, `server-only`. Dev-only:
-`drizzle-kit`, `vitest`, `@playwright/test`, `typescript`, `@types/*`, `eslint*`, `prettier`,
-`esbuild` (Phase 5: `pnpm build:release`; already allowed in `allowBuilds`).
+`@shikijs/rehype`, `@next/env`, `music-metadata`, `image-size`, `server-only`, `nodemailer`
+(Phase 7). Dev-only: `drizzle-kit`, `vitest`, `@playwright/test`, `typescript`, `@types/*`
+(incl. `@types/nodemailer`, Phase 7), `eslint*`, `prettier`, `esbuild` (Phase 5:
+`pnpm build:release`; already allowed in `allowBuilds`). Phase 7 `next.config.ts`:
+`serverExternalPackages` gains `'nodemailer'`.
 
 `next.config.ts`: `distDir: process.env.BLOG0_DIST_DIR?.trim() || '.next'` (§10),
 `serverExternalPackages: ['@node-rs/argon2', 'shiki', 'postgres', '@electric-sql/pglite']`
@@ -999,6 +1306,18 @@ under standalone output. Phase 5 adds the static security `headers()` (§6).
 | CI | GitHub Actions, `postgres:18` service | Repo host; gates run on the production engine; no deploy job. |
 | Container runtime (local gate) | Docker via Colima | Already on the dev machine; gate step reports `PENDING DOCKER` when the daemon is down. |
 
+**Newsletter (Phase 7, §13).**
+
+| Concern | Choice | Rationale |
+|---|---|---|
+| Transactional email | `nodemailer` 7 over env-configured SMTP (`BLOG0_SMTP_*`) + an in-DB stub transport | Confirmation/test mail is a handful of messages; any SMTP relay works (Google Workspace relay or Brevo are the documented options — the runbook never picks one); no vendor SDK. The stub keeps designer mode and every test SMTP-free. |
+| Bulk sending | Listmonk (self-hosted, own DB in the shared Postgres instance) behind `NewsletterSender`; REST via `fetch` | User decision ("Listmonk sends"); deliverability, bounces, throttling and campaign stats belong to a mailer, not to blog0; the adapter keeps blog0 the record and makes the provider swappable; the stub adapter makes the full admin flow testable without it. |
+| Consent proof | blog0 tables with append-only ledgers enforced by a DB trigger | A list you can prove is the point of owning it; the trigger makes "never deleted" a property of the database, not of code review. |
+| Compose | `docker-compose.yml` with `postgres:18` + `listmonk/listmonk:v5.1.0` | One command for the adapter integration test and the reference production shape (one Postgres instance, separate databases). |
+
+> **Assumed:** nodemailer over `@sendgrid/mail`/`resend`-style SDKs — SMTP is the one interface
+> both documented providers and any future one share.
+
 ## Layout
 
 Single package at the repo root (Next.js convention: root holds config only; **all application
@@ -1012,8 +1331,9 @@ blog0/
 ├── tsconfig.json  next.config.ts  drizzle.config.ts  vitest.config.ts  eslint.config.mjs
 ├── playwright.config.ts  playwright.design.config.ts          # main E2E (3411) / designer-mode E2E (3413)
 ├── Dockerfile  .dockerignore                                  # Phase 5 image (§12.1)
-├── .github/workflows/ci.yml                                   # Phase 5 CI (§12.4)
-├── docs/deploy.md                                             # Phase 5 runbook
+├── docker-compose.yml                                         # Phase 7: postgres + listmonk (+ blog0 under --profile app) (§12.6)
+├── .github/workflows/ci.yml                                   # Phase 5 CI (§12.4); Phase 7 adds the listmonk compose step to `integration`
+├── docs/deploy.md                                             # Phase 5 runbook; Phase 7 adds Newsletter (SMTP options, Listmonk, cron for newsletter:tick)
 ├── dist/                        # gitignored build output: release.mjs (pnpm build:release)
 ├── spec/                                    # this spec + design reference (never edited by generators); spikes/pglite.md = spike verdict
 ├── scripts/
@@ -1021,6 +1341,7 @@ blog0/
 │   ├── db-create.ts  db-migrate.ts  db-verify.ts  db-seed.ts  db-seed-posts.ts  create-admin.ts
 │   ├── check-openrouter.ts  eval-jev.ts  seed-tldr.ts  spike-pglite.ts
 │   ├── release.ts  build-release.mjs  backup.ts  restore.ts  container-e2e.sh    # Phase 5 (§12)
+│   ├── newsletter-sync.ts  newsletter-tick.ts  listmonk-dev.sh  compose/init-db.sh   # Phase 7 (§12.6, §13.3)
 │   ├── dev-design.mjs           # `dev:design`: runDesignerSetup() in-process, then the hot-reload dev server
 │   ├── make-image-fixtures.ts  make-audio-fixture.sh     # regenerate tests/fixtures/{images,audio}
 │   └── lib/{cli,allow-server-only}.ts  lib/empty-module.mjs  lib/container-env.mjs   # CLI helpers; server-only shim; esbuild alias target; container env file
@@ -1033,18 +1354,23 @@ blog0/
 │   │   ├── sitemap.ts  robots.ts
 │   │   ├── (site)/              # public, wrapped by Boot/Masthead/Footer chrome
 │   │   │   ├── layout.tsx  page.tsx  not-found.tsx  error.tsx  archive/page.tsx  about/page.tsx
+│   │   │   ├── newsletter/{confirm,unsubscribe}/page.tsx   # Phase 7 link pages (site chrome, force-dynamic)
 │   │   │   └── p/[slug]/{page.tsx, tldr/page.tsx, listen/page.tsx, _lib/article-route.tsx}   # articleRoute(initialMode) factory
 │   │   ├── admin/
 │   │   │   ├── layout.tsx  login/page.tsx
 │   │   │   └── (authed)/        # layout.tsx calls requireAdminPage()
 │   │   │       ├── page.tsx (desk)  articles/new/page.tsx  articles/[id]/page.tsx  site/page.tsx  subscribers/page.tsx
+│   │   │       ├── subscribers/[id]/page.tsx  newsletter/page.tsx  newsletter/new/page.tsx  newsletter/[id]/page.tsx   # Phase 7
 │   │   │       └── ai-usage/  team/                       # Phase 4 (on hold) — not yet created
 │   │   ├── media/[...key]/route.ts                        # GET/HEAD, 200/206/304/416 (§9.2)
 │   │   └── api/
 │   │       ├── health/route.ts  health/{live,ready}/route.ts  newsletter/route.ts  auth/{login,logout,me}/route.ts
+│   │       ├── newsletter/{confirm,unsubscribe,webhook}/route.ts          # Phase 7
 │   │       ├── public/articles/[slug]/{tldr,listen}/route.ts
-│   │       └── admin/{preview,site,subscribers}/route.ts  admin/uploads/images/route.ts
-│   │           admin/articles/route.ts  admin/articles/[id]/{route.ts, publish/, unpublish/, tldr/, tldr/generate/, audio/, listen/}
+│   │       ├── admin/{preview,site,subscribers}/route.ts  admin/uploads/images/route.ts
+│   │       │   admin/articles/route.ts  admin/articles/[id]/{route.ts, publish/, unpublish/, tldr/, tldr/generate/, audio/, listen/}
+│   │       └── admin/subscribers/[id]/{route.ts, send-confirmation/, unsubscribe/}  admin/subscribers/send-legacy-confirmations/route.ts   # Phase 7
+│   │           admin/newsletter/{settings,sync,issues}/route.ts  admin/newsletter/issues/[id]/{route.ts, preview/, test/, send/, stats/}
 │   ├── components/
 │   │   ├── StubNotice.tsx
 │   │   ├── design/              # Icon, Typewriter, Wordmark, SplitHeadline, Dek, motion.ts, overlay.ts
@@ -1053,7 +1379,9 @@ blog0/
 │   │   ├── figures/             # FigSlide47, FigAB, registry.ts
 │   │   └── admin/               # api.ts, AdminLoad.tsx (useAdminLoad/AdminLoadError), LoginForm, DeskHeader, DeskView, ArticleTable, FormatChips, NewArticleForm, labels.ts, relative-time.ts,
 │   │                            #   editor/ (ArticleEditor, PublishBar, WriteTab, MarkdownEditor, LivePreview, ImageUploadButton, insert-image.ts, TldrTab, tldr-generate.ts, ListenTab, HistoryTab, fields.ts, use-article-doc.ts),
-│   │                            #   tldr/ (DeckList, SentencePicker, DeckPreview, deck-edit.ts), listen/ (AudioUploader, listen-api.ts), site/, subscribers/
+│   │                            #   tldr/ (DeckList, SentencePicker, DeckPreview, deck-edit.ts), listen/ (AudioUploader, listen-api.ts), site/ (+ NewsletterSettings.tsx, Phase 7),
+│   │                            #   subscribers/ (SubscribersView, StatusFilter, SubscriberDetail, SubscriberTimeline, subscribers-api.ts — Phase 7),
+│   │                            #   newsletter/ (IssueList, IssueDetail, IssuePreview, IssueCompose, SendDialog, SendLog, IssueStats, issues-api.ts — Phase 7)
 │   ├── lib/                     # isomorphic, pure, no I/O
 │   │   ├── api/envelope.ts  api/dto.ts   # ALL API DTOs, one file grouped by domain sections
 │   │   ├── articles/limits.ts   # ARTICLE_LIMITS (spec/api.md PATCH)
@@ -1070,7 +1398,11 @@ blog0/
 │   │   ├── designer/{secret,admin,setup}.ts
 │   │   ├── http/api.ts
 │   │   ├── auth/{session,guard,password,login,rate-limit}.ts
-│   │   ├── users/repo.ts  site/{current,defaults,service}.ts  newsletter/{service,rate-limit}.ts
+│   │   ├── users/repo.ts  site/{current,defaults,service}.ts
+│   │   ├── newsletter/{constants,tokens,schemas,repo,service,links,legacy,prune,audit,rate-limit,settings,sender-hook}.ts   # Phase 7 list (§13.1)
+│   │   │   newsletter/mail/{transport,templates,index}.ts                          # §13.2 (nodemailer SMTP | stub)
+│   │   │   newsletter/sender/{types,listmonk,stub,sync,index}.ts                   # §13.3
+│   │   │   newsletter/issues/{repo,service,snapshot,render,triggers,digest,send}.ts   # §13.4–13.5
 │   │   ├── content/{index,ast,markdown,render,sentences,paragraph-ids,fingerprint,stats,highlight,cache}.ts
 │   │   │   content/plugins/{figure-markers,heading-shift,raw-html,code-langs,external-links,images,tables,safe-urls}.ts
 │   │   ├── formats/{types,payload,index,read,tldr,listen}.ts      # formats/status.ts: Phase 4 (on hold), future
@@ -1093,8 +1425,10 @@ blog0/
 │   ├── integration/*.test.ts    # incl. rate-limit-db, release, health-probes, backup-restore (§12)
 │   ├── unit/ops/{lifecycle,backup-manifest}.test.ts  unit/http/csp.test.ts  unit/proxy.test.ts (nonce/CSP)
 │   │   unit/auth/rate-limit-store.test.ts  unit/llm/key.test.ts
-│   ├── e2e/{tldr,reader,listen,smoke,designer-mode}.spec.ts  e2e/{global-setup,designer.global-setup}.ts
-│   │   e2e/helpers/{admin,article-text,db,jev-key,logs,share,upload}.ts
+│   ├── e2e/{tldr,reader,listen,smoke,newsletter,designer-mode}.spec.ts  e2e/{global-setup,designer.global-setup}.ts   # newsletter: Phase 7, after smoke
+│   │   e2e/helpers/{admin,article-text,db,jev-key,logs,share,upload,newsletter}.ts
+│   ├── integration/newsletter{,-links,-admin,-issues,-sync,-listmonk,-webhook}.test.ts   # Phase 7 (listmonk: real container or PENDING DOCKER)
+│   ├── unit/newsletter/{tokens,templates,render,digest,schemas,sender-stub}.test.ts  fixtures/newsletter/issue-2-posts.{html,txt}   # Phase 7
 │   └── fixtures/articles/{hard-cases,e2e-article}.md  fixtures/audio/{sample.mp3,sample.m4a,sample.json,not-audio.wav}
 │       fixtures/images/{sample.png,sample.jpg,sample.webp,tiny.gif,sample.svg,sample.json}
 └── var/                         # gitignored runtime data (storage*, pglite*, pglite-session-secret, designer-admin.txt, backups)
@@ -1223,7 +1557,7 @@ timings, copy). Numbers are stable (other files cite them).
 12. **Footer links**: X/LinkedIn only when the site has their URLs; no RSS (user).
 13. **Contact mail**: `hello@logzero.blog` (seeded, editable in Admin → Site).
 14. **About copy**: the design's full `ABOUT_BODY_FULL` is seeded.
-15. **Newsletter success copy**: "You’re in. First issue lands Thursday."
+15. **Newsletter success copy**: Phase 2 used the design's "You’re in. First issue lands Thursday."; **Phase 7 amends it** to "Almost there — check your inbox and confirm." (double opt-in makes the old line false), and the line under the form becomes the site's editable consent text (default "One issue a week at most. Unsubscribe in one click; we never share the list.").
 19. **Featured**: per-article `is_featured` + `featured_rank`, stack treatment, max 4; seeded `ai-will-destroy-the-world`, `tech-company-first`, `humans-are-software`.
 20. **Seeded decks** (user): `pnpm seed:tldr` (Jev with a real key, committed fixture without); the design's paraphrased arrays are never seeded.
 21. **In-deck poll** (`DeckPoll`) not ported.

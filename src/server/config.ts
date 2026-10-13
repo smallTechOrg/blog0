@@ -91,11 +91,49 @@ export interface Config {
   rateLimitStore: RateLimitStoreSetting;
   /** BLOG0_SHUTDOWN_TIMEOUT_MS: drain deadline after SIGTERM/SIGINT (§12.2). */
   shutdownTimeoutMs: number;
+  /** Phase 7 (spec/architecture.md §10, §13): transactional mail transport, sender adapter, webhook. */
+  newsletter: NewsletterConfig;
   isProduction: boolean;
 }
 
 export type RateLimitStoreSetting = 'auto' | 'db' | 'memory';
 export const RATE_LIMIT_STORES: readonly RateLimitStoreSetting[] = ['auto', 'db', 'memory'];
+
+export type NewsletterSenderSetting = 'listmonk' | 'stub';
+export const NEWSLETTER_SENDERS: readonly NewsletterSenderSetting[] = ['listmonk', 'stub'];
+
+/** BLOG0_SMTP_*: nodemailer SMTP for confirmation / test messages (§13.2). `null` ⇒ the stub transport. */
+export interface SmtpConfig {
+  host: string;
+  /** 465 ⇒ implicit TLS (`secure: true`); anything else ⇒ STARTTLS (`requireTLS: true`). */
+  port: number;
+  /** Both null ⇒ unauthenticated relay (IP-allowlisted). Never one without the other. */
+  user: string | null;
+  pass: Secret | null;
+  /** `Name <address>` or a bare address — the From of every transactional message. */
+  from: string;
+}
+
+/** BLOG0_LISTMONK_*: present only when `sender === 'listmonk'` (§13.3). */
+export interface ListmonkConfig {
+  /** Base URL without a trailing slash, e.g. http://localhost:9000. */
+  url: string;
+  apiUser: string;
+  apiToken: Secret;
+  /** The one Listmonk list blog0 mirrors into. */
+  listId: number;
+}
+
+export interface NewsletterConfig {
+  smtp: SmtpConfig | null;
+  sender: NewsletterSenderSetting;
+  listmonk: ListmonkConfig | null;
+  /** BLOG0_NEWSLETTER_WEBHOOK_SECRET (≥ 24 chars). null ⇒ POST /api/newsletter/webhook answers 404. */
+  webhookSecret: Secret | null;
+}
+
+/** From used by the stub transport when BLOG0_SMTP_HOST is unset (§10). */
+export const STUB_MAIL_FROM = 'blog0 <newsletter@localhost>';
 
 export const CONFIG_DEFAULTS = {
   port: 3410,
@@ -113,6 +151,8 @@ export const CONFIG_DEFAULTS = {
   trustedProxyHops: 0,
   rateLimitStore: 'auto' as RateLimitStoreSetting,
   shutdownTimeoutMs: 8000,
+  smtpPort: 587,
+  newsletterSender: 'stub' as NewsletterSenderSetting,
 } as const;
 
 export class ConfigError extends Error {
@@ -335,6 +375,8 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
 
   const shutdownTimeoutMs = int(problems, env, 'BLOG0_SHUTDOWN_TIMEOUT_MS', CONFIG_DEFAULTS.shutdownTimeoutMs, 1000, 120_000);
 
+  const newsletter = loadNewsletter(problems, env);
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const target = database as ParsedDatabaseUrl;
@@ -367,7 +409,90 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     trustedProxyHops,
     rateLimitStore: rateLimitStore as RateLimitStoreSetting,
     shutdownTimeoutMs,
+    newsletter,
     isProduction,
+  };
+}
+
+/** `Name <address>` or a bare address (RFC 5322 is far wider; this catches the copy-paste mistakes). */
+const MAILBOX_RE = /^(?:[^<>\r\n]*<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/;
+
+/**
+ * Phase 7 newsletter settings (§10 rows BLOG0_SMTP_* / BLOG0_NEWSLETTER_* / BLOG0_LISTMONK_*).
+ * Nothing set ⇒ stub transport + stub sender, so designer mode, tests and E2E need no SMTP.
+ * Pushes every problem onto `problems`; the caller aggregates them into one ConfigError.
+ */
+function loadNewsletter(problems: string[], env: Env): NewsletterConfig {
+  // --- SMTP transport: BLOG0_SMTP_HOST decides; the other SMTP values are read only when it is set.
+  let smtp: SmtpConfig | null = null;
+  const host = plain(env, 'BLOG0_SMTP_HOST');
+  if (host !== undefined) {
+    const port = int(problems, env, 'BLOG0_SMTP_PORT', CONFIG_DEFAULTS.smtpPort, 1, 65535);
+    const user = plain(env, 'BLOG0_SMTP_USER');
+    const pass = secret(env, 'BLOG0_SMTP_PASS');
+    if (pass !== undefined && isPlaceholder(pass)) {
+      problems.push(placeholderProblem('BLOG0_SMTP_PASS'));
+    } else if ((user === undefined) !== (pass === undefined)) {
+      problems.push('BLOG0_SMTP_USER and BLOG0_SMTP_PASS must be set together (both empty = unauthenticated relay)');
+    }
+    const from = plain(env, 'BLOG0_SMTP_FROM');
+    if (from === undefined) {
+      problems.push('BLOG0_SMTP_FROM is required when BLOG0_SMTP_HOST is set (e.g. `blog0 <newsletter@example.com>`)');
+    } else if (!MAILBOX_RE.test(from)) {
+      problems.push('BLOG0_SMTP_FROM must be an email address or `Name <address>`');
+    }
+    smtp = {
+      host,
+      port,
+      user: user ?? null,
+      pass: pass === undefined ? null : new Secret(pass),
+      from: from ?? '',
+    };
+  }
+
+  // --- Sender adapter: stub by default; listmonk needs all four BLOG0_LISTMONK_* values.
+  const senderRaw = plain(env, 'BLOG0_NEWSLETTER_SENDER') ?? CONFIG_DEFAULTS.newsletterSender;
+  const sender = NEWSLETTER_SENDERS.includes(senderRaw as NewsletterSenderSetting) ? (senderRaw as NewsletterSenderSetting) : null;
+  if (sender === null) problems.push(`BLOG0_NEWSLETTER_SENDER must be one of ${NEWSLETTER_SENDERS.join('|')}`);
+
+  let listmonk: ListmonkConfig | null = null;
+  if (sender === 'listmonk') {
+    const requiredWith = (name: string) => `${name} is required when BLOG0_NEWSLETTER_SENDER=listmonk`;
+    const urlRaw = plain(env, 'BLOG0_LISTMONK_URL');
+    let url: string | null = null;
+    if (urlRaw === undefined) {
+      problems.push(requiredWith('BLOG0_LISTMONK_URL'));
+    } else {
+      url = httpUrl(urlRaw);
+      if (url === null) problems.push('BLOG0_LISTMONK_URL must be an absolute http(s) URL (e.g. http://localhost:9000)');
+    }
+    const apiUser = plain(env, 'BLOG0_LISTMONK_API_USER');
+    if (apiUser === undefined) problems.push(requiredWith('BLOG0_LISTMONK_API_USER'));
+    const apiToken = secret(env, 'BLOG0_LISTMONK_API_TOKEN');
+    if (apiToken === undefined) {
+      problems.push(requiredWith('BLOG0_LISTMONK_API_TOKEN'));
+    } else if (isPlaceholder(apiToken)) {
+      problems.push(placeholderProblem('BLOG0_LISTMONK_API_TOKEN'));
+    }
+    const listIdRaw = plain(env, 'BLOG0_LISTMONK_LIST_ID');
+    const listId = listIdRaw === undefined ? 0 : int(problems, env, 'BLOG0_LISTMONK_LIST_ID', 0, 1, Number.MAX_SAFE_INTEGER);
+    if (listIdRaw === undefined) problems.push(requiredWith('BLOG0_LISTMONK_LIST_ID'));
+    listmonk = { url: url ?? '', apiUser: apiUser ?? '', apiToken: new Secret(apiToken ?? ''), listId };
+  }
+
+  // --- Webhook bearer secret: optional; unset ⇒ the webhook route answers 404.
+  const webhookSecret = secret(env, 'BLOG0_NEWSLETTER_WEBHOOK_SECRET');
+  if (webhookSecret !== undefined && isPlaceholder(webhookSecret)) {
+    problems.push(placeholderProblem('BLOG0_NEWSLETTER_WEBHOOK_SECRET'));
+  } else if (webhookSecret !== undefined && webhookSecret.length < 24) {
+    problems.push('BLOG0_NEWSLETTER_WEBHOOK_SECRET must be at least 24 characters (openssl rand -base64 32)');
+  }
+
+  return {
+    smtp,
+    sender: sender ?? CONFIG_DEFAULTS.newsletterSender,
+    listmonk,
+    webhookSecret: webhookSecret === undefined ? null : new Secret(webhookSecret),
   };
 }
 

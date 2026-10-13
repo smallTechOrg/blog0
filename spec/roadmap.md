@@ -63,7 +63,9 @@ In scope: everything in `## Phases of Development` below.
 Out of scope (dropped or not planned): reader accounts, reactions, margin notes/comments,
 search, paid speech-to-text, multi-tenant admin UI, roles/permissions (all admins are equal),
 GitHub login (later), Markdown file upload and posts-repo sync (later — the content model is
-source-agnostic so they plug in without schema change), newsletter *sending* (signup only),
+source-agnostic so they plug in without schema change), newsletter A/B tests, scheduled sends,
+in-app open/click tracking and admin-editable email templates (Phase 7 ships owned list +
+issues via Listmonk; see `spec/capabilities/newsletter-issues.md` → Out of scope),
 RSS feed, image thumbnails on cards (design has them switched off), the design's retired
 component library (word cloud, tiers, pull quote, go-deeper aside, expand cards, featured
 rotator, sentence builder, in-deck poll).
@@ -87,12 +89,13 @@ rotator, sentence builder, in-deck poll).
 > **Decided (user, 2026-10-13):** manual tap-along sync is removed; Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred.
 > **Assumed:** Listen estimate constants — 150 words/minute and a 0.6 s pause per paragraph (1.5 word-equivalents); the first paragraph starts at 0 (`spec/capabilities/listen-sync.md`).
 > **Assumed:** Phases 5–6 are planned at lower fidelity; their capability files are written spec-first at the start of each phase.
+> **Decided (user, 2026-10-13):** Phase 7 — Newsletter: blog0 owns the list (double opt-in, proof of consent, append-only suppression); Listmonk sends; it is built before Phase 6. Everything else about it is `Assumed:` in `spec/capabilities/newsletter-{list,issues}.md` and `spec/architecture.md` §12.6/§13.
 > Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model slug (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and the open design divergences (`spec/architecture.md` → `## Design divergences (ask user)`).
 
 ## Phases of Development
 
 Scaffold and Phases 1–3 (with the Phase 3 fix) and Phase 5 are **done**; Phase 4 is **on hold**;
-Phase 6 is planned.
+**Phase 7 (Newsletter) is specified and next**; Phase 6 is planned after it.
 
 ### Planning rules (Phase 4 onward)
 
@@ -144,6 +147,11 @@ Phase 6 is planned.
 | `backup` | `tsx scripts/backup.ts` (`pnpm backup -- --out <dir>`) |
 | `restore` | `tsx scripts/restore.ts` (`pnpm restore -- --in <dir> --db <name> --storage <dir> [--force] [--check-only]`) |
 | `test:container` | `bash scripts/container-e2e.sh` (exit 3 = `PENDING DOCKER`) |
+| `newsletter:sync` | `tsx scripts/newsletter-sync.ts` (Phase 7: blog0 → Listmonk, idempotent; `-- --create-list` creates the list named `blog0` and prints its id) |
+| `newsletter:tick` | `tsx scripts/newsletter-tick.ts` (Phase 7: digest-due check, pull provider suppressions, refresh stats, prune IPs; run hourly by cron in production) |
+| `listmonk:up` | `bash scripts/listmonk-dev.sh up` (Phase 7: compose `postgres` + `listmonk`, ensures the API user + test list, writes `var/listmonk-dev.env`; exit 3 = `PENDING DOCKER`) |
+| `listmonk:down` | `bash scripts/listmonk-dev.sh down` |
+| `listmonk:reset` | `bash scripts/listmonk-dev.sh reset` (fresh `listmonk` database) |
 
 `check:openrouter` prints only booleans/numbers, never the key: key present, `GET {base}/key`
 valid, configured model (and the `spec/agent.md` §3 fallback list) listed on `GET {base}/models`,
@@ -483,3 +491,149 @@ UI; S6.4 reader sentence-level highlight; S6.5 E2E with the committed audio fixt
 
 **How the user tests it:** upload audio, click **Auto-sync**, wait for "Aligned 42/44 sentences",
 review, publish; the reader's Listen view now highlights sentence by sentence.
+
+---
+
+### Phase 7 — Newsletter ("own the list, Listmonk sends")
+
+**Goal:** blog0 owns the subscriber list with proof of consent — footer signup → confirmation
+email → click → `confirmed`; every subscriber carries signup/confirmation timestamps, IP, user
+agent, source page, the consent text + version shown, an append-only event timeline and an
+append-only suppression ledger; existing Phase 2 subscribers become `legacy_unconfirmed` and get
+one confirmation email only on an admin click. Issues are built from published posts (per post /
+digest / manual, never auto-sent unless the setting says so), previewed as HTML + text, tested to
+the admin, and sent with one click through a sender adapter — Listmonk over REST in production
+(its own database in the same Postgres instance, `docker-compose.yml`), a recording stub in
+designer mode and tests. Capabilities: `newsletter-list`, `newsletter-issues` (supersede
+`newsletter-signup`). HOW: `spec/architecture.md` §6 (link caps), §7 (events), §10 (env), §12.6
+(compose), §13 (list, mail, sender, issues); tables `spec/data.md` (`0002_newsletter`); HTTP
+`spec/api.md` → newsletter; screens `spec/ui.md` §3 (form, link pages) and §4 (Site → Newsletter,
+Subscribers, Subscriber, Newsletter issues). `spec/agent.md` §1: no AI in this phase (two
+opportunities considered and rejected). Built **before Phase 6** (user decision).
+
+**Before fan-out (orchestrator, one commit `phase-7: deps, scripts, config rows`):**
+- `package.json`: dependency `nodemailer` (latest 7.x, exact pin), devDependency
+  `@types/nodemailer` (matching major); scripts `newsletter:sync`, `newsletter:tick`,
+  `listmonk:up`, `listmonk:down`, `listmonk:reset` (table above); `pnpm install` to refresh the
+  lockfile. Nothing else new (Listmonk is reached with `fetch`; Markdown intro uses the existing
+  pipeline).
+- `next.config.ts`: `serverExternalPackages` gains `'nodemailer'`.
+- `src/server/config.ts` + `.env.example`: **every** Phase 7 variable of `spec/architecture.md`
+  §10 (`BLOG0_SMTP_HOST/PORT/USER/PASS/FROM`, `BLOG0_NEWSLETTER_SENDER`, `BLOG0_LISTMONK_URL/API_USER/API_TOKEN/LIST_ID`,
+  `BLOG0_NEWSLETTER_WEBHOOK_SECRET`) as the typed `config.newsletter = { smtp: {…} | null, sender: 'listmonk' | 'stub', listmonk: {…} | null, webhookSecret: string | null }`
+  with the validation rules of §10 (aggregated `ConfigError`, secret redaction, placeholder
+  rejection) and unit tests in `tests/unit/config.test.ts` (takes over) — behaviour-free, so no
+  slice touches `config.ts` / `.env.example` / `next.config.ts` / `package.json` afterwards.
+- Verify the Listmonk image tag of §12.6 exists (`docker manifest inspect listmonk/listmonk:v5.1.0`
+  or the registry page); pin the newest v5 patch if not, updating §12.6.
+- `git rm spec/capabilities/newsletter-signup.md` (tombstone) in the same commit.
+
+**Slices** — at most **2 code-generators run concurrently**, three waves. Within a wave the two
+slices own disjoint files; "takes over" = edits an existing file; a later wave may take over a
+file an earlier wave touched. `src/lib/api/dto.ts` is edited **only** by S7.1 (it writes the whole
+`newsletter` section of `spec/api.md` up front, so S7.3/S7.4 only import). The schema + migration
+are owned **only** by S7.1 (all Phase 7 tables and columns, including the issue tables and the
+`site` settings columns, so S7.3 needs no migration).
+
+| Wave | Slice | Owns (exclusive within its wave) | Depends on |
+|---|---|---|---|
+| 1 | **S7.1 Owned list** (`newsletter-list`) | `src/server/db/schema.ts` (takes over: widened `newsletterSubscriber`, new `newsletterSubscriberEvent`, `newsletterSuppression`, `newsletterMessage`, `newsletterIssue`, `newsletterIssueEvent`, `site` newsletter columns, `ALL_TABLE_NAMES`), `src/server/db/migrations/0002_newsletter.sql` + `meta/_journal.json` + `meta/0002_snapshot.json` (generated with `pnpm db:generate --name newsletter`, then hand-appended: the ledger-guard trigger, `newsletter_prune_event_ips`, the legacy backfill — Drizzle generates DDL only), `src/lib/api/dto.ts` (takes over: the whole `newsletter` section incl. `SiteSettingsDto.newsletter`), `src/server/newsletter/{constants,tokens,schemas,repo,service,links,legacy,prune,audit,settings}.ts` (`service.ts`, `rate-limit.ts` take over), `src/server/newsletter/mail/{transport,templates,index}.ts`, `src/server/newsletter/sender-hook.ts` (new: the no-op `afterConfirm`/`afterSuppress` hook that S7.3 wires to `sync.ts` in wave 2 — S7.1 never imports from `sender/`, which is S7.2's), `src/app/api/newsletter/route.ts` (takes over), `src/app/api/newsletter/{confirm,unsubscribe}/route.ts`, `src/app/(site)/newsletter/{confirm,unsubscribe}/page.tsx`, `src/app/api/admin/subscribers/route.ts` (takes over), `src/app/api/admin/subscribers/[id]/{route.ts, send-confirmation/route.ts, unsubscribe/route.ts}`, `src/app/api/admin/subscribers/send-legacy-confirmations/route.ts`, `src/server/site/service.ts` + `src/server/site/defaults.ts` + `src/server/seed/site.ts` (take over: newsletter columns in the site DTO/seed), `src/lib/view-models.ts` + `src/server/public/page-data.ts` (take over: `newsletterConsentText`), `src/components/site/NewsletterForm.tsx` (takes over: consent line, `sourceUrl`, new success copy), `src/components/site/Footer.tsx` (takes over: passes the consent text), `src/styles/additions.css` (takes over: `.nl-page`), `src/server/rate-window.ts` (takes over: `RateScope`), `tests/setup/integration-env.ts` (takes over: `BLOG0_NEWSLETTER_SENDER=stub`, empty `BLOG0_SMTP_HOST`), `tests/integration/newsletter.test.ts` (takes over), `tests/integration/{newsletter-links,newsletter-admin,site-settings}.test.ts` (site-settings takes over), `tests/unit/newsletter/{tokens,templates,schemas}.test.ts`, `tests/unit/db/*` (takes over: `ALL_TABLE_NAMES` expectations), `tests/e2e/reader.spec.ts` + `tests/e2e/smoke.spec.ts` (take over: the footer success copy assertion only) | — |
+| 1 | **S7.2 Sender adapter + Listmonk infra** (`newsletter-issues`, adapter half) | `src/server/newsletter/sender/{types,listmonk,stub,index}.ts`, `docker-compose.yml`, `scripts/listmonk-dev.sh`, `scripts/compose/init-db.sh`, `.gitignore` (takes over: `var/listmonk-dev.env` is under `var/` already — verify, else add), `tests/integration/newsletter-listmonk.test.ts` (real container; `PENDING DOCKER` skip rule — adapter-only: no blog0 tables), `tests/unit/newsletter/sender-stub.test.ts` (the stub's in-memory half; its DB writes are covered in wave 2), `tests/helpers/listmonk.ts` (reads `var/listmonk-dev.env`, `docker info` probe) | — (interface from `spec/architecture.md` §13.3; no blog0 schema access in wave 1 — the stub's `sendIssue` DB write lands in wave 2 via S7.3's call signature) |
+| 2 | **S7.3 Issues + sync + triggers** (`newsletter-issues`, issues half) | `src/server/newsletter/issues/{repo,service,snapshot,render,triggers,digest,send}.ts`, `src/server/newsletter/sender/sync.ts`, `src/server/newsletter/sender/stub.ts` (takes over: `sendIssue` writes `newsletter_message` rows per confirmed subscriber), `src/server/newsletter/sender-hook.ts` (takes over → delegates to `sync.ts`; or deleted if S7.1 called `sync.ts` directly through a lazy import — S7.3 decides and leaves no dead file), `src/app/api/newsletter/webhook/route.ts`, `src/app/api/admin/newsletter/{settings,sync,issues}/route.ts`, `src/app/api/admin/newsletter/issues/[id]/{route.ts, preview/, test/, send/, stats/}`, `src/app/admin/(authed)/newsletter/[id]/preview/route.ts` (admin-gated HTML preview), `src/server/articles/service.ts` (takes over: the after-commit publish hook), `scripts/newsletter-sync.ts`, `scripts/newsletter-tick.ts`, `tests/integration/{newsletter-issues,newsletter-sync,newsletter-webhook}.test.ts`, `tests/unit/newsletter/{render,digest}.test.ts`, `tests/fixtures/newsletter/issue-2-posts.{html,txt}` | S7.1 (schema, DTOs, list service), S7.2 (adapter) |
+| 2 | **S7.4 Admin UI** | `src/components/admin/DeskHeader.tsx` (takes over: **Newsletter** link), `src/components/admin/subscribers/**` (`SubscribersView.tsx` takes over; new `StatusFilter`, `SubscriberDetail`, `SubscriberTimeline`, `subscribers-api.ts`), `src/app/admin/(authed)/subscribers/page.tsx` (takes over) + `subscribers/[id]/page.tsx`, `src/components/admin/site/NewsletterSettings.tsx` + the site page/components that mount it (take over), `src/components/admin/newsletter/**`, `src/app/admin/(authed)/newsletter/{page.tsx, new/page.tsx, [id]/page.tsx}`, `src/styles/admin.css` (takes over), `tests/unit/admin/newsletter-*.test.tsx` (pure component tests with mocked `apiRequest`) | S7.1 (DTOs — builds against the contract); S7.3's routes are only needed at runtime (verified by S7.5) |
+| 3 | **S7.5 Newsletter E2E + designer** | `tests/e2e/newsletter.spec.ts`, `tests/e2e/helpers/newsletter.ts` (confirm URL from `BLOG0_E2E_LOG_FILE` or `newsletter_message` via `helpers/db.ts`), `playwright.config.ts` (takes over: project `newsletter` after `smoke`; `webServer.env` adds `BLOG0_NEWSLETTER_SENDER: 'stub'`, `BLOG0_SMTP_HOST: ''`), `tests/e2e/designer-mode.spec.ts` (takes over: signup → confirm via the logged URL → admin shows Confirmed), `tests/e2e/global-setup.ts` (takes over only if the newsletter walk needs seeded subscribers — prefer creating them in the spec) | S7.1–S7.4 |
+| 3 | **S7.6 CI, runbook, README** | `.github/workflows/ci.yml` (takes over: `integration` job runs `pnpm listmonk:up` before `pnpm test:integration` — Docker is available on `ubuntu-latest` — and `pnpm listmonk:down` after; `e2e` unchanged), `docs/deploy.md` (takes over: **Newsletter** section — SMTP with the two documented options as placeholders, Google Workspace relay `smtp-relay.gmail.com:587` and Brevo `smtp-relay.brevo.com:587`, never picking one; Listmonk beside blog0 via `docker-compose.yml`, its SMTP in its own UI, API user + list id; the hourly `pnpm newsletter:tick` cron line; webhook secret; `pnpm newsletter:sync` after a `BLOG0_SESSION_SECRET` rotation; new env rows in the Environment table), `README.md` (takes over: scripts, env vars, the designer-mode note that confirmation links are printed in the server log), `scripts/lib/container-env.mjs` (takes over only if `BLOG0_SMTP_*`/`BLOG0_LISTMONK_*` need excluding from the container env — they do not; verify and leave), `tests/integration/release.test.ts` + `backup-restore.test.ts` (take over: expectations for `3 applied (latest 0002_newsletter)` and the new tables in the manifest) | S7.1–S7.4 |
+
+Slice notes (rules live in the capability files and architecture; these are only the hand-offs):
+- S7.1 and S7.2 are disjoint by construction: S7.1 never imports from `sender/` (it calls
+  `sender-hook.ts`, a 10-line file exporting `afterConfirm(subscriber)` / `afterSuppress(subscriber)`
+  that no-op and log at `debug` until S7.3 wires them to `sync.ts`). S7.2 never touches the
+  schema or any route.
+- S7.1's migration backfill is SQL appended to the generated `0002_newsletter.sql` after a
+  `--> statement-breakpoint`; `pnpm db:verify` must still report `0 pending` and the designer
+  path (`pglite://`) must run the same file — the trigger function uses plain PL/pgSQL (no
+  extensions; PGlite verdict stands, re-run `pnpm spike:pglite` only if a probe is added).
+- S7.2's Listmonk test sources `var/listmonk-dev.env` (written by `pnpm listmonk:up`); when
+  `docker info` fails it skips with the reason `PENDING DOCKER: start it with colima start, then pnpm listmonk:up`;
+  when Docker runs but the env file is missing it **fails** with "run pnpm listmonk:up".
+- S7.3's publish hook must never make `publishArticle` throw and must run after
+  `deleteStoredFiles`; `tldr-flow`/`articles-api` tests stay green (manual mode default).
+- S7.4 builds against `spec/api.md` DTOs with mocked requests; its first real run is S7.5.
+- S7.5's E2E spec is the brief's walk in one Playwright project: signup → confirm → confirmed →
+  export audit → Site → Newsletter per_post → publish → draft issue → preview HTML + text → send
+  test → send (stub) → send log + stats → unsubscribe link from the stub message → suppression in
+  the subscriber view; the designer spec adds only signup → confirm → Confirmed.
+
+> **Assumed:** three waves of two (S7.1‖S7.2, S7.3‖S7.4, S7.5‖S7.6); the only shared files
+> (`schema.ts`, `dto.ts`, `stub.ts`, `sender-hook.ts`, `articles/service.ts`, `playwright.config.ts`,
+> `ci.yml`) are each edited in different waves.
+> **Assumed:** Listmonk in CI through `docker compose` on the GitHub runner (~40 s to healthy);
+> if the runner cannot pull the image the adapter test reports `PENDING DOCKER` and the job
+> prints a `::warning::`, mirroring the real-key rule — never a silent pass.
+
+**Gate (exact)** — `.env` as in the planning rules; `BLOG0_NEWSLETTER_SENDER` unset or `stub` and
+no `BLOG0_SMTP_HOST` in `.env` (the stub paths are what the gate proves; the Listmonk adapter is
+proven by its own test against the compose container):
+```bash
+pnpm install --frozen-lockfile
+pnpm db:migrate && pnpm db:verify            # "blog0_dev @ PostgreSQL 18.x — 3 applied (latest 0002_newsletter), 0 pending: OK"
+pnpm release                                 # "… 3 applied (latest 0002_newsletter), 0 pending: OK" then "site blog0 ok, admin <masked> ok"
+pnpm typecheck && pnpm lint && pnpm test:unit            # + newsletter/{tokens,templates,render,digest,schemas,sender-stub}, admin/newsletter-*
+pnpm listmonk:up                             # exit 0 → var/listmonk-dev.env; exit 3 → report "PENDING DOCKER" for the two Listmonk lines below (never a pass)
+set -a && . var/listmonk-dev.env && set +a    # only when listmonk:up exited 0
+pnpm test:integration                        # + newsletter, newsletter-links, newsletter-admin, newsletter-issues, newsletter-sync, newsletter-webhook, newsletter-listmonk (real container) — real blog0_test; real OpenRouter where already required (PENDING KEY rule)
+BLOG0_NEWSLETTER_SENDER=listmonk pnpm newsletter:sync    # against blog0_dev + the compose Listmonk: "synced N, blocklisted N, skipped N, N changed"; second run "… 0 changed"
+pnpm listmonk:down
+BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_DIST_DIR=.next-gate pnpm test:e2e      # tldr → reader → listen → smoke → newsletter (stub sender + stub mail)
+pnpm test:e2e:design                         # designer mode: signup → confirm via logged URL → Confirmed; no SMTP, no Listmonk, no .env
+pnpm test:container                          # exit 0 → "container-e2e: PASS" (the newsletter E2E now runs inside it; the container gets no SMTP → stub); exit 3 → "PENDING DOCKER"
+pnpm backup -- --out var/backups && pnpm restore -- --in "$(ls -td var/backups/blog0-* | head -1)" --db blog0_restore_check --storage var/restore-check/storage --force   # "restore-check: OK" — manifest lists the 6 newsletter tables
+# Boot check (background tool): pnpm start   then:
+curl -fsS http://localhost:3410/api/health/ready                                       # "pending":0
+curl -fsS -o /dev/null -w "%{http_code}\n" "http://localhost:3410/newsletter/confirm?t=not-a-token"   # 404
+curl -fsS -X POST -H 'content-type: application/json' -H 'origin: http://localhost:3410' -d '{"email":"gate@example.test","sourceUrl":"/"}' http://localhost:3410/api/newsletter   # {"ok":true,"data":{"subscribed":true}}
+# the server output has one newsletter.mail line with "transport":"stub" and a confirm_url; opening that URL answers 200 and contains "You’re subscribed"
+```
+Lines that depend on Docker are reported `PENDING DOCKER` when the daemon is down — the gate is
+then "pending docker", not passed. The CI workflow change is proven by its first run on push
+(`gh run watch`); until then that line is `PENDING CI`.
+
+**How the user tests it:**
+1. *Designer path* (no `.env`): `pnpm dev:design`, open `http://localhost:3410/`, scroll to the
+   footer: the line under the form is the consent text; subscribe → "Almost there — check your
+   inbox and confirm." The terminal shows a `newsletter.mail` line with `transport: 'stub'` and a
+   `confirm_url` — open it → "You’re subscribed." Sign in at `/admin`, **Subscribers** → the
+   address is **Confirmed**; open it → proof of consent (source `/`, consent v1, your browser's
+   user agent, IP "not recorded — no trusted proxy") and the timeline (Signed up, Confirmation
+   email sent (stub), Confirmed, Synced). **Export audit (JSON)** → a file naming the address with
+   its events. **Site → Newsletter** shows "Sender: Stub".
+2. *Issues* (designer or full path): **Site → Newsletter** → mode **Per post**, auto-send off,
+   **Save**. Publish any article → **Newsletter** lists one **Draft** issue titled like it; open it:
+   HTML preview (title, dek, excerpt, **Read**, plus **TLDR**/**Listen** when published), **Text**
+   tab; **Send test to me** → "Test sent to <your email> (stub)"; **Send** → "Send to 1 confirmed
+   subscriber?" → **Send now** → **Sent · 1 recipient**, the send log shows Send requested →
+   Campaign created → Campaign started → Sent; **Stats**: sent 1. In the subscriber's view the
+   **Messages** card lists the issue; its unsubscribe link → "You’re unsubscribed." → the
+   subscriber is **Unsubscribed** with one suppression entry; a second click on the same link
+   shows the same page and adds nothing. Sign up again from the footer with the same address →
+   **Pending** with a new signup event, the suppression entry still there; confirm → **Confirmed**
+   with a "Re-subscribed" event.
+3. *Legacy*: in a database with Phase 2 subscribers (or after `psql … -c "insert into
+   newsletter_subscriber (site_id,email,status) …"` before migrating), they appear as **Legacy**;
+   nothing is sent until **Send the one-time confirmation** (per row) or **Send confirmation to
+   all legacy** (Site → Newsletter); the button is spent afterwards; the click confirms them.
+4. *Full path with Listmonk* (Colima): `pnpm listmonk:up`, then with `BLOG0_NEWSLETTER_SENDER=listmonk`
+   and the four values from `var/listmonk-dev.env` in `.env`, `pnpm build && pnpm start`:
+   **Site → Newsletter** reads "Sender: Listmonk · list blog0-test · healthy"; **Sync to
+   Listmonk** → "Synced N"; open `http://localhost:9000` (admin / the compose password) →
+   Subscribers shows the confirmed addresses with `blog0_consent_line` and `blog0_unsubscribe_url`
+   attributes and the unsubscribed ones blocklisted. **Send** an issue → Listmonk → Campaigns
+   shows "blog0 #N — <title>" running/finished (no SMTP configured in Listmonk, so nothing leaves
+   the machine); **Refresh stats** fills the tiles. Blocklist an address in Listmonk's UI, run
+   `pnpm newsletter:tick` → the subscriber is **Unsubscribed** in blog0 with a provider-sourced
+   suppression.
+5. *Real mail* (optional, needs an SMTP relay): set `BLOG0_SMTP_*` per `docs/deploy.md` (Google
+   Workspace relay or Brevo — placeholders, your choice), restart, subscribe with a real address
+   → the confirmation arrives; **Send test to me** arrives with `[Test]` in the subject. No
+   labelled stubs remain in this phase; the only non-delivering surface is the explicitly
+   labelled **Stub** sender/mail in the Site → Newsletter status strip.
