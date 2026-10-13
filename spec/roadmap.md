@@ -202,7 +202,7 @@ Health body: `{"ok":true,"data":{"status":"ok","db":"ok","dbLatencyMs":<n>,"vers
 ### Phase 1 — TLDR end-to-end (the first win)
 
 **Goal:** a writer signs in, pastes Markdown, sees the live Read preview, clicks **Generate** →
-Jev picks lines (real OpenRouter call) with reasons, hand-edits the deck, publishes; the public
+Jev picks lines (real OpenRouter call) with reasons (Phase 8 replaced reasons with relevance scores), hand-edits the deck, publishes; the public
 article page shows the Read view and the TLDR deck playing exactly like the design. Capabilities:
 `admin-auth`, `article-authoring`, `jev-tldr`, `article-reading` (+ the computed-status part of
 `format-lifecycle` and the recording part of `ai-cost-ledger`). Jev's full composition is a single
@@ -227,7 +227,7 @@ curl -fsS -o /dev/null -w "%{http_code}\n" http://localhost:3410/admin/login   #
    `src/server/seed/posts/tech-company-first.md`). The preview renders it as readers will see it,
    including the two interactive figures.
 3. **Save** (or Cmd/Ctrl+S) → "Saved · rev 1". **TLDR** tab → **Generate with Jev**: within
-   ~5–20 s a deck of 4–8 lines appears, each with Jev's reason and a cost line.
+   ~5–20 s a deck of 4–8 lines appears, each with Jev's reason and a cost line (Phase 8 replaced reasons with relevance scores).
 4. Remove a line, add another from the article list, move one up, **Preview deck**, **Save deck**.
 5. **Publish** → **View live**; click **TLDR** in the capsule: intro slide with "Lines selected by
    Jev (AI)…", auto-advance, arrows/scroll/swipe, end slide with Read + Share; the address is
@@ -749,7 +749,7 @@ so the gap is known; reopening any of them is a new user decision.
 | Publication record | Phase 4 | Public "Published · Updated" date, optional dated corrections note (`spec/capabilities/publication-record.md`; columns exist unused). |
 | Editor sign-off | Phase 4 | Submit for review / Approve states on the desk (self-publish allowed; columns exist unused). |
 | AI cost dashboard | Phase 4 | Per-generation list and site-wide month-to-date total (`spec/capabilities/ai-cost-ledger.md`; recording is live). |
-| TLDR stale banner | Phase 4 | Editor banner offering **Regenerate** when the text changed (`spec/capabilities/format-lifecycle.md`; the stale chip and the Regenerate button are live). |
+| TLDR stale banner | Phase 4 | Editor banner offering **Regenerate** when the text changed (`spec/capabilities/format-lifecycle.md`; the stale chip, a text-only stale notice in the TLDR tab and the header Generate/Regenerate button are live; frozen = a banner with its own Regenerate action). |
 | Team accounts | Phase 4 | Team page to add admins and change one's own password (`spec/capabilities/admin-auth.md` → Team additions; the CLI `admin:create` is live). |
 | Revision history | deferred | Browse, view and restore revisions (`spec/capabilities/revision-history.md`; revisions are recorded on every save; History tab stays a labelled stub). |
 | Whisper alignment | Phase 6 | Exact Listen timing from a local Whisper aligner, then sentence-level highlight; the sync storage and aligner-facing `PUT /api/admin/articles/:id/listen` are kept for it (`spec/capabilities/listen-sync.md`). |

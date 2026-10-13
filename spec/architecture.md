@@ -134,13 +134,13 @@ export interface ListenViewModel {
 export interface ArticleViewModel {
   slug: string; title: string; dek: string; topic: string; bylineName: string;
   publishedLabel: string;            // fmtDate(first_published_at, site tz) e.g. "8 Sep 2026"
-  updatedLabel: string | null;       // Phase 4 (on hold): always null
+  updatedLabel: string | null;       // Frozen — not scheduled: always null
   inProgress: boolean;
   blocks: Block[];                   // from RenderedArticle
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null;        // published deck only
   listen: ListenViewModel | null;    // published Listen only
-  correctionsHtml: string | null;    // Phase 4 (on hold): always null
+  correctionsHtml: string | null;    // Frozen — not scheduled: always null
   next: { slug: string; title: string } | null;
   articleUrl: string;                // absolute
 }
@@ -623,7 +623,7 @@ so legacy payloads parse).
   - `audioRefOf(payload)` reads `{ assetId, key }` from a stored listen payload.
   Publishing a Listen that supersedes an unreferenced recording uses the same two steps.
 
-## 10. Configuration (env → `src/server/config.ts`; every row documented 1:1 in `.env.example` except the build-only `BLOG0_STANDALONE` and `CI`)
+## 10. Configuration (env → `src/server/config.ts`; every row documented 1:1 in `.env.example` except the build-only `BLOG0_STANDALONE` and `CI`, and the local/scripts-only `BLOG0_EVAL_LOG_LEVEL`, `BLOG0_LISTMONK_PORT` and `BLOG0_LISTMONK_PURGE` — local/scripts only, not in `.env.example`)
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
@@ -661,6 +661,9 @@ so legacy payloads parse).
 | `BLOG0_LISTMONK_API_USER` / `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | a Listmonk **API user** + its token (Listmonk ≥ v4, Settings → Users); `TOKEN` is a secret field |
 | `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | integer id of the list blog0 mirrors into (created once by hand or by `pnpm newsletter:sync --create-list`); blog0 never sends to any other list |
 | `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | no | — | ≥ 24 chars; secret field. Unset ⇒ `POST /api/newsletter/webhook` answers 404 |
+| `BLOG0_EVAL_LOG_LEVEL` | no | `warn` | scripts only (local/scripts only, not in `.env.example`; not read by `config.ts`): `scripts/eval-jev.ts` (`pnpm eval:jev`) sets `BLOG0_LOG_LEVEL` from it, e.g. `info` to see every `llm.call` |
+| `BLOG0_LISTMONK_PORT` | no | `9000` | compose/local only (not in `.env.example`; not read by `config.ts`): the host port of the compose Listmonk (`docker-compose.yml` port mapping + `root_url`) and `scripts/listmonk-dev.sh` (§12.6) |
+| `BLOG0_LISTMONK_PURGE` | no | `0` | local only (not in `.env.example`; not read by `config.ts`): `1` makes `scripts/listmonk-dev.sh down` also drop the compose volumes (same as `down -v`) |
 | `BLOG0_DIST_DIR` | no | `.next` | not read by `config.ts`: `next.config.ts` `distDir`. A separate build dir (e.g. `.next-gate`) so a gate/CI `pnpm build` never overwrites the `.next` a running `pnpm start` serves; build and start with the same value (`scripts/serve.mjs` and the E2E `webServer` inherit it); `.next-*/` is gitignored |
 | `CI` | no | — | not a `BLOG0_*` setting: enables Playwright `forbidOnly`; when `BLOG0_REQUIRE_REAL_KEY` is unset, `CI=true` turns a missing/placeholder OpenRouter key from a `PENDING KEY` skip into a failure (Conventions → Real-key tests) |
 | (derived) `dbEngine` | — | — | not an env var: `getConfig().dbEngine` is `'postgres' \| 'pglite'`, from the URL scheme; reported by `app.boot` and `/api/health` |
@@ -930,14 +933,25 @@ to `$GITHUB_ENV`. Jobs:
 - `check`: `pnpm typecheck`, `pnpm lint`, `pnpm test:unit`.
 - `integration`: service `postgres:18` (`POSTGRES_PASSWORD: postgres`, port 5432, `pg_isready`
   health options); install `postgresql-client-18` from the PGDG apt repo (backup test);
-  `pnpm db:create && pnpm db:migrate && pnpm db:verify`; `pnpm test:integration`.
+  `pnpm listmonk:up` (§12.6) — exit 0 exports the `BLOG0_LISTMONK_*` lines of
+  `var/listmonk-dev.env` to `$GITHUB_ENV` (the API token masked); exit 3 emits
+  `::warning::PENDING DOCKER — pnpm listmonk:up could not reach Docker; the Listmonk integration
+  tests (newsletter-listmonk, newsletter-sync) skip` and continues (those tests skip visibly);
+  any other code fails the job; then `pnpm db:create && pnpm db:migrate && pnpm db:verify`;
+  `pnpm test:integration`; on failure `docker compose logs --tail 100 listmonk`; always
+  `pnpm listmonk:down || true`.
 - `e2e`: same service; `pnpm exec playwright install --with-deps chromium`; `pnpm db:create`; `pnpm build`;
   `pnpm test:e2e`; `pnpm test:e2e:design`; on failure upload `playwright-report/` and
   `test-results/` as artifacts.
-- `image`: `docker build -t blog0:ci .`; `docker run --rm blog0:ci id -u` = `1000`; run detached
+- `image`: `docker build -t blog0:ci .`; `docker run --rm blog0:ci id -u` = `1000`; image size
+  (`docker image inspect -f '{{.Size}}'`) < 524288000 bytes (500 MiB); image contents — no
+  `.env`, and `src/server/jev/prompts/rank-v1.md`, `src/server/db/migrations/meta/_journal.json`
+  and `release.mjs` present; no env → `timeout 15 docker run --rm blog0:ci` exits 1 with
+  `BLOG0_DATABASE_URL is required in production` in its output; run detached
   with an unreachable DB URL (`postgres://nobody@127.0.0.1:1/none`), a random session secret and
-  the placeholder key; poll `/api/health/live` → 200 and `/api/health/ready` → 503 `NOT_READY`;
-  `docker stop` → exit code 143 and an `app.shutdown` `closed` log line.
+  the placeholder key; poll `/api/health/live` → 200 and `/api/health/ready` → 503 `NOT_READY`
+  (`details.reason` `DB_UNAVAILABLE`); docker health → `healthy`; `docker stop -t 15` → exit code
+  143 and `app.shutdown` `draining` and `closed` log lines.
 - Each of `integration` and `e2e` ends with a step `if: env.HAS_OPENROUTER_KEY != 'true'` that
   prints `::warning::PENDING KEY — real-key tests were skipped (no OPENROUTER_API_KEY secret)`.
 No deploy job, no registry push.
@@ -990,47 +1004,55 @@ Postgres **instance** with blog0 but has its **own database**:
 ```yaml
 name: blog0
 services:
-  postgres:                     # one instance, two databases (blog0 + listmonk)
+  postgres: # one instance, two databases (blog0 + listmonk)
     image: postgres:18
     environment: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: postgres }
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./scripts/compose/init-db.sh:/docker-entrypoint-initdb.d/10-init-db.sh:ro   # creates blog0, blog0_test, listmonk (+ role listmonk)
-    ports: ["127.0.0.1:5433:5432"]            # 5433: never clashes with the Homebrew Postgres on 5432
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 5s, timeout: 3s, retries: 20 }
+      # postgres:18 keeps PGDATA at /var/lib/postgresql/18/docker; the volume must cover /var/lib/postgresql
+      - pgdata:/var/lib/postgresql
+      - ./scripts/compose/init-db.sh:/docker-entrypoint-initdb.d/10-init-db.sh:ro # creates blog0, blog0_test, listmonk (+ role listmonk)
+    ports: ['127.0.0.1:5433:5432'] # 5433: never clashes with the Homebrew Postgres on 5432
+    healthcheck: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: 5s, timeout: 3s, retries: 20 }
   listmonk:
-    image: listmonk/listmonk:v5.1.0          # pinned; bump deliberately (the adapter test pins the API shape)
+    image: listmonk/listmonk:v5.1.0 # pinned; bump deliberately (the adapter test pins the API shape)
     depends_on: { postgres: { condition: service_healthy } }
+    # The image entrypoint only execs its argv: install (first run only), upgrade, serve.
     command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
     environment:
       LISTMONK_app__address: 0.0.0.0:9000
-      LISTMONK_app__root_url: http://localhost:9000
+      LISTMONK_app__root_url: http://localhost:${BLOG0_LISTMONK_PORT:-9000}
       LISTMONK_db__host: postgres
-      LISTMONK_db__port: "5432"
+      LISTMONK_db__port: '5432'
       LISTMONK_db__user: listmonk
       LISTMONK_db__password: listmonk
       LISTMONK_db__database: listmonk
       LISTMONK_db__ssl_mode: disable
+      # First-run admin (v4+ `--install` reads these); used only by scripts/listmonk-dev.sh to create the API user.
       LISTMONK_ADMIN_USER: ${LISTMONK_ADMIN_USER:-admin}
       LISTMONK_ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-listmonk-admin-dev-password}
       TZ: Etc/UTC
-    ports: ["127.0.0.1:9000:9000"]
+    ports: ['127.0.0.1:${BLOG0_LISTMONK_PORT:-9000}:9000']
     volumes: [listmonk-uploads:/listmonk/uploads]
-    healthcheck: { test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/api/health >/dev/null || exit 1"], interval: 5s, timeout: 3s, retries: 30 }
-  blog0:                                      # optional — `docker compose --profile app up`
+    # v5: /api/health needs a session or API token (403 otherwise); the login page is the unauthenticated probe.
+    healthcheck: { test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9000/admin/login >/dev/null || exit 1'], interval: 5s, timeout: 3s, retries: 30 }
+  blog0: # optional — `docker compose --profile app up`
     profiles: [app]
     build: .
     image: blog0:local
     depends_on: { postgres: { condition: service_healthy } }
-    env_file: [blog0.env]                     # the runbook's env file (never committed)
+    env_file: [blog0.env] # the runbook's env file (never committed)
     environment:
       BLOG0_DATABASE_URL: postgres://postgres:postgres@postgres:5432/blog0
       BLOG0_NEWSLETTER_SENDER: listmonk
       BLOG0_LISTMONK_URL: http://listmonk:9000
-    ports: ["127.0.0.1:3410:3410"]
+    ports: ['127.0.0.1:3410:3410']
     volumes: [blog0-storage:/data/storage]
 volumes: { pgdata: {}, listmonk-uploads: {}, blog0-storage: {} }
 ```
+
+The first-run Listmonk admin is named by `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD`
+(compose-level variables with dev defaults; not `BLOG0_*`, not read by the app). The host port is
+`BLOG0_LISTMONK_PORT` (default 9000, §10).
 
 `scripts/listmonk-dev.sh up|down|reset|token` (`pnpm listmonk:up` = `up`): `up` runs
 `docker compose up -d --wait postgres listmonk` (exit 3 + `PENDING DOCKER` when `docker info`
@@ -1039,7 +1061,8 @@ basic-auth API — ensures an API user `blog0` with a token stored in `var/listm
 (`BLOG0_LISTMONK_URL`, `BLOG0_LISTMONK_API_USER`, `BLOG0_LISTMONK_API_TOKEN`,
 `BLOG0_LISTMONK_LIST_ID` of a list named `blog0-test`, mode 0600) which the integration test and
 the gate source; `reset` drops and recreates the `listmonk` database (fresh state for the test);
-`token` prints the env file. Listmonk's own SMTP is left unconfigured in compose: `sendIssue`
+`token` prints the env file; `down` runs `docker compose down` and keeps the volumes unless
+`down -v` or `BLOG0_LISTMONK_PURGE=1` (§10). Listmonk's own SMTP is left unconfigured in compose: `sendIssue`
 starts a campaign that Listmonk "sends" to its (unconfigured) default messenger, which is
 enough to observe `running`/`finished` and stats; a real deploy configures Listmonk's SMTP in
 its UI (runbook).
@@ -1460,7 +1483,7 @@ blog0/
 │   │   │   └── (authed)/        # layout.tsx calls requireAdminPage()
 │   │   │       ├── page.tsx (desk)  articles/new/page.tsx  articles/[id]/page.tsx  site/page.tsx  subscribers/page.tsx
 │   │   │       ├── subscribers/[id]/page.tsx  newsletter/page.tsx  newsletter/new/page.tsx  newsletter/[id]/page.tsx   # Phase 7
-│   │   │       └── ai-usage/  team/                       # Phase 4 (on hold) — not yet created
+│   │   │       └── ai-usage/  team/                       # Frozen — not scheduled; not created
 │   │   ├── media/[...key]/route.ts                        # GET/HEAD, 200/206/304/416 (§9.2)
 │   │   └── api/
 │   │       ├── health/route.ts  health/{live,ready}/route.ts  newsletter/route.ts  auth/{login,logout,me}/route.ts
@@ -1481,7 +1504,7 @@ blog0/
 │   │                            #   editor/ (ArticleEditor, PublishBar, WriteTab, MarkdownEditor, LivePreview, ImageUploadButton, insert-image.ts, TldrTab, tldr-generate.ts, ListenTab, HistoryTab, fields.ts, use-article-doc.ts),
 │   │                            #   tldr/ (DeckList, SentencePicker, DeckPreview, deck-edit.ts), listen/ (AudioUploader, listen-api.ts), site/ (+ NewsletterSettings.tsx, Phase 7),
 │   │                            #   subscribers/ (SubscribersView, StatusFilter, SubscriberDetail, SubscriberTimeline, subscribers-api.ts — Phase 7),
-│   │                            #   newsletter/ (IssueList, IssueDetail, IssuePreview, IssueCompose, SendDialog, SendLog, IssueStats, issues-api.ts — Phase 7)
+│   │                            #   newsletter/ (IssueList, IssueDetail, IssuePreview, IssueCompose, PostPicker, SendDialog, SendLog, IssueStats, issue-edit.ts, newsletter-api.ts — Phase 7)
 │   ├── lib/                     # isomorphic, pure, no I/O
 │   │   ├── api/envelope.ts  api/dto.ts   # ALL API DTOs, one file grouped by domain sections
 │   │   ├── articles/limits.ts   # ARTICLE_LIMITS (spec/api.md PATCH)
@@ -1499,13 +1522,13 @@ blog0/
 │   │   ├── http/api.ts
 │   │   ├── auth/{session,guard,password,login,rate-limit}.ts
 │   │   ├── users/repo.ts  site/{current,defaults,service}.ts
-│   │   ├── newsletter/{constants,tokens,schemas,repo,service,links,legacy,prune,audit,rate-limit,settings,sender-hook}.ts   # Phase 7 list (§13.1)
+│   │   ├── newsletter/{constants,tokens,schemas,repo,service,links,link-guard,legacy,prune,audit,rate-limit,settings,sender-hook}.ts   # Phase 7 list (§13.1)
 │   │   │   newsletter/mail/{transport,templates,index}.ts                          # §13.2 (nodemailer SMTP | stub)
 │   │   │   newsletter/sender/{types,listmonk,stub,sync,opt-out,index}.ts           # §13.3
 │   │   │   newsletter/issues/{repo,service,snapshot,render,excerpt,intro,triggers,digest,send,status,http,tick}.ts   # §13.4–13.5
 │   │   ├── content/{index,ast,markdown,render,sentences,paragraph-ids,fingerprint,stats,highlight,cache}.ts
 │   │   │   content/plugins/{figure-markers,heading-shift,raw-html,code-langs,external-links,images,tables,safe-urls}.ts
-│   │   ├── formats/{types,payload,index,read,tldr,listen}.ts      # formats/status.ts: Phase 4 (on hold), future
+│   │   ├── formats/{types,payload,index,read,tldr,listen}.ts      # formats/status.ts: Frozen — not scheduled
 │   │   ├── articles/{repo,service,schemas,slug,tldr,views,http}.ts
 │   │   ├── llm/{types,openrouter,index,key}.ts          # openrouter.ts = the decisions adapter (Phase 8)
 │   │   ├── jev/{state,bounds,build-input,batches,validate,rank,run,prompt,articles}.ts  jev/prompts/rank-v1.md (+ select-v1.md, audit only)
@@ -1520,7 +1543,7 @@ blog0/
 │       └── admin.css
 ├── tests/
 │   ├── setup/{global-setup,integration-env}.ts   # vitest integration: create/reset + migrate blog0_test; env + singleton resets, BLOG0_STORAGE_DIR=var/storage-test, BLOG0_RATE_LIMIT_STORE=memory
-│   ├── helpers/{db,session,env,logs,storage,api,seed-articles}.ts
+│   ├── helpers/{db,session,env,logs,storage,api,seed-articles,listmonk}.ts
 │   ├── unit/<domain>/**         # admin, auth, content, db, deck, formats, helpers, jev, listen, llm, media, reader, site, … — no catch-all folder
 │   ├── integration/*.test.ts    # incl. rate-limit-db, release, health-probes, backup-restore (§12)
 │   ├── unit/ops/{lifecycle,backup-manifest}.test.ts  unit/http/csp.test.ts  unit/proxy.test.ts (nonce/CSP)
@@ -1528,7 +1551,7 @@ blog0/
 │   ├── e2e/{tldr,reader,listen,smoke,newsletter,designer-mode}.spec.ts  e2e/{global-setup,designer.global-setup}.ts   # newsletter: Phase 7, after smoke
 │   │   e2e/helpers/{admin,article-text,db,jev-key,logs,share,upload,newsletter}.ts
 │   ├── integration/newsletter{,-links,-admin,-issues,-sync,-listmonk,-webhook}.test.ts   # Phase 7 (listmonk: real container or PENDING DOCKER)
-│   ├── unit/newsletter/{tokens,templates,render,digest,schemas,sender-stub}.test.ts  fixtures/newsletter/issue-2-posts.{html,txt}   # Phase 7
+│   ├── unit/newsletter/{tokens,templates,render,triggers,excerpt,opt-out,schemas,sender-stub,listmonk-errors}.test.ts  fixtures/newsletter/issue-2-posts.{html,txt}   # Phase 7
 │   └── fixtures/articles/{hard-cases,e2e-article}.md  fixtures/audio/{sample.mp3,sample.m4a,sample.json,not-audio.wav}
 │       fixtures/images/{sample.png,sample.jpg,sample.webp,tiny.gif,sample.svg,sample.json}
 └── var/                         # gitignored runtime data (storage*, pglite*, pglite-session-secret, designer-admin.txt, backups)

@@ -33,6 +33,7 @@ team can keep AI spend minimal.
   normally; more only when a long article is split into batches).
 
 ## Success Criteria
-- [ ] With 3 generations costing 0.0012, 0.0008 and null in October, the October total is $0.0020, count 3, note "1 call without reported cost".
-- [ ] A generation on 1 Nov 00:30 IST is counted in November (site timezone).
-- [ ] The desk header month-to-date figure equals the AI usage page total.
+- [x] Every Generate records one generation row with model, prompt_version, tokens, cost (null when the provider reports none), who requested it and when (live; covered by `tests/integration/tldr-flow.test.ts`).
+- [ ] (Frozen — not scheduled) With 3 generations costing 0.0012, 0.0008 and null in October, the October total is $0.0020, count 3, note "1 call without reported cost".
+- [ ] (Frozen — not scheduled) A generation on 1 Nov 00:30 IST is counted in November (site timezone).
+- [ ] (Frozen — not scheduled) The desk header month-to-date figure equals the AI usage page total.

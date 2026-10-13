@@ -1,8 +1,9 @@
 # Capability: Format lifecycle (status, stale, regenerate)
 
 Computed statuses for Read, TLDR and Listen are live (Phases 1 and 3); the TLDR tab's
-**Generate/Regenerate** button (with confirm) is live (Phase 8). The TLDR stale banner with its
-**Regenerate** offer is **Frozen — not scheduled** (was Phase 4). Listen has no regeneration step:
+**Generate/Regenerate** button (with confirm) is live (Phase 8), and a text-only stale notice
+(`p.tldrtab__stale`, copy in `spec/ui.md` §4 TLDR tab) shows in the TLDR tab when the status is
+`stale`. The TLDR stale banner with its own **Regenerate** action is **Frozen — not scheduled** (was Phase 4). Listen has no regeneration step:
 its timing is estimated at read time (`listen-sync.md`); exact timing (Whisper alignment) is
 **Frozen — not scheduled** (was Phase 6).
 
@@ -23,7 +24,8 @@ published versions keep serving.
 | Output | Type | Destination |
 |---|---|---|
 | Status chips | per format | desk, editor tabs |
-| Stale banner (Frozen — not scheduled) | TLDR: "The text changed since this deck was made. Regenerate (one AI call) or edit the deck." | editor |
+| Stale notice (live) | TLDR tab text-only `p.tldrtab__stale` (copy in `spec/ui.md` §4); no button of its own | editor TLDR tab |
+| Stale banner (Frozen — not scheduled; this is the frozen banner's copy, not built) | TLDR: "The text changed since this deck was made. Regenerate (one AI call) or edit the deck." | editor |
 | Listen warning | `text_changed`: "The recording may no longer match the text" (non-blocking) | editor Listen tab, chips |
 | Publish guard | a TLDR deck whose lines vanished blocks publish (`TLDR_DECK_STALE`); Listen never blocks | publish |
 
@@ -34,7 +36,7 @@ published versions keep serving.
 
 ## Business Rules
 - Statuses are computed from fingerprints, never stored; rules in `spec/architecture.md` §5.
-- Nothing regenerates automatically; the banner's buttons are the only triggers.
+- Nothing regenerates automatically; the TLDR tab's Generate/Regenerate button is the only trigger.
 - The published copy of every format keeps serving until a successful publish replaces it.
 - A new format kind is added by registering it (no data migration).
 

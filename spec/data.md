@@ -94,7 +94,7 @@ The stable identity of a piece; content lives in revisions.
 | first_published_at | timestamptz null | public "Published" date |
 | last_published_at | timestamptz null | |
 | content_updated_at | timestamptz null | set when a publish changes the published body fingerprint after first publish — public "Updated" date (Phase 4) |
-| submitted_at, approved_at | timestamptz null | sign-off (modelled; UI in Phase 4, on hold) |
+| submitted_at, approved_at | timestamptz null | sign-off (modelled; UI Frozen — not scheduled) |
 | submitted_by, approved_by | uuid null fk → app_user | |
 | corrections_note_md | text null | Phase 4 |
 | corrections_updated_at | timestamptz null | Phase 4 |

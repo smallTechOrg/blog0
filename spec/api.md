@@ -349,10 +349,11 @@ routes** carry the exact 410 / 429 (+ `Retry-After`).
 | POST `/api/admin/newsletter/issues/:id/send` | admin | `IssueSendRequest` | `IssueDetailResponse` with status `sent` (or `failed` + `lastError`, HTTP 502 `SENDER_FAILED` with the detail in `error.details.issue`). `ISSUE_NOT_DRAFT` unless `draft`, `failed`, or `sending` for more than 10 min (stuck — `spec/architecture.md` §13.5); `NO_RECIPIENTS`; `SENDER_UNAVAILABLE`. Runs the blog0→provider sync for confirmed subscribers first (listmonk only). `maxDuration = 120`. |
 | POST `/api/admin/newsletter/issues/:id/stats` | admin | — | `IssueDetailResponse` with fresh `stats` (event `stats_fetched`); `ISSUE_NOT_DRAFT` for drafts; `SENDER_FAILED` on a provider error (status unchanged). |
 
-## Endpoints — Phase 4 (on hold)
+## Endpoints — Frozen — not scheduled (was Phase 4)
 
-Phase 4 is on hold (user decision, 2026-10-13). The three `revisions` endpoints belong to
-`revision-history`, which is **deferred**; they stay here as its contract.
+These endpoints are **Frozen — not scheduled** (user decision, 2026-10-13; never built). The three
+`revisions` endpoints belong to `revision-history`, also **Frozen — not scheduled**; they stay here
+as its contract.
 
 | Method & path | Auth | Request | Response |
 |---|---|---|---|

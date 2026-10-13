@@ -107,8 +107,8 @@ PostgreSQL. In designer mode a Generate holds the single PGlite connection for i
 transaction, so concurrent requests queue behind it (the double-click guard still refuses a second
 run via the `running` generation row).
 
-Status: **Scaffold + Phases 1–3 and 5 done; Phase 4 on hold; Phase 7 (newsletter) in progress;
-Phase 6 planned** (see [`spec/roadmap.md`](spec/roadmap.md)). An admin signs in at
+Status: **Frozen — development complete** (Scaffold, Phases 1–3, 5, 7, 8). Unbuilt items:
+[`spec/roadmap.md`](spec/roadmap.md) → Frozen — not scheduled. An admin signs in at
 `/admin/login`, writes a Markdown article with images, generates a TLDR deck with Jev (one real
 OpenRouter call, only on an explicit click), edits it, uploads a Listen recording, and publishes;
 readers open the article in Read, TLDR or Listen mode at `/p/<slug>`. Listen and images are real;
@@ -337,8 +337,8 @@ With a real key present, a rejected key (401/403) or any provider error is alway
 | `pnpm build:release` | bundles `scripts/release.ts` into `dist/release.mjs` (esbuild) — the image's release step; the Dockerfile runs it after `pnpm build` |
 | `pnpm test:container` | builds the container image, runs the release step and the full E2E suite against the container on port **3412** (needs Docker) — see [Deploy](#deploy) |
 
-`pnpm test:e2e` runs 4 Playwright projects in a fixed order — `tldr` → `reader` → `listen` →
-`smoke` — because they share `blog0_test` and each needs the state the previous one leaves.
+`pnpm test:e2e` runs 5 Playwright projects in a fixed order — `tldr` → `reader` → `listen` →
+`smoke` → `newsletter` — because they share `blog0_test` and each needs the state the previous one leaves.
 Gate run, without touching a dev/prod server's `.next` build:
 
 ```bash
@@ -495,6 +495,7 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | audio/image storage + upload limits |
 | `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server |
 | `BLOG0_E2E_LOG_FILE` | no | — | with `BLOG0_E2E_BASE_URL`: host path of that server's JSON log (`pnpm test:container` sets it); unset → the log-asserting E2E tests skip |
+| `BLOG0_CONTAINER_BUILD` | no | `auto` | `pnpm test:container` only: `auto` rebuilds the image only when a build-context file is newer than it; `always` rebuilds; `never` reuses `blog0:local` (fails if it does not exist) |
 | `BLOG0_REQUIRE_REAL_KEY` | no | — | `1` → a missing/placeholder OpenRouter key fails the real-key tests; `0` → PENDING KEY skip; unset → `CI` decides |
 | `BLOG0_RATE_LIMIT_STORE` | no | `auto` | sign-in/newsletter throttle store: `auto` (Postgres on `postgres://`, memory on `pglite://`) \| `db` \| `memory` |
 | `BLOG0_SHUTDOWN_TIMEOUT_MS` | no | `8000` | drain deadline after SIGTERM/SIGINT (1000–120000) |

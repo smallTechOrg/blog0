@@ -276,6 +276,10 @@ to the editor.
     with Jev. You can still pick lines yourself from the article on the right."
   - Saving first: button disabled, "Saving…"; then Running: spinner "Jev is ranking… Ns", prior
     deck visible but dimmed.
+  - Stale notice (built): when the TLDR status is `stale`, a text-only `p.tldrtab__stale` (no
+    button of its own — the header **Regenerate** is the action) reads "The text changed since
+    this deck was saved. Fix flagged lines or regenerate (one AI call) — the live page keeps its
+    published deck until you publish."
   - Success notice: "Jev ranked <N> sentences and picked the top <k> — saved as your draft deck.
     Edit them or publish." ("1 sentence" / "top line" for 1).
   - Generation meta line (latest): "Jev · <model> · <promptVersion> · ranked <sentenceCount>
@@ -480,8 +484,9 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
 > **Assumed (S7.4):** **Send** first reads `GET /api/admin/newsletter/settings` for the dialog's recipient
 > count (`status.counts.confirmed`) and sender line; the server re-counts at send time.
 
-### Phase 4 screens (on hold)
-TLDR stale banner with **Regenerate**, AI usage (month picker, total, table), Team. History tab
+### Frozen — not scheduled
+TLDR frozen banner with its own **Regenerate** action (the stale chip, the text-only stale notice
+and the header Generate/Regenerate button are live), AI usage (month picker, total, table), Team. History tab
 browsing/restore is deferred (`spec/capabilities/revision-history.md`).
 
 ## 5. CSS additions (`src/styles/additions.css`) — only new rules, tokens only

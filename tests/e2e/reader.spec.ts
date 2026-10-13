@@ -506,19 +506,28 @@ test.describe('reader site (blog0)', () => {
     await page.emulateMedia({ colorScheme: 'light' });
     await page.goto('/');
     await expect(page.locator('html')).not.toHaveAttribute('data-theme', 'dark');
+    // The attribute is not the point — the page must actually repaint: body's computed background.
+    const bodyBg = (): Promise<string> => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    const lightBg = await bodyBg();
+    expect(lightBg).toMatch(/^rgba?\(/);
 
     await page.getByRole('button', { name: 'Switch to dark mode' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect.poll(bodyBg).not.toBe(lightBg);
+    const darkBg = await bodyBg();
 
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await expect(page.getByRole('button', { name: 'Switch to light mode' })).toBeVisible();
+    await expect.poll(bodyBg).toBe(darkBg);
     await page.goto('/archive');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 
     await page.getByRole('button', { name: 'Switch to light mode' }).click();
+    await expect.poll(bodyBg).toBe(lightBg);
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect.poll(bodyBg).toBe(lightBg);
   });
 
   test('prefers-reduced-motion: the wordmark is complete at first paint and still; deck slides change without transition', async ({ browser, page }) => {

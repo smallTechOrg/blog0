@@ -87,7 +87,9 @@ Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_
    ```
 
    Re-running it is safe (`already up to date`, `ok`). Afterwards remove `BLOG0_ADMIN_PASSWORD`
-   from wherever you stored it; add more admins from the desk (**Team**).
+   from wherever you stored it; add more admins with
+   `pnpm admin:create --email … --name …` from the ops checkout (password from
+   `BLOG0_NEW_ADMIN_PASSWORD`).
 
 4. **Web server** with the uploads volume and the env:
 
@@ -109,7 +111,7 @@ Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_
 
    ```bash
    curl -fsS http://127.0.0.1:3410/api/health/ready
-   # {"ok":true,"data":{"status":"ready","db":"ok",…,"migrations":{"applied":3,"pending":0,…}}}
+   # {"ok":true,"data":{"status":"ready","db":"ok",…,"migrations":{"applied":4,"pending":0,…}}}
    ```
 
    Then open `https://<your host>/admin/login` and sign in as the first admin.

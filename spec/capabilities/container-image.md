@@ -66,7 +66,7 @@ gracefully when the platform stops it.
   deadline was hit). Platform stop grace periods must exceed the timeout by ≥ 2 s.
 - The local developer path is unchanged: `pnpm build && pnpm start` still runs `next start`
   (no standalone output, no warning); only the image build sets standalone output.
-- `docs/deploy.md` (runbook) has exactly these sections: **Environment** (table of every variable
+- `docs/deploy.md` (runbook) has exactly these nine sections, in this order: **Environment** (table of every variable
   the container reads, required/optional, secret or not — pointing at `spec/architecture.md` §10
   for semantics), **First deploy** (build/pull image → create database → release step with
   `BLOG0_ADMIN_*` → run with volume + env → check `/api/health/ready`), **Upgrades** (pull →
@@ -75,7 +75,8 @@ gracefully when the platform stops it.
   and PostgreSQL 18 client tools, a nightly cron line, retention suggestion), **Restore**
   (`pnpm restore` into a scratch DB → check → point the app at it), **Rotating
   `BLOG0_SESSION_SECRET`** (every session is invalidated — all admins must sign in again; no
-  data is lost), **Health endpoints** (live/ready semantics, probe settings: live every 10 s,
+  data is lost), **Newsletter** (Phase 7: SMTP options, Listmonk, the cron line for
+  `newsletter:tick`), **Health endpoints** (live/ready semantics, probe settings: live every 10 s,
   ready every 5 s, stop grace ≥ timeout + 2 s), **Reverse proxy** (`BLOG0_TRUSTED_PROXY_HOPS`,
   https `BLOG0_PUBLIC_BASE_URL`, large upload body limits ≥ `BLOG0_MAX_AUDIO_MB` + 1 MB, long
   read timeout ≥ 120 s for Generate).
@@ -110,4 +111,4 @@ gracefully when the platform stops it.
 - [ ] `docker stop -t 20 <container>` returns in < 12 s; exit code 143; container logs contain one `app.shutdown` line with `"phase":"draining"` and one with `"phase":"closed","outcome":"drained"`.
 - [ ] With `BLOG0_PUBLIC_BASE_URL=https://…`, a successful login's `Set-Cookie` contains `Secure`; with `http://localhost:3412` it does not.
 - [ ] Locally, `pnpm build && pnpm start` prints no `"next start" does not work with "output: standalone"` warning and `.next/standalone` does not exist.
-- [ ] `docs/deploy.md` exists with the eight section headings listed in Business Rules.
+- [ ] `docs/deploy.md` exists with the nine section headings listed in Business Rules.

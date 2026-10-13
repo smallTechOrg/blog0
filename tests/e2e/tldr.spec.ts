@@ -1,6 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
-import { e2eAdmin, signInThroughForm } from './helpers/admin';
+import { createArticleApi, e2eAdmin, originOf, signIn, signInThroughForm } from './helpers/admin';
 import { markdownPlainText, readE2eArticle } from './helpers/article-text';
 import { generationRows } from './helpers/db';
 import { jevKeyPlan, PENDING_KEY_TITLE } from './helpers/jev-key';
@@ -362,6 +362,34 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await expect(page.locator('.modedock')).toBeVisible();
   });
 
+  test('the TLDR intro card holds 3.8 s before auto-advancing (fake clock, own context)', async ({ browser }, testInfo) => {
+    const { slug, publishedLines } = journey();
+    // A separate reader context: its fake clock never touches the shared journey page.
+    const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+    try {
+      await context.clock.install();
+      await context.clock.pauseAt(Date.now() + 60_000);
+      const page = await context.newPage();
+      await page.goto(`/p/${slug}/tldr`);
+      const deck = page.locator('.tdeck');
+      await expect(deck).toBeVisible();
+      const segs = deck.locator('.tdeck__seg');
+      await expect(segs).toHaveCount(publishedLines.length + 1);
+      await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+      await expect(deck.getByRole('button', { name: 'Pause the summary' })).toBeVisible();
+
+      await page.clock.runFor(3_700);
+      await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+      await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'false');
+
+      await page.clock.runFor(200);
+      await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'true');
+      await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[0]);
+    } finally {
+      await context.close();
+    }
+  });
+
   test('editing a deck sentence makes TLDR stale; the live page keeps the old deck; nothing regenerates', async () => {
     const { page, articleId, slug, publishedLines } = journey();
     const generationsBefore = (await generationRows(articleId)).length;
@@ -431,6 +459,67 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
         latency_ms: expect.any(Number),
         outcome: 'ok',
       });
+    }
+  });
+});
+
+// capability article-authoring: "never loses typed text on a failed save". Two editors on the same
+// draft: B saves first, then A's save is refused with the conflict banner and A's typing stays in
+// the textarea (nothing overwritten on the server either). Its own throwaway draft, deleted after,
+// so the shared state the later projects rely on is untouched.
+test.describe('two editors on one article: a stale save is refused and keeps the typed text', () => {
+  const BODY = 'The first paragraph of a draft two people are editing at once.';
+  const A_TEXT = `${BODY}\n\nWriter A adds this paragraph while B is also editing.`;
+  const B_TEXT = `${BODY}\n\nWriter B saved this paragraph first.`;
+
+  test('A saves after B → "Someone saved a newer version (rev 2 by …). Reload to continue." and A keeps its text', async ({ browser }, testInfo) => {
+    const baseURL = testInfo.project.use.baseURL;
+    const origin = originOf(testInfo);
+    const contextA = await browser.newContext({ baseURL });
+    let contextB: BrowserContext | undefined;
+    let articleId: string | undefined;
+    try {
+      const pageA = await contextA.newPage();
+      await signIn(pageA);
+      contextB = await browser.newContext({ baseURL, storageState: await contextA.storageState() });
+      const pageB = await contextB.newPage();
+      const created = await createArticleApi(contextA.request, origin, { title: 'Two editors, one draft', bodyMd: BODY });
+      articleId = created.id;
+
+      await pageA.goto(`/admin/articles/${articleId}`);
+      await pageB.goto(`/admin/articles/${articleId}`);
+      const editorA = pageA.getByLabel('Markdown', { exact: true });
+      const editorB = pageB.getByLabel('Markdown', { exact: true });
+      await expect(editorA).toHaveValue(BODY);
+      await expect(editorB).toHaveValue(BODY);
+      await expect(pageA.locator('.pubbar__state')).toHaveText('Saved · rev 1');
+
+      await editorB.fill(B_TEXT);
+      await pageB.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(pageB.locator('.pubbar__state')).toHaveText('Saved · rev 2');
+      const latest = await contextB.request.get(`/api/admin/articles/${articleId}`);
+      const by = (await latest.json()).data.article.currentRevision.createdBy as string;
+      expect(by.length).toBeGreaterThan(0);
+
+      await editorA.fill(A_TEXT);
+      await pageA.getByRole('button', { name: 'Save', exact: true }).click();
+
+      await expect(pageA.locator('.editor__conflict p')).toHaveText(`Someone saved a newer version (rev 2 by ${by}). Reload to continue.`);
+      await expect(pageA.locator('.editor__conflict').getByRole('button', { name: 'Reload' })).toBeVisible();
+      await expect(editorA).toHaveValue(A_TEXT);
+      await expect(pageA.locator('.pubbar__state')).not.toHaveText(/^Saved/);
+      // The server still holds B's revision — A's stale save overwrote nothing.
+      const after = await contextA.request.get(`/api/admin/articles/${articleId}`);
+      const article = (await after.json()).data.article;
+      expect(article.currentRevision.number).toBe(2);
+      expect(article.currentRevision.bodyMd).toBe(B_TEXT);
+    } finally {
+      if (articleId) {
+        const del = await contextA.request.delete(`/api/admin/articles/${articleId}`, { headers: { origin } });
+        expect(del.status(), await del.text()).toBe(200);
+      }
+      await contextB?.close();
+      await contextA.close();
     }
   });
 });

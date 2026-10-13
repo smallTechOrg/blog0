@@ -6,7 +6,7 @@ import { getRateLimitStore, peekRateLimitStore, resetRateLimitStoreForTests } fr
 
 import { LINK_CAP_PER_IP, LINK_CAP_PER_SITE, LINK_WINDOW_MS } from './constants';
 
-// Newsletter throttle (capabilities newsletter-signup, abuse-protection; spec/api.md POST
+// Newsletter throttle (capabilities newsletter-list, abuse-protection; spec/api.md POST
 // /api/newsletter). Three fixed-window buckets, all per site, counted in the throttle store
 // (Postgres by default — survives restarts, shared across instances):
 //   - per client IP:  10 / hour — ONLY when the IP is known (BLOG0_TRUSTED_PROXY_HOPS > 0 and an

@@ -109,7 +109,7 @@ machine that has only Node and pnpm, from one command, with nothing to configure
 ## Success Criteria
 - [ ] From a clean checkout with no `.env` (and Postgres unreachable), `pnpm install && pnpm dev:design` serves `http://localhost:3410/` within 120 s and opens no Postgres connection; the console shows exactly one line with the designer admin email + password (in the ready banner) and the `app.boot` log line reports `db_engine:"pglite"`.
 - [ ] `/p/humans-are-software/listen` shows the player for the seeded sample (estimated timing); its `/media/<key>` answers 206 to a Range request; a second run prints `listen: humans-are-software already has a recording`.
-- [ ] A CSS edit (`src/styles/additions.css`) and a component edit (`src/components/site/home/HomeAbout.tsx`) show in an open page without a full reload.
+- [ ] A CSS edit (`src/styles/additions.css`) and a component edit (`src/components/site/home/HomeAbout.tsx`) show in an open page without a full reload. *Verified manually (the user test path), not automated — no test asserts hot reload.*
 - [ ] `/` contains "Featured Editorial" and the 5 seeded titles; `/p/humans-are-software` renders the body; `/p/humans-are-software/tldr` opens a deck whose line count is between 4 and 8 and whose first line is byte-identical to a sentence of the article.
 - [ ] `/admin/login` accepts `designer@blog0.local` + the printed password; the desk lists 5 published articles, each with TLDR `ready`.
 - [ ] With no key configured, the TLDR tab of any article shows "No OpenRouter key configured" and the Generate button is disabled; `/api/health` still answers `"db":"ok"`.
