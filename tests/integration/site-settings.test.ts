@@ -1,7 +1,9 @@
 // Site settings against real blog0_test: GET/PATCH /api/admin/site, validation and guards,
 // the reader-facing site record (getCurrentSite cache invalidated on save, so home and /about show
 // the edit on next load), state surviving a cold cache, and the idempotent legacy-brand upgrade
-// that `pnpm db:seed` applies to rows seeded before the brand became blog0.
+// that `pnpm db:seed` applies to rows seeded before the brand became blog0. Phase 7: the DTO carries
+// the read-only `newsletter` settings and the newsletter settings service (consent version bump,
+// modeSetAt) behind PATCH /api/admin/newsletter/settings (route: slice S7.3).
 // No LLM is involved anywhere in this capability.
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -12,6 +14,7 @@ import type { Envelope } from '@/lib/api/envelope';
 import { siteViewModelFrom } from '@/lib/view-models';
 import { getDb } from '@/server/db/client';
 import { site } from '@/server/db/schema';
+import { bumpConsentVersion, updateNewsletterSettings } from '@/server/newsletter/settings';
 import { getCurrentSite, resetCurrentSiteForTests } from '@/server/site/current';
 import { SITE_DEFAULTS } from '@/server/site/defaults';
 import { getSiteSettings, upgradeLegacyBrand } from '@/server/site/service';
@@ -64,6 +67,15 @@ describe('GET /api/admin/site', () => {
       aboutBodyMd: SITE_DEFAULTS.aboutBodyMd,
       socialXUrl: null,
       socialLinkedinUrl: null,
+      newsletter: {
+        mode: 'manual',
+        autoSend: false,
+        digestDays: 7,
+        digestPosts: 3,
+        consentText: 'One issue a week at most. Unsubscribe in one click; we never share the list.',
+        consentVersion: 'v1',
+        modeSetAt: null,
+      },
     };
     expect(data(env).site).toEqual(expected);
   });
@@ -191,13 +203,17 @@ describe('PATCH /api/admin/site — errors', () => {
     expect(row.contactEmail).toBe(before.contactEmail);
   });
 
-  it('refuses fields that are not editable here (wordmark, slug, timezone)', async () => {
+  it('refuses fields that are not editable here (wordmark, slug, timezone, newsletter)', async () => {
     const { status, env } = await patch(admin, { wordmark: 'log0', aboutStrap: 'ok' });
 
     expect(status).toBe(400);
     expect(err(env).code).toBe('VALIDATION_FAILED');
     expect((await siteRow()).wordmark).toBe('blog0');
     expect((await siteRow()).aboutStrap).toBe(SITE_DEFAULTS.aboutStrap);
+
+    const viaSite = await patch(admin, { newsletter: { mode: 'per_post' } });
+    expect(viaSite.status).toBe(400);
+    expect((await siteRow()).newsletterMode).toBe('manual');
   });
 
   it('rejects malformed JSON and a non-object body', async () => {
@@ -242,5 +258,50 @@ describe('legacy brand upgrade (pnpm db:seed on a pre-rebrand database)', () => 
 
   it('does nothing for an unknown slug', async () => {
     expect(await upgradeLegacyBrand(getDb(), 'no-such-site')).toEqual({ updated: false });
+  });
+});
+
+describe('newsletter settings (Phase 7: site.newsletter_* behind PATCH /api/admin/newsletter/settings)', () => {
+  it('changing the mode stamps modeSetAt; changing the consent text bumps the version unless one is given; the reader site sees the new consent line', async () => {
+    const siteId = (await getCurrentSite()).id;
+    const actor = { userId: admin.user.id };
+    const t = new Date('2026-10-13T06:00:00Z');
+
+    const first = await updateNewsletterSettings(siteId, { mode: 'per_post', autoSend: true }, actor, t);
+    expect(first).toMatchObject({ mode: 'per_post', autoSend: true, modeSetAt: t.toISOString(), consentVersion: 'v1' });
+
+    const same = await updateNewsletterSettings(siteId, { mode: 'per_post' }, actor, new Date(t.getTime() + 1000));
+    expect(same.modeSetAt).toBe(t.toISOString()); // unchanged mode → no new stamp
+
+    const text = await updateNewsletterSettings(siteId, { consentText: '  Two issues a month, tops.  ' }, actor);
+    expect(text).toMatchObject({ consentText: 'Two issues a month, tops.', consentVersion: 'v2' });
+    const typed = await updateNewsletterSettings(siteId, { consentText: 'Three.', consentVersion: 'gdpr-2026' }, actor);
+    expect(typed).toMatchObject({ consentText: 'Three.', consentVersion: 'gdpr-2026' });
+    const bumped = await updateNewsletterSettings(siteId, { consentText: 'Four.' }, actor);
+    expect(bumped.consentVersion).toBe('gdpr-2026-2');
+    const unchangedText = await updateNewsletterSettings(siteId, { consentText: 'Four.' }, actor);
+    expect(unchangedText.consentVersion).toBe('gdpr-2026-2');
+    const digest = await updateNewsletterSettings(siteId, { mode: 'digest', digestDays: 14, digestPosts: 5 }, actor);
+    expect(digest).toMatchObject({ mode: 'digest', digestDays: 14, digestPosts: 5 });
+
+    resetCurrentSiteForTests();
+    const current = await getCurrentSite();
+    expect(current.newsletterConsentText).toBe('Four.');
+    expect(siteViewModelFrom(current, { topics: [], year: 2026 }).newsletterConsentText).toBe('Four.');
+    expect(data((await call<SiteSettingsResponse>(getRoute, 'GET', { cookie: admin.cookie })).env).site.newsletter).toMatchObject({ mode: 'digest', consentVersion: 'gdpr-2026-2' });
+  });
+
+  it('bumpConsentVersion: v1 → v2; a non-vN version gets -2 appended', () => {
+    expect(bumpConsentVersion('v1')).toBe('v2');
+    expect(bumpConsentVersion('v12')).toBe('v13');
+    expect(bumpConsentVersion('spring')).toBe('spring-2');
+    expect(bumpConsentVersion('gdpr-2026')).toBe('gdpr-2026-2');
+  });
+
+  it('refuses digest thresholds outside 1–60 / 1–20 at the database too', async () => {
+    const siteId = (await getCurrentSite()).id;
+    await expect(getDb().update(site).set({ newsletterDigestDays: 0 }).where(eq(site.id, siteId))).rejects.toThrow();
+    await expect(getDb().update(site).set({ newsletterDigestPosts: 21 }).where(eq(site.id, siteId))).rejects.toThrow();
+    await expect(getDb().update(site).set({ newsletterMode: 'weekly' as 'manual' }).where(eq(site.id, siteId))).rejects.toThrow();
   });
 });

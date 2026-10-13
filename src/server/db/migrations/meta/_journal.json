@@ -15,6 +15,13 @@
       "when": 1791841926364,
       "tag": "0001_rate_limit_bucket",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791876069804,
+      "tag": "0002_newsletter",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,8 @@ import { DIRECT_CLIENT, UNKNOWN_CLIENT } from '../auth/login';
 import type { RateBucket, RateLimitStore, RateScope } from '../rate-window';
 import { getRateLimitStore, peekRateLimitStore, resetRateLimitStoreForTests } from '../rate-window-store';
 
+import { LINK_CAP_PER_IP, LINK_CAP_PER_SITE, LINK_WINDOW_MS } from './constants';
+
 // Newsletter throttle (capabilities newsletter-signup, abuse-protection; spec/api.md POST
 // /api/newsletter). Three fixed-window buckets, all per site, counted in the throttle store
 // (Postgres by default — survives restarts, shared across instances):
@@ -99,5 +101,61 @@ export function getNewsletterThrottle(): NewsletterThrottle {
  */
 export function resetNewsletterRateLimiterForTests(limits: Partial<NewsletterThrottleLimits> = {}): void {
   (globalThis as GlobalWithLimits)[limitsKey] = { ...DEFAULT_NEWSLETTER_LIMITS, ...limits };
+  if (peekRateLimitStore()?.kind !== 'db') resetRateLimitStoreForTests();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase 7 — the confirm / unsubscribe link throttle (spec/architecture.md §6 "Newsletter link
+// throttling"): 30 per known client IP per hour (skipped for direct/unknown, exactly like signup)
+// and 1 000 per site per hour. Callers shape-check the token first — a malformed token answers 404
+// without counting; a well-formed one counts whether or not it turns out valid.
+
+export interface LinkThrottleLimits {
+  perIp: number;
+  siteWide: number;
+  windowMs: number;
+}
+
+export const DEFAULT_LINK_LIMITS: LinkThrottleLimits = { perIp: LINK_CAP_PER_IP, siteWide: LINK_CAP_PER_SITE, windowMs: LINK_WINDOW_MS };
+
+export interface LinkThrottleKey {
+  ip: string;
+  siteId: string;
+}
+
+export function linkBuckets(key: LinkThrottleKey, limits: LinkThrottleLimits = DEFAULT_LINK_LIMITS): RateBucket[] {
+  const buckets: RateBucket[] = [];
+  if (isKnownClientIp(key.ip)) buckets.push({ scope: 'newsletter.link.ip', key: key.ip, max: limits.perIp, windowMs: limits.windowMs });
+  buckets.push({ scope: 'newsletter.link.site', key: key.siteId, max: limits.siteWide, windowMs: limits.windowMs });
+  return buckets;
+}
+
+export class NewsletterLinkThrottle {
+  readonly limits: LinkThrottleLimits;
+  readonly #store: RateLimitStore | null;
+
+  constructor(limits: Partial<LinkThrottleLimits> = {}, store?: RateLimitStore) {
+    this.limits = { ...DEFAULT_LINK_LIMITS, ...limits };
+    this.#store = store ?? null;
+  }
+
+  async attempt(key: LinkThrottleKey, now: number = Date.now()): Promise<NewsletterThrottleCheck> {
+    const store = this.#store ?? getRateLimitStore();
+    const check = await store.attempt(key.siteId, linkBuckets(key, this.limits), now);
+    if (!check.limited) return { limited: false };
+    return { limited: true, retryAfterSec: check.retryAfterSec, bucket: check.scope === 'newsletter.link.ip' ? 'ip' : 'site' };
+  }
+}
+
+const linkLimitsKey = Symbol.for('blog0.newsletterLinkLimits');
+type GlobalWithLinkLimits = typeof globalThis & { [linkLimitsKey]?: LinkThrottleLimits };
+
+export function getNewsletterLinkThrottle(): NewsletterLinkThrottle {
+  return new NewsletterLinkThrottle((globalThis as GlobalWithLinkLimits)[linkLimitsKey] ?? DEFAULT_LINK_LIMITS);
+}
+
+/** Tests: override the link caps; in-memory counts start fresh. */
+export function resetNewsletterLinkRateLimiterForTests(limits: Partial<LinkThrottleLimits> = {}): void {
+  (globalThis as GlobalWithLinkLimits)[linkLimitsKey] = { ...DEFAULT_LINK_LIMITS, ...limits };
   if (peekRateLimitStore()?.kind !== 'db') resetRateLimitStoreForTests();
 }

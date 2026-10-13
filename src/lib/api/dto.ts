@@ -259,21 +259,24 @@ export interface PublicListenDto {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Site settings + newsletter
+// Site settings
 // ---------------------------------------------------------------------------------------------
 
 /** The admin-editable part of the site record (wordmark, slug, timezone are not editable here). */
 export interface SiteSettingsDto {
   tagline: string; contactEmail: string; aboutStrap: string; aboutStand: string; aboutBodyMd: string;
   socialXUrl: string | null; socialLinkedinUrl: string | null;
+  /** Phase 7: read-only here — edited via PATCH /api/admin/newsletter/settings. */
+  newsletter: NewsletterSettingsDto;
 }
 /** GET / PATCH /api/admin/site → data. */
 export interface SiteSettingsResponse { site: SiteSettingsDto }
 /**
- * PATCH body: any subset. Texts are trimmed; required texts must be non-blank; social URLs are
- * http(s) or blank/null (blank clears it, and the footer hides that icon). Unknown keys → 400.
+ * PATCH body: any subset of the editable fields (never `newsletter`). Texts are trimmed; required
+ * texts must be non-blank; social URLs are http(s) or blank/null (blank clears it, and the footer
+ * hides that icon). Unknown keys → 400.
  */
-export type SiteSettingsPatch = Partial<SiteSettingsDto>;
+export type SiteSettingsPatch = Partial<Omit<SiteSettingsDto, 'newsletter'>>;
 
 /** Max lengths, shared by the server schema and the admin form. */
 export const SITE_SETTINGS_LIMITS = {
@@ -285,9 +288,142 @@ export const SITE_SETTINGS_LIMITS = {
   socialUrl: 500,
 } as const;
 
-/** POST /api/newsletter — also returned for an already-subscribed address (no enumeration). */
+// ---------------------------------------------------------------------------------------------
+// Newsletter (Phase 7 — spec/api.md "Newsletter DTOs"; owned by slice S7.1, imported by S7.3/S7.4)
+// ---------------------------------------------------------------------------------------------
+
+export type SubscriberStatus = 'pending' | 'confirmed' | 'unsubscribed' | 'bounced' | 'legacy_unconfirmed';
+export type SubscriberEventKind =
+  | 'signup' | 'confirmation_sent' | 'confirmed' | 'resubscribed' | 'unsubscribed' | 'bounced'
+  | 'legacy_confirmation_sent' | 'provider_synced' | 'provider_removed' | 'ip_pruned';
+export type NewsletterSource = 'footer' | 'email_link' | 'one_click' | 'admin' | 'provider' | 'webhook' | 'migration' | 'system';
+export type SuppressionReason = 'unsubscribed' | 'bounced' | 'complaint' | 'admin';
+
+/** POST /api/newsletter — the same shape for a new, pending, confirmed or suppressed address (no enumeration). */
+export interface NewsletterSubscribeRequest { email: string; name?: string; sourceUrl?: string }
 export interface NewsletterSubscribeResponse { subscribed: true }
 
-/** GET /api/admin/subscribers (admin) — `?format=csv` downloads CSV instead. */
-export interface SubscriberDto { email: string; name: string | null; createdAt: string; status: 'subscribed' | 'unsubscribed' }
-export interface SubscriberListResponse { subscribers: SubscriberDto[]; total: number }
+/** POST /api/newsletter/confirm → data. */
+export interface NewsletterConfirmRequest { token: string }
+export interface NewsletterConfirmResponse { confirmed: true; alreadyConfirmed: boolean }
+/** POST /api/newsletter/unsubscribe → data (JSON `{ token }` or RFC 8058 one-click with `?t=`). */
+export interface NewsletterUnsubscribeRequest { token: string }
+export interface NewsletterUnsubscribeResponse { unsubscribed: true; alreadyUnsubscribed: boolean }
+
+/** GET /api/admin/subscribers rows (the CSV uses the same fields). */
+export interface SubscriberDto {
+  id: string; email: string; name: string | null; status: SubscriberStatus; source: string;
+  createdAt: string; consentedAt: string | null; confirmedAt: string | null; unsubscribedAt: string | null;
+  /** status === 'pending' && confirm_token_expires_at < now */
+  pendingExpired: boolean;
+  consentVersion: string | null; sourceUrl: string | null;
+  providerSyncedAt: string | null;
+  /** legacy: not yet sent; pending: under the 3-per-24 h cap */
+  canSendConfirmation: boolean;
+}
+export interface SubscriberCounts { all: number; pending: number; confirmed: number; unsubscribed: number; bounced: number; legacy_unconfirmed: number }
+export interface SubscriberListResponse { subscribers: SubscriberDto[]; total: number; counts: SubscriberCounts; now: string }
+
+export interface SubscriberEventDto {
+  id: string; kind: SubscriberEventKind; source: NewsletterSource; actor: string | null;
+  ip: string | null; userAgent: string | null; details: Record<string, unknown>; createdAt: string;
+}
+export interface SuppressionDto { id: string; reason: SuppressionReason; source: NewsletterSource; details: Record<string, unknown>; createdAt: string }
+export interface SubscriberMessageDto { id: string; kind: 'confirmation' | 'issue'; subject: string; transport: string; status: string; createdAt: string }
+export interface SubscriberDetailDto extends SubscriberDto {
+  signupIp: string | null; signupUserAgent: string | null; consentText: string | null;
+  confirmedIp: string | null; confirmedUserAgent: string | null; confirmTokenExpiresAt: string | null;
+  confirmationSentCount: number; legacyConfirmationSentAt: string | null; providerId: string | null; ipPrunedAt: string | null;
+  /** oldest first */
+  events: SubscriberEventDto[];
+  /** for this email, oldest first */
+  suppressions: SuppressionDto[];
+  messages: SubscriberMessageDto[];
+}
+export interface SubscriberDetailResponse { subscriber: SubscriberDetailDto }
+
+/** POST /api/admin/subscribers/:id/send-confirmation → data. */
+export interface SendConfirmationResponse { subscriber: SubscriberDetailDto; sentTo: string; transport: 'smtp' | 'stub' }
+/** POST /api/admin/subscribers/send-legacy-confirmations. */
+export interface SendLegacyConfirmationsRequest { confirm: true }
+export interface SendLegacyConfirmationsResponse { sent: number; skipped: number }
+/** POST /api/admin/subscribers/:id/unsubscribe. */
+export interface AdminUnsubscribeRequest { note?: string }
+export interface AdminUnsubscribeResponse { subscriber: SubscriberDetailDto }
+
+/** GET /api/admin/subscribers?format=audit — the whole proof bundle. */
+export interface NewsletterAuditBundle {
+  format: 'blog0-newsletter-audit/1'; exportedAt: string; exportedBy: string; site: { slug: string; brandName: string };
+  settings: NewsletterSettingsDto;
+  subscribers: Array<Omit<SubscriberDetailDto, 'messages' | 'canSendConfirmation' | 'pendingExpired'>>;
+  suppressions: Array<SuppressionDto & { email: string; subscriberId: string }>;
+}
+
+export type NewsletterMode = 'per_post' | 'digest' | 'manual';
+export interface NewsletterSettingsDto {
+  mode: NewsletterMode; autoSend: boolean; digestDays: number; digestPosts: number;
+  consentText: string; consentVersion: string; modeSetAt: string | null;
+}
+/** PATCH /api/admin/newsletter/settings body — `modeSetAt` is server-set and rejected. */
+export type NewsletterSettingsPatch = Partial<Omit<NewsletterSettingsDto, 'modeSetAt'>>;
+export interface NewsletterStatusDto {
+  sender: { kind: 'listmonk' | 'stub'; configured: boolean; listId: string | null; listName: string | null; lastSyncAt: string | null; healthy: boolean | null; message: string | null };
+  mail: { transport: 'smtp' | 'stub'; from: string | null };
+  counts: SubscriberCounts;
+  /** only in digest mode */
+  digest: { lastIssueAt: string | null; newPostsSince: number; dueAt: string | null } | null;
+}
+export interface NewsletterSettingsResponse { settings: NewsletterSettingsDto; status: NewsletterStatusDto }
+export const NEWSLETTER_SETTINGS_LIMITS = {
+  consentText: 300,
+  consentVersion: 20,
+  digestDays: [1, 60],
+  digestPosts: [1, 20],
+  issueTitle: 150,
+  issueIntroMd: 5_000,
+  issuePosts: [1, 10],
+} as const;
+
+/** POST /api/admin/newsletter/sync. */
+export interface NewsletterSyncRequest { confirm: true }
+export interface NewsletterSyncResponse { synced: number; blocklisted: number; skipped: number; changed: number; errors: Array<{ email: string; message: string }> }
+
+export type IssueStatus = 'draft' | 'sending' | 'sent' | 'failed';
+export type IssueOrigin = NewsletterMode;
+export type IssueEventKind =
+  | 'created' | 'updated' | 'test_sent' | 'send_requested' | 'provider_created' | 'provider_started'
+  | 'sent' | 'failed' | 'stats_fetched' | 'deleted';
+export interface IssuePost {
+  articleId: string; slug: string; title: string; dek: string; excerpt: string; topic: string; publishedLabel: string;
+  readUrl: string; tldrUrl: string | null; listenUrl: string | null;
+}
+export interface IssueStatsDto {
+  recipients: number; sent: number; delivered: number | null; opens: number | null; clicks: number | null;
+  bounces: number | null; unsubscribes: number | null; fetchedAt: string;
+}
+export interface IssueListItemDto {
+  id: string; number: number; status: IssueStatus; origin: IssueOrigin; title: string; postCount: number;
+  recipientCount: number | null; createdAt: string; sentAt: string | null; lastError: string | null;
+}
+export interface IssueListResponse { issues: IssueListItemDto[]; total: number; confirmedCount: number }
+export interface IssueEventDto { id: string; kind: IssueEventKind; actor: string | null; details: Record<string, unknown>; createdAt: string }
+export interface IssueDetailDto extends IssueListItemDto {
+  introMd: string; posts: IssuePost[]; providerCampaignId: string | null; stats: IssueStatsDto | null;
+  createdBy: string | null; sentBy: string | null;
+  /** oldest first */
+  events: IssueEventDto[];
+  /** status === 'draft' */
+  editable: boolean;
+}
+export interface IssueDetailResponse { issue: IssueDetailDto }
+export interface IssueCreateRequest { title: string; introMd?: string; articleIds: string[] }
+/** articleIds = new order / subset (manual + automatic drafts alike). */
+export interface IssueUpdateRequest { title?: string; introMd?: string; articleIds?: string[] }
+export interface IssuePreviewDto { subject: string; html: string; text: string; sampleRecipient: { email: string; consentLine: string } }
+export interface IssueSendRequest { confirm: true }
+export interface IssueTestResponse { sentTo: string; transport: 'smtp' | 'stub'; messageId: string }
+export interface IssueDeleteResponse { deleted: true }
+/** 422 ISSUE_POSTS_INVALID → error.details. */
+export interface IssuePostsInvalidDetails { articleIds: string[] }
+export interface NewsletterWebhookRequest { event: 'unsubscribe' | 'bounce' | 'complaint'; email: string; reason?: string; occurredAt?: string; providerRef?: string }
+export interface NewsletterWebhookResponse { accepted: boolean }

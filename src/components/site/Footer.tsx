@@ -32,7 +32,7 @@ export function Footer({ site }: FooterProps) {
     <footer className="site-footer" ref={footRef}>
       <canvas className="ft-ascii" ref={cvRef} aria-hidden="true" />
       <div className="ft-in ft-grid">
-        <NewsletterForm />
+        <NewsletterForm consentText={site.newsletterConsentText} />
         <section className="ft-right">
           <div className="ft-logo" aria-label={site.wordmark}>
             {head}

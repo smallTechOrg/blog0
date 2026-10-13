@@ -46,7 +46,7 @@ const SEEDED_SLUGS = Object.values(SEEDED).map((p) => p.slug);
 const FEATURED_ORDER = [SEEDED.destroy.title, SEEDED.techFirst.title, SEEDED.humans.title];
 const HUMANS_DEK =
   'A human is a collection of perceptions, feelings, thoughts and intentions — read through the Buddha’s account of how perception becomes proliferation.';
-const NL_DONE = 'You’re in. First issue lands Thursday.';
+const NL_DONE = 'Almost there — check your inbox and confirm.';
 
 interface PublishedRow {
   slug: string;
@@ -254,7 +254,7 @@ test.describe('reader site (blog0)', () => {
     expect(await page.locator('main').locator('p').count()).toBeGreaterThan(2);
   });
 
-  test('newsletter: subscribe in the footer → "You’re in…", the address is in Admin → Subscribers and its CSV', async ({ page }) => {
+  test('newsletter: subscribe in the footer → "Almost there…", the address is in Admin → Subscribers and its CSV', async ({ page }) => {
     const email = `reader-${Date.now()}@example.test`;
     await page.goto('/');
     const form = page.locator('#newsletter');
@@ -287,7 +287,7 @@ test.describe('reader site (blog0)', () => {
     const row = page.locator('.admin-table tbody tr', { hasText: email });
     await expect(row).toBeVisible();
     await expect(row).toContainText('E2E Reader');
-    await expect(row).toContainText('Subscribed');
+    await expect(row).toContainText('Pending'); // double opt-in: confirmed only after the emailed link (Phase 7)
 
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: 'Export CSV' }).click()]);
     const csv = readFileSync(await download.path(), 'utf8');

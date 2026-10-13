@@ -117,6 +117,22 @@ blog0 keeps the issue, its send log and its stats.
 > **Assumed:** the excerpt is the first paragraph's first 60 words with an ellipsis; a post with an
 > empty body renders the dek only.
 > **Assumed:** stats shape across providers is `{ recipients, sent, delivered: number | null, opens, clicks, bounces, unsubscribes, fetchedAt }` — fields the provider does not report are `null`.
+> **Assumed (S7.2, verified against Listmonk v5.1.0):** the admin user cannot use Basic/token auth
+> (`invalid API credentials`); `scripts/listmonk-dev.sh` logs in through the session form
+> (`GET /admin/login` nonce → `POST /admin/login`) and creates the API user with
+> `POST /api/users { username: 'blog0', type: 'api', user_role_id: <"Super Admin" from /api/roles/users>, status: 'enabled' }`
+> — the token is returned once in `data.password`; a lost `var/listmonk-dev.env` re-creates the user.
+> `/api/health` requires auth in v5, so the compose healthcheck probes `/admin/login`.
+> `postgres:18` keeps its data at `/var/lib/postgresql/18/docker`, so the compose volume mounts
+> `/var/lib/postgresql` (not `…/data`). The adapter looks a subscriber up by email **before** the
+> write (one `GET`, then `POST` or compare + `PUT`) instead of `POST` → 409 → `GET` → `PUT`: same
+> outcome, no 409 noise; re-enabling a blocklisted subscriber also re-adds the list membership
+> (`PUT /api/subscribers/lists { action: 'add', status: 'confirmed' }`) because Listmonk leaves it
+> `unsubscribed`. `sendIssue` reads the campaign first (Listmonk answers 400 when starting a
+> running campaign); unknown campaign/list ids answer 400, not 404. The §13.4 placeholders
+> (`%%BLOG0_UNSUBSCRIBE_URL%%`, `%%BLOG0_CONSENT_LINE%%`) are defined in `sender/types.ts` so the
+> adapter and the renderer (S7.3) share one definition. `docker compose` falls back to the
+> standalone `docker-compose` binary when the plugin is absent (this host).
 
 ## Success Criteria
 - [ ] Integration: with settings `per_post` + `autoSend false`, publishing a new article creates one `draft` issue whose single post snapshot has the article's title, dek, an excerpt, `readUrl` = `<BLOG0_PUBLIC_BASE_URL>/p/<slug>`, `tldrUrl` null; publishing a change to the same article creates no second issue; unpublishing creates nothing.

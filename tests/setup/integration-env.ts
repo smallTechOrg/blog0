@@ -5,6 +5,7 @@ import { afterAll, beforeAll } from 'vitest';
 import { resetConfigForTests } from '@/server/config';
 import { resetDbForTests } from '@/server/db/client';
 import { resetLoggerForTests } from '@/server/log';
+import { resetMailTransportForTests } from '@/server/newsletter/mail/transport';
 import { resetRateLimitStoreForTests } from '@/server/rate-window-store';
 import { resetCurrentSiteForTests } from '@/server/site/current';
 
@@ -17,6 +18,10 @@ process.env.BLOG0_STORAGE_DIR = 'var/storage-test';
 // Throttles count in memory unless a test opts into the DB store explicitly
 // (resetRateLimitStoreForTests(new DbRateLimitStore()) — tests/integration/rate-limit-db.test.ts).
 process.env.BLOG0_RATE_LIMIT_STORE = 'memory';
+// Phase 7: the stub sender + the recording stub mail transport — tests never need SMTP or Listmonk.
+// (The Listmonk adapter test sets BLOG0_NEWSLETTER_SENDER=listmonk itself from var/listmonk-dev.env.)
+process.env.BLOG0_NEWSLETTER_SENDER = 'stub';
+process.env.BLOG0_SMTP_HOST = '';
 // Keep test output readable: info lines still reach captureLogs() sinks, just not stdout.
 if ((process.env.BLOG0_LOG_LEVEL ?? '').trim() === '') process.env.BLOG0_LOG_LEVEL = 'warn';
 
@@ -25,6 +30,7 @@ beforeAll(async () => {
   resetLoggerForTests();
   resetCurrentSiteForTests();
   resetRateLimitStoreForTests();
+  resetMailTransportForTests();
   await resetDbForTests();
 });
 

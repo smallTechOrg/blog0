@@ -12,6 +12,7 @@ const SAVED: SiteSettingsDto = {
   aboutBodyMd: 'One.\n\nTwo.',
   socialXUrl: null,
   socialLinkedinUrl: 'https://www.linkedin.com/company/smalltech',
+  newsletter: { mode: 'manual', autoSend: false, digestDays: 7, digestPosts: 3, consentText: 'One issue a week at most.', consentVersion: 'v1', modeSetAt: null },
 };
 
 describe('site settings form helpers', () => {

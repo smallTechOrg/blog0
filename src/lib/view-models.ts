@@ -13,6 +13,8 @@ export interface SiteViewModel {
   aboutBodyParagraphs: string[];
   socialXUrl: string | null;
   socialLinkedinUrl: string | null;
+  /** Phase 7: the consent line under the footer form (recorded on every signup). */
+  newsletterConsentText: string;
   topics: string[];
   year: number;
 }
@@ -93,6 +95,7 @@ export interface SiteRecordLike {
   aboutBodyMd: string;
   socialXUrl: string | null;
   socialLinkedinUrl: string | null;
+  newsletterConsentText: string;
 }
 
 export function siteViewModelFrom(site: SiteRecordLike, opts: { topics: string[]; year: number }): SiteViewModel {
@@ -109,6 +112,7 @@ export function siteViewModelFrom(site: SiteRecordLike, opts: { topics: string[]
       .filter(Boolean),
     socialXUrl: site.socialXUrl || null,
     socialLinkedinUrl: site.socialLinkedinUrl || null,
+    newsletterConsentText: site.newsletterConsentText,
     topics: opts.topics,
     year: opts.year,
   };

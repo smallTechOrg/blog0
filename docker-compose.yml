@@ -1,0 +1,51 @@
+# Listmonk beside blog0 (spec/architecture.md §12.6, Phase 7 slice S7.2).
+# Local use: `pnpm listmonk:up` (= scripts/listmonk-dev.sh up) brings up postgres + listmonk, waits
+# for health, ensures the API user + the `blog0-test` list and writes var/listmonk-dev.env.
+# Production reference: one Postgres instance, separate databases (blog0, listmonk); blog0 itself
+# is optional here (`docker compose --profile app up`) and reads the runbook's env file.
+name: blog0
+services:
+  postgres: # one instance, two databases (blog0 + listmonk)
+    image: postgres:18
+    environment: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: postgres }
+    volumes:
+      # postgres:18 keeps PGDATA at /var/lib/postgresql/18/docker; the volume must cover /var/lib/postgresql
+      - pgdata:/var/lib/postgresql
+      - ./scripts/compose/init-db.sh:/docker-entrypoint-initdb.d/10-init-db.sh:ro # creates blog0, blog0_test, listmonk (+ role listmonk)
+    ports: ['127.0.0.1:5433:5432'] # 5433: never clashes with the Homebrew Postgres on 5432
+    healthcheck: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: 5s, timeout: 3s, retries: 20 }
+  listmonk:
+    image: listmonk/listmonk:v5.1.0 # pinned; bump deliberately (the adapter test pins the API shape)
+    depends_on: { postgres: { condition: service_healthy } }
+    # The image entrypoint only execs its argv: install (first run only), upgrade, serve.
+    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      LISTMONK_app__root_url: http://localhost:${BLOG0_LISTMONK_PORT:-9000}
+      LISTMONK_db__host: postgres
+      LISTMONK_db__port: '5432'
+      LISTMONK_db__user: listmonk
+      LISTMONK_db__password: listmonk
+      LISTMONK_db__database: listmonk
+      LISTMONK_db__ssl_mode: disable
+      # First-run admin (v4+ `--install` reads these); used only by scripts/listmonk-dev.sh to create the API user.
+      LISTMONK_ADMIN_USER: ${LISTMONK_ADMIN_USER:-admin}
+      LISTMONK_ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-listmonk-admin-dev-password}
+      TZ: Etc/UTC
+    ports: ['127.0.0.1:${BLOG0_LISTMONK_PORT:-9000}:9000']
+    volumes: [listmonk-uploads:/listmonk/uploads]
+    # v5: /api/health needs a session or API token (403 otherwise); the login page is the unauthenticated probe.
+    healthcheck: { test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9000/admin/login >/dev/null || exit 1'], interval: 5s, timeout: 3s, retries: 30 }
+  blog0: # optional — `docker compose --profile app up`
+    profiles: [app]
+    build: .
+    image: blog0:local
+    depends_on: { postgres: { condition: service_healthy } }
+    env_file: [blog0.env] # the runbook's env file (never committed)
+    environment:
+      BLOG0_DATABASE_URL: postgres://postgres:postgres@postgres:5432/blog0
+      BLOG0_NEWSLETTER_SENDER: listmonk
+      BLOG0_LISTMONK_URL: http://listmonk:9000
+    ports: ['127.0.0.1:3410:3410']
+    volumes: [blog0-storage:/data/storage]
+volumes: { pgdata: {}, listmonk-uploads: {}, blog0-storage: {} }

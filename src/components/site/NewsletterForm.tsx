@@ -3,12 +3,15 @@
 import { useState, type FormEvent } from 'react';
 
 /* The signup (design NewsletterForm): name (optional), then e-mail and the
-   arrow in one row. Posts to /api/newsletter (capability newsletter-signup);
-   the address is checked here first so a typo never costs a request. */
+   arrow in one row. Posts to /api/newsletter (capability newsletter-list) with
+   the page it was on (`sourceUrl`); the `.ft-micro` line is the site's consent
+   text, recorded on the signup. Double opt-in: success means "check your inbox"
+   (div. 15 amended). The address is checked here first so a typo never costs a
+   request. */
 
 export const NL_INVALID = 'Enter a valid email, like you@company.com.';
 export const NL_FAILED = 'That didn’t go through. Try again?';
-export const NL_DONE = 'You’re in. First issue lands Thursday.';
+export const NL_DONE = 'Almost there — check your inbox and confirm.';
 
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
@@ -16,12 +19,18 @@ type Outcome = 'ok' | 'invalid' | 'failed';
 
 /* 400 → the server disagreed with the address (show the design's hint);
    anything else that is not a success envelope → the try-again message. */
+function currentSourceUrl(): string {
+  if (typeof location === 'undefined') return '/';
+  const path = (location.pathname || '/') + (location.search || '');
+  return path.startsWith('/') && !path.startsWith('//') ? path.slice(0, 500) : '/';
+}
+
 async function submitSubscribe(email: string, name: string): Promise<Outcome> {
   try {
     const res = await fetch('/api/newsletter', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify(name ? { email, name } : { email }),
+      body: JSON.stringify({ email, ...(name ? { name } : {}), sourceUrl: currentSourceUrl() }),
       credentials: 'same-origin',
       cache: 'no-store',
     });
@@ -33,7 +42,12 @@ async function submitSubscribe(email: string, name: string): Promise<Outcome> {
   }
 }
 
-export function NewsletterForm() {
+export interface NewsletterFormProps {
+  /** The consent line shown under the form (site.newsletterConsentText). */
+  consentText: string;
+}
+
+export function NewsletterForm({ consentText }: NewsletterFormProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
@@ -104,7 +118,7 @@ export function NewsletterForm() {
               {busy ? '…' : '→'}
             </button>
           </div>
-          <p className="ft-micro">Unsubscribe in one click. We don’t share the list.</p>
+          <p className="ft-micro">{consentText}</p>
           <p className="ft-st" id="nl-st" aria-live="polite">
             {err}
           </p>

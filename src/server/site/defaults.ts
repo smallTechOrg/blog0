@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { NewSiteRow } from '../db/schema';
+import { DEFAULT_CONSENT_TEXT, DEFAULT_CONSENT_VERSION, type NewSiteRow } from '../db/schema';
 
 // Seed values for the `site` row (spec/data.md → site; design constants from spec/design/design-app.js).
 // Shared by the test helper (resetDb) and `pnpm db:seed`. The brand is blog0 everywhere
@@ -29,6 +29,14 @@ export const SITE_DEFAULTS = {
   socialXUrl: null,
   socialLinkedinUrl: null,
   timezone: 'Asia/Kolkata',
+  // Phase 7 (spec/data.md → site): newsletter settings — manual mode, no auto-send, the seeded consent line.
+  newsletterMode: 'manual',
+  newsletterAutoSend: false,
+  newsletterDigestDays: 7,
+  newsletterDigestPosts: 3,
+  newsletterConsentText: DEFAULT_CONSENT_TEXT,
+  newsletterConsentVersion: DEFAULT_CONSENT_VERSION,
+  newsletterModeSetAt: null,
 } as const satisfies Omit<NewSiteRow, 'id' | 'createdAt' | 'updatedAt'>;
 
 /** The seed row for a given site slug (BLOG0_SITE_SLUG). */

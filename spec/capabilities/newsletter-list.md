@@ -117,6 +117,23 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 > email.
 > **Assumed:** expired pending rows are kept (status `pending`, expiry visible) rather than deleted,
 > so repeated abuse of one address stays visible; their IP is pruned on the normal 12-month rule.
+> **Assumed (S7.1):** a used confirm token is still recognisable after confirmation even though the
+> row's hash is cleared: the `confirmed` / `resubscribed` event keeps `details.tokenHash` (the hash of
+> a spent one-time secret), so a second click answers 410 "already used" instead of 404.
+> **Assumed (S7.1):** Next's App Router fixes a page's HTTP status at 200 except through `notFound()`,
+> so the HTML link pages answer a true 404 for an invalid token (segment `not-found.tsx`) and render
+> the expired / rate-limited copy at 200; the JSON routes (`POST /api/newsletter/confirm|unsubscribe`)
+> carry the exact 410 / 429 codes. `X-Robots-Tag` on the pages is replaced by `robots: noindex`
+> metadata (`Cache-Control: no-store` comes from `force-dynamic`).
+> **Assumed (S7.1):** the ledger guard lets a draft issue's cascade delete pass (the parent row is
+> already gone when the row trigger fires) and lets `newsletter_prune_event_ips()` null `ip` only
+> while `blog0.newsletter_prune = '1'` is set for that transaction; every other UPDATE / DELETE on
+> the three append-only tables raises `integrity_constraint_violation` ("append-only").
+> **Assumed (S7.1):** a capped signup (4th in 24 h) keeps the token already in the inbox rather than
+> issuing one it cannot deliver; a failed send is recorded (`outcome: 'failed'`) but does not count
+> toward the cap. Legacy rows backfilled by the migration get `source = 'legacy'`; a re-signup from
+> the footer sets `source = 'footer'` again. Slice S7.1's `sender-hook.ts` is a no-op, so the
+> `provider_synced` event of the confirm criterion arrives with slice S7.3's sync wiring.
 
 ## Success Criteria
 - [ ] Integration: `POST /api/newsletter { email: ' A@B.com ', sourceUrl: '/p/humans-are-software' }` → `{ subscribed: true }`; the row is `pending`, `email = 'a@b.com'`, `signup_source_url` set, `consent_text`/`consent_version` equal the site settings, `confirm_token_hash` is 64 hex chars and is not the token; one `signup` + one `confirmation_sent` event; one `newsletter_message` row (stub) whose HTML contains `/newsletter/confirm?t=`.

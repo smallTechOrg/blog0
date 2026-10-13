@@ -4,7 +4,8 @@
 
 import { SITE_SETTINGS_LIMITS, type SiteSettingsDto, type SiteSettingsPatch } from '@/lib/api/dto';
 
-export type SiteField = keyof SiteSettingsDto;
+/** The text fields this form edits — `newsletter` (Phase 7) is read-only here and edited by NewsletterSettings.tsx. */
+export type SiteField = keyof Omit<SiteSettingsDto, 'newsletter'>;
 
 /** Every input is a string; a null social URL is an empty input. */
 export type SiteSettingsDraft = Record<SiteField, string>;

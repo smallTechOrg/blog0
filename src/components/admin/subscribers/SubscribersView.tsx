@@ -1,6 +1,6 @@
 'use client';
 
-import type { SubscriberListResponse } from '@/lib/api/dto';
+import type { SubscriberListResponse, SubscriberStatus } from '@/lib/api/dto';
 
 import { AdminLoadError, stamped, useAdminLoad } from '../AdminLoad';
 import { apiRequest } from '../api';
@@ -13,6 +13,15 @@ const PATH = '/admin/subscribers';
 export const CSV_HREF = '/api/admin/subscribers?format=csv';
 
 const fetchSubscribers = () => stamped(apiRequest<SubscriberListResponse>('/api/admin/subscribers'));
+
+/** Phase 7 statuses (spec/api.md SubscriberStatus); the Phase 7 rewrite of this view (slice S7.4) adds filters + detail. */
+const STATUS_LABELS: Record<SubscriberStatus, string> = {
+  pending: 'Pending',
+  confirmed: 'Confirmed',
+  unsubscribed: 'Unsubscribed',
+  bounced: 'Bounced',
+  legacy_unconfirmed: 'Legacy',
+};
 
 export function SubscribersView({ timeZone }: { timeZone: string }) {
   const { load: state, reload } = useAdminLoad(fetchSubscribers);
@@ -65,7 +74,7 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
                     <td className="admin-table__title mono">{s.email}</td>
                     <td>{s.name ? s.name : <span className="admin-faint">—</span>}</td>
                     <td>
-                      <span className="tag">{s.status === 'subscribed' ? 'Subscribed' : 'Unsubscribed'}</span>
+                      <span className="tag">{STATUS_LABELS[s.status]}</span>
                     </td>
                     <td className="admin-table__updated">
                       <time dateTime={s.createdAt} title={s.createdAt}>

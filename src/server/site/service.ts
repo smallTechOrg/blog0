@@ -11,6 +11,8 @@ import { site, type SiteRow } from '../db/schema';
 import { ApiError } from '../http/api';
 import { log } from '../log';
 
+import { newsletterSettingsFrom } from '../newsletter/settings';
+
 import { invalidateCurrentSite } from './current';
 import { LEGACY_WORDMARK, SITE_DEFAULTS } from './defaults';
 
@@ -71,6 +73,8 @@ export function siteSettingsFrom(row: SiteRow): SiteSettingsDto {
     aboutBodyMd: row.aboutBodyMd,
     socialXUrl: row.socialXUrl ?? null,
     socialLinkedinUrl: row.socialLinkedinUrl ?? null,
+    // Phase 7: read-only here (edited via PATCH /api/admin/newsletter/settings).
+    newsletter: newsletterSettingsFrom(row),
   };
 }
 
@@ -93,7 +97,7 @@ export async function updateSiteSettings(
   const fields = (Object.keys(patch) as Array<keyof SiteSettingsPatch>).filter((k) => patch[k] !== undefined);
   if (fields.length === 0) return getSiteSettings(siteId);
 
-  const set: Partial<SiteSettingsDto> = {};
+  const set: Partial<Omit<SiteSettingsDto, 'newsletter'>> = {};
   for (const k of fields) (set as Record<string, unknown>)[k] = patch[k];
 
   const [row] = await getDb().update(site).set(set).where(eq(site.id, siteId)).returning();

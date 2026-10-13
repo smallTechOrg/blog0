@@ -10,7 +10,9 @@ import { upgradeLegacyBrand } from '../site/service';
 // `pnpm db:seed` step 1: upsert the site row (spec/data.md → Seed data). An existing row is left
 // untouched (admins edit it in the desk) except for the one-time brand upgrade: a row still
 // carrying the design's "log0" wordmark/brand_name becomes "blog0" (upgradeLegacyBrand only
-// rewrites that exact legacy value), so re-running the seed changes nothing.
+// rewrites that exact legacy value), so re-running the seed changes nothing. Phase 7: a fresh row
+// carries the newsletter settings defaults (siteSeedFor); an existing row keeps what the admin set and
+// gets the column defaults from migration 0002_newsletter.
 
 export interface SeedSiteResult {
   site: SiteRow;

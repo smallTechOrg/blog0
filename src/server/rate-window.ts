@@ -76,7 +76,15 @@ export class FixedWindowCounter {
 // ---------------------------------------------------------------------------------------------
 // Async store in front of the counters (Phase 5).
 
-export type RateScope = 'login.pair' | 'login.email' | 'newsletter.ip' | 'newsletter.email' | 'newsletter.site';
+export type RateScope =
+  | 'login.pair'
+  | 'login.email'
+  | 'newsletter.ip'
+  | 'newsletter.email'
+  | 'newsletter.site'
+  // Phase 7: the confirm + unsubscribe links (pages and JSON routes share these two buckets).
+  | 'newsletter.link.ip'
+  | 'newsletter.link.site';
 
 export interface RateBucket {
   scope: RateScope;
