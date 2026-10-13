@@ -17,7 +17,7 @@ One Next.js (App Router) process serves everything on a single origin (default
  Writer browser ──► │ /admin pages (server guard) + client editor ──► /api/admin/* route handlers         │
                     │      route handlers ──► withApi (envelope, auth, origin check, request log)         │
                     │                    ──► services: articles, formats, jev, listen, media, users, site │
-                    │      jev ──► llm/openrouter adapter ──► https://openrouter.ai/api/v1 (one call/click)│
+                    │      jev ──► llm decisions adapter ──► openrouter.ai/api/alpha/decisions (1 req/click) │
                     │      services ──► drizzle ──► Postgres (blog0_dev / blog0_test) | PGlite (§11)       │
                     │      storage interface ──► local disk BLOG0_STORAGE_DIR ──► /media/[...key]         │
                     └──────────────────────────────────────────────────────────────────────────────────────┘
@@ -47,8 +47,8 @@ One Next.js (App Router) process serves everything on a single origin (default
 | Content pipeline | `src/server/content/*` | Markdown → `RenderedArticle` (blocks, paragraphs, sentences, stats, fingerprints, warnings). Deterministic. |
 | Formats | `src/server/formats/*` | One adapter per format kind (`read`, `tldr`, `listen`) implementing status, chip flags, validation, publish (§5). |
 | Articles | `src/server/articles/*` | Create, save (revision), publish/unpublish, delete draft, TLDR generate orchestration + deck save. |
-| LLM | `src/server/llm/*` | `LlmClient` interface + OpenRouter adapter (retry/backoff/timeout, instrumentation), key presence check. |
-| Jev | `src/server/jev/*` | The TLDR selection agent (see `spec/agent.md`). |
+| LLM | `src/server/llm/*` | `LlmClient` (one method, `decide`) + the OpenRouter **decisions** adapter (retry/backoff/timeout, instrumentation), key presence check. Phase 8 removed the chat-completions client (Jev was its only user). |
+| Jev | `src/server/jev/*` | The TLDR relevance ranker (see `spec/agent.md`). |
 | Listen | `src/server/listen/*` | Audio probe + ingest, Listen state, aligner-facing marks save (§9.5). |
 | Media | `src/server/media/*`, `src/server/storage/*` | Upload pipeline, image probe, byte ranges, cleanup; `Storage` interface + `LocalDiskStorage` (§9). |
 | Newsletter | `src/server/newsletter/*` | Phase 7 (§13): owned list (signup → pending, tokens, confirm/unsubscribe, events + suppression, legacy, prune), transactional mail (`mail/`: nodemailer SMTP or recording stub), sender adapter (`sender/`: Listmonk REST or stub), issues (`issues/`: snapshot, render, triggers, send, stats), throttles. |
@@ -75,16 +75,27 @@ current, else 409) → render the revision (cache) → `computeBounds` + `guardI
 `src/server/jev` (0 eligible sentences or input too long → 422, **no row, no call**) → in one
 transaction that locks the article row (`SELECT … FOR UPDATE`): refuse if a generation for this
 article is `running` and younger than 3 min (409 `GENERATION_IN_PROGRESS`), else insert
-`ai_generation` (status `running`) and commit → `runJev()` (outside the transaction) → on success
-update the row (succeeded, picks, usage, cost, latency) and replace the TLDR **draft** payload with
-slides built **from the server's own sentence list** (never from model text) → return the deck +
-generation record. On failure update the row (failed, error_code, error_message, raw outputs) and
-return the mapped error; the draft deck is untouched. The row lock makes a double click produce
-exactly one row.
+`ai_generation` (status `running`, task `tldr.rank`) and commit → `runJev()` (outside the
+transaction; one decisions request, batched only past the context budget — `spec/agent.md` §2) →
+on success update the row (succeeded, `output = { scores, selected, k, batches }`, usage, cost,
+latency, `attempts` = requests sent) and replace the TLDR **draft** payload with the top-k slides
+built **from the server's own sentence list** (never from model text), in document order → return
+the deck + generation record. On failure update the row (failed, error_code, error_message, raw
+response bodies) and return the mapped error; the draft deck is untouched. The row lock makes a
+double click produce exactly one row.
 
-**Deck edit.** `PUT /api/admin/articles/:id/tldr` `{revisionId, slides:[{sid, source, reason?}]}`
-→ server resolves each `sid` against the revision's sentences (text comes from the server), checks
-uniqueness and 1–12 slides → stores draft payload + fingerprint.
+**Relevance in the editor.** `buildTldrState` loads the article's **latest succeeded** `tldr`
+generation (`latestSucceededGeneration` in `src/server/articles/repo.ts`) and reads
+`output.scores` into a `sid → relevance` map (`readScores(output)`: legacy `{ picks: [{ index, sid,
+reason }] }` outputs and malformed outputs give an empty map). `SentenceDto.relevance`,
+`DeckSlideDto.relevance` and `GenerationDto.picks[].relevance` come from that map (null when the
+sid is absent). Sids are content-derived, so an unchanged sentence keeps its score across edits;
+scores are never stored in the format payload (one fact, one place).
+
+**Deck edit.** `PUT /api/admin/articles/:id/tldr` `{revisionId, slides:[{sid, source}]}` (an extra
+legacy `reason` key is stripped, not refused) → server resolves each `sid` against the revision's
+sentences (text comes from the server), checks uniqueness and 1–12 slides → stores draft payload +
+fingerprint.
 
 **Publish.** `POST /api/admin/articles/:id/publish` `{revisionId}` (= current) → validates title,
 topic and body present → each registered format adapter `validateForPublish()` (TLDR: every draft
@@ -385,8 +396,10 @@ tests (`captureLogs()`).
 | Event | Emitted by | Fields |
 |---|---|---|
 | `api.request` | `withApi` (one line per API request, at completion; `withApi({ logLevel: 'debug' })` — used only by `/api/health/live` and `/api/health/ready` — logs 2xx at `debug`, anything else at the normal level) | `request_id, method, path, status, latency_ms, user_id?, input_summary, output_summary, err_code?` |
-| `llm.call` | OpenRouter adapter (one line per HTTP attempt) | `request_id, model, prompt_version, attempt, latency_ms, prompt_tokens, completion_tokens, cost_usd, provider_generation_id, outcome ('ok'|'http_error'|'timeout'|'invalid_json'), http_status?` |
-| `jev.run` | `runJev` | `request_id, article_id, revision_id, sentence_count, bounds, picks, attempts, outcome, err_code?` |
+| `llm.call` | OpenRouter decisions adapter (one line per HTTP attempt) | `request_id, model, prompt_version, batch, batches, questions, attempt, latency_ms, input_tokens, output_tokens, cost_usd, provider_generation_id, provider, outcome ('ok'\|'http_error'\|'timeout'\|'invalid_body'), http_status?, err_message?` — `batch` 1-based of `batches`; `questions` = count in this request; `attempt` = transport attempt 1–3; `provider_generation_id` = response `id`; `err_message` = provider message ≤ 300 chars, never article text |
+| `llm.cost_missing` | decisions adapter (`warn`) | `request_id, model, provider_generation_id` |
+| `jev.run` | `runJev` | `request_id, article_id, revision_id, sentence_count, k, batches, model, prompt_version, latency_ms, outcome ('ok'\|'error'), err_code?, missing_answers?, invalid_answers?, extra_answers?, top_relevance?, kth_relevance?` — `batches` = requests sent; counts and numbers only |
+| `jev.deadline` | `runJev` (`warn`) | `request_id, article_id, batches, deadline_ms` |
 | `auth.login` | login route | `outcome ('ok'|'bad_credentials'|'rate_limited'), email_masked` |
 | `app.boot` | `instrumentation.ts` | `version, port, node, site_slug, db_engine, openrouter_key ('configured'\|'not configured (Jev disabled)')` (+ `db_dir`, `notice`, `session_secret` source on PGlite) |
 | `media.upload` | audio/image ingest (`logMediaUpload`) | `request_id, kind ('audio'\|'image'), mime, bytes, duration_ms?, width?, height?, article_id?, outcome ('ok'\|'rejected'), err_code?` |
@@ -562,7 +575,8 @@ helpers stay isomorphic for a later review UI.
 `src/server/formats/payload.ts` — `listenPayloadSchema` / `readListenPayload` / `listenBaseline`
 (shape in `spec/data.md`; `uploadFingerprint` is `nullable().optional().default(null)` so legacy
 payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`,
-`TLDR_MAX_SLIDES = 12`, `TLDR_REASON_MAX = 200`).
+`TLDR_MAX_SLIDES = 12`; Phase 8 drops the slide `reason` and `TLDR_REASON_MAX` — zod strips the key,
+so legacy payloads parse).
 
 ### 9.5 Listen service (`src/server/listen/*`) and media cleanup
 
@@ -620,9 +634,10 @@ payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | integer 0–10: reverse proxies appending to `X-Forwarded-For`; 0 = ignore forwarding headers (§6) |
 | `BLOG0_SESSION_SECRET` | yes on `postgres://`; no on `pglite://` | — | ≥ 32 chars (`openssl rand -base64 48`). PGlite mode without it: generated once and persisted to `var/pglite-session-secret` (0600) — §11 |
 | `BLOG0_OPENROUTER_API_KEY` | yes on `postgres://`; no on `pglite://` | — | presence + placeholder check at boot (below); liveness by `pnpm check:openrouter`. PGlite mode without a real key: Jev disabled with a visible notice (§11) |
-| `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | |
-| `BLOG0_JEV_MODEL` | no | `google/gemini-2.5-flash` | see `spec/agent.md` §3 |
-| `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per model attempt |
+| `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | only `pnpm check:openrouter`'s `GET {base}/key` (Phase 8: no app code calls it) |
+| `BLOG0_OPENROUTER_DECISIONS_URL` | no | `https://openrouter.ai/api/alpha/decisions` | Phase 8: the Jev endpoint (alpha path, hence its own variable) |
+| `BLOG0_JEV_MODEL` | no | `typesafe/jev-1.13` | must be an OpenRouter **decisions** model; no fallback chain (`spec/agent.md` §3) |
+| `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per decisions request |
 | `BLOG0_LOG_LEVEL` | no | `info` | `debug|info|warn|error` |
 | `BLOG0_LOG_FILE` | no | — | append JSON lines here too (E2E sets it) |
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | seed + E2E | name `Sai Krishna V` | first admin; password ≥ 12 |
@@ -1344,7 +1359,7 @@ the requirements.
 | Syntax highlighting | Shiki via `@shikijs/rehype`, dual theme (CSS variables) | Server-side, zero client JS, light/dark switch with the site's `data-theme`. |
 | Password hashing | `@node-rs/argon2` (argon2id) | Prebuilt binaries (no node-gyp), OWASP-recommended algorithm. |
 | Sessions | Own DB-backed opaque tokens (HMAC'd at rest) | Multi-admin with per-user identity, revocable, tiny code. |
-| LLM access | Plain `fetch` to OpenRouter's `/chat/completions` behind `LlmClient` | One call shape, structured outputs, usage/cost in response; no SDK dependency to drift. |
+| LLM access | Plain `fetch` to OpenRouter's **decisions** endpoint (`POST /api/alpha/decisions`) behind `LlmClient.decide()` in `src/server/llm`; model `typesafe/jev-1.13` (Phase 8; the chat-completions client is removed — Jev was its only user) | User decision: Jev *is* this decisions model. One request returns a calibrated probability per sentence question plus `usage.cost`; no SDK covers the alpha endpoint, and plain `fetch` has nothing to drift. |
 | Media probing | `music-metadata` 12, `image-size` 2 | Pure-JS duration/format probe for mp3/m4a and dimensions/type for images; no native ffmpeg dependency. |
 | Fonts | `next/font/google` (Space Grotesk, Source Serif 4, JetBrains Mono) | Same faces as the design, self-hosted at build. |
 | Logging | In-house JSON-lines logger | Avoids worker-thread transport issues of pino under Next bundling; fields fully controlled. |
@@ -1491,8 +1506,8 @@ blog0/
 │   │   │   content/plugins/{figure-markers,heading-shift,raw-html,code-langs,external-links,images,tables,safe-urls}.ts
 │   │   ├── formats/{types,payload,index,read,tldr,listen}.ts      # formats/status.ts: Phase 4 (on hold), future
 │   │   ├── articles/{repo,service,schemas,slug,tldr,views,http}.ts
-│   │   ├── llm/{types,openrouter,index,key}.ts
-│   │   ├── jev/{state,bounds,build-input,validate,run,prompt,articles}.ts  jev/prompts/select-v1.md
+│   │   ├── llm/{types,openrouter,index,key}.ts          # openrouter.ts = the decisions adapter (Phase 8)
+│   │   ├── jev/{state,bounds,build-input,batches,validate,rank,run,prompt,articles}.ts  jev/prompts/rank-v1.md (+ select-v1.md, audit only)
 │   │   ├── listen/{probe,ingest,sync}.ts
 │   │   ├── media/{repo,ingest,image-probe,range,cleanup}.ts  storage/{types,local-disk,index}.ts
 │   │   ├── public/{articles,home,metadata,page-data}.ts
@@ -1646,7 +1661,7 @@ timings, copy). Numbers are stable (other files cite them).
 3. **Share targets** (user): LinkedIn, X, WhatsApp, Notes (mailto), Notion, Copy link everywhere a share exists; native sheet on touch/narrow (`spec/capabilities/paragraph-share.md`).
 4. **Search removed**: masthead tools hold only the theme toggle.
 6. **Boot strip on** (user): `SHOW_BOOT_STRIP = true`, `--booth: 28px`, design `bootCommand` lines and timings verbatim (`spec/capabilities/reader-site.md`).
-7. **TLDR selection** (user): Jev picks 4–8 lines server-side; writers may hand-edit and reorder; the design heuristic is not ported.
+7. **TLDR selection** (user): Jev picks 4–8 lines server-side; writers may hand-edit and reorder; the design heuristic is not ported. **Phase 8 (user):** Jev is the OpenRouter decisions model `typesafe/jev-1.13`; it scores every eligible sentence and the top k (k = 4–8 by length) form the deck in document order; per-line reasons are removed — the editor shows each line's relevance score instead and sorts the sentence picker by it. The reader-facing disclosure copy (divergence 8) is unchanged: "Lines selected by Jev (AI), verbatim from the article."
 9. **Listen without a recording**: the capsule's Listen (and the deck's mode-switcher Listen) stays visible but **disabled** with `title="No recording yet"` / `aria-label="Listen — no recording yet"` (same treatment as TLDR without a deck); card Listen buttons are hidden.
 12. **Footer links**: X/LinkedIn only when the site has their URLs; no RSS (user).
 13. **Contact mail**: `hello@logzero.blog` (seeded, editable in Admin → Site).
@@ -1669,7 +1684,8 @@ timings, copy). Numbers are stable (other files cite them).
 5. **Reactions removed.** Default: the row is dropped; its **Share article** button stays at the
    top of `.artfoot`. *Ask:* keep that button?
 8. **AI disclosure (new element).** Default: the intro slide shows a `.tdeck__note` line (§3
-   disclosure texts). *Ask:* wording and placement (intro slide only vs every slide).
+   disclosure texts). *Ask:* wording and placement (intro slide only vs every slide). Phase 8 keeps
+   the copy as is (user): ranking by a decisions model is still "selected by Jev (AI)".
 10. **Computed times.** Default: read = ceil(words/230), TLDR = the design's `tldrMinutes` over the
     published deck, listen = recording duration. *Ask:* 230 wpm OK?
 11. **Markdown coverage beyond the design.** Default: GFM tables, Shiki code blocks, footnotes as

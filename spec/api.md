@@ -39,7 +39,7 @@ new DTO goes into the matching section.
 | IMAGE_TOO_LARGE | 422 | Image wider or taller than 12 000 px |
 | JEV_NO_SENTENCES / JEV_INPUT_TOO_LONG | 422 | Guard failures (no LLM call) |
 | LLM_AUTH / LLM_INSUFFICIENT_CREDITS / LLM_MODEL_NOT_FOUND | 502 | Provider config problems (message points at `.env`) |
-| LLM_INVALID_OUTPUT | 502 | Model output invalid twice |
+| LLM_INVALID_OUTPUT | 502 | Phase 8: Jev's answers were incomplete or out of range (a sentence missing or a score outside [0,1]); no retry. Legacy: model output invalid twice |
 | LLM_RATE_LIMITED / LLM_UNAVAILABLE / LLM_TIMEOUT | 503 | Transient provider failure |
 | LLM_NOT_CONFIGURED | 503 | Designer mode without an OpenRouter key; Generate refused before any row is written |
 | RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header (Phase 5: counted in Postgres — `spec/capabilities/abuse-protection.md`; Phase 7 adds the confirm/unsubscribe link caps) |
@@ -93,19 +93,25 @@ interface PreviewResultDto {
   stats: { words: number; readMinutes: number };
   sentenceCount: number;                         // eligible
 }
-interface SentenceDto { sid: string; index: number; pid: string; text: string; words: number; headingPath: string[] }
-interface DeckSlideDto { sid: string; text: string; source: 'jev' | 'writer'; reason: string | null; missing: boolean } // missing = sid/text no longer in current revision
+// Phase 8: `reason` is gone from every TLDR DTO; `relevance` (Jev's score in [0,1], or null when the sentence
+// has no score in the article's latest succeeded generation — never scored, changed since, or a pre-Phase-8 generation)
+// takes its place. Source of every relevance value: spec/architecture.md §3 "Relevance in the editor".
+interface SentenceDto { sid: string; index: number; pid: string; text: string; words: number; headingPath: string[]; relevance: number | null }
+interface DeckSlideDto { sid: string; text: string; source: 'jev' | 'writer'; relevance: number | null; missing: boolean } // missing = sid/text no longer in current revision
 interface GenerationDto {
   id: string; status: 'running' | 'succeeded' | 'failed'; model: string; promptVersion: string;
-  requestedBy: string; startedAt: string; finishedAt: string | null; latencyMs: number | null; attempts: number;
-  promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; costUsd: number | null;
-  picks: Array<{ index: number; sid: string; reason: string }> | null;
+  requestedBy: string; startedAt: string; finishedAt: string | null; latencyMs: number | null;
+  attempts: number;                              // decisions requests sent (1 unless the article was batched)
+  sentenceCount: number;                         // sentences sent to Jev (= scored on success)
+  promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; costUsd: number | null;   // input / output / sum
+  picks: Array<{ index: number; sid: string; relevance: number | null }> | null;   // the k selected sentences, document order; null unless succeeded
+                                                                                    // (legacy generations: their picks with relevance null)
   errorCode: string | null; errorMessage: string | null;
 }
 interface TldrStateDto {
   status: FormatStatus;
   bounds: { min: number; max: number; target: number } | null;   // null when 0 eligible sentences
-  sentences: SentenceDto[];                                       // current revision, eligible only
+  sentences: SentenceDto[];                                       // current revision, eligible only, DOCUMENT order (the client sorts by relevance)
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
@@ -143,8 +149,8 @@ level otherwise (`spec/architecture.md` §7); DTOs live in the health section of
 | PATCH `/api/admin/articles/:id` | admin | `{ baseRevisionId: string, title?, dek?, bodyMd?, topic?, slug?, bylineName?, isFeatured?, featuredRank?: number \| null, inProgress? }` (limits above) | `{ article: ArticleDetailDto, revisionCreated: boolean }`. `CONFLICT` if base ≠ current. Content unchanged → no new revision. `SLUG_TAKEN`, `SLUG_LOCKED`. While never published and slug never manually set, a title change re-derives the slug. |
 | DELETE `/api/admin/articles/:id` | admin | — | `{ deleted: true }`; `NOT_DELETABLE` if ever published |
 | GET `/api/admin/articles/:id/tldr` | admin | — | `TldrStateDto` |
-| POST `/api/admin/articles/:id/tldr/generate` | admin | `{ revisionId: string }` (must be current) | `{ tldr: TldrStateDto, generation: GenerationDto }`. Errors: `CONFLICT`, `GENERATION_IN_PROGRESS`, `JEV_*`, `LLM_*` (the failed `GenerationDto` is in `error.details.generation`). Replaces the draft deck with Jev's picks on success. `maxDuration = 120`. |
-| PUT `/api/admin/articles/:id/tldr` | admin | `{ revisionId: string, slides: Array<{ sid: string, source: 'jev' \| 'writer', reason?: string \| null }> }` | `{ tldr: TldrStateDto }`. Text is resolved server-side from `sid`. `DECK_INVALID`, `CONFLICT`. Empty `slides` array is not allowed — use DELETE. |
+| POST `/api/admin/articles/:id/tldr/generate` | admin | `{ revisionId: string }` (must be current) | `{ tldr: TldrStateDto, generation: GenerationDto }`. Errors: `CONFLICT`, `GENERATION_IN_PROGRESS`, `JEV_*`, `LLM_*` (the failed `GenerationDto` is in `error.details.generation`). Ranks every eligible sentence and replaces the draft deck with the top k (document order) on success. `maxDuration = 120`. |
+| PUT `/api/admin/articles/:id/tldr` | admin | `{ revisionId: string, slides: Array<{ sid: string, source: 'jev' \| 'writer' }> }` (a legacy `reason` key is stripped, not refused; relevance is never accepted from the client) | `{ tldr: TldrStateDto }`. Text is resolved server-side from `sid`. `DECK_INVALID`, `CONFLICT`. Empty `slides` array is not allowed — use DELETE. |
 | DELETE `/api/admin/articles/:id/tldr` | admin | — | `{ tldr: TldrStateDto }` (draft deck cleared; published deck untouched) |
 | POST `/api/admin/articles/:id/publish` | admin | `{ revisionId: string }` | `{ article: ArticleDetailDto }`; `PUBLISH_BLOCKED` with reasons; `CONFLICT`. Copies each format's draft to its published copy (Listen: any status; no draft clears the published Listen — `spec/capabilities/listen-audio.md`). |
 | POST `/api/admin/articles/:id/unpublish` | admin | — | `{ article: ArticleDetailDto }` |

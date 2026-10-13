@@ -151,9 +151,12 @@ Payload shapes (validated with zod on write and read):
 ```ts
 // kind = 'tldr'
 interface TldrPayload {
-  slides: Array<{ sid: string; text: string; source: 'jev' | 'writer'; reason: string | null }>; // 1..12, text verbatim from the revision's sentence
+  slides: Array<{ sid: string; text: string; source: 'jev' | 'writer' }>; // 1..12, text verbatim from the revision's sentence
   generationId: string | null;   // ai_generation that produced the Jev picks this deck started from
 }
+// Phase 8: slides no longer carry `reason`; relevance scores are NOT copied into the payload —
+// they live only in ai_generation.output.scores. Legacy payloads (slides with `reason: string | null`)
+// parse unchanged: zod strips the unknown key. No migration.
 // kind = 'listen' — src/server/formats/payload.ts `listenPayloadSchema`
 interface ListenPayload {
   audio: {
@@ -194,26 +197,33 @@ step; guard failures that make no call create no row).
 | article_id | uuid fk → article on delete cascade | |
 | revision_id | uuid fk → article_revision | |
 | format_kind | text not null | `tldr` |
-| task | text not null | `tldr.select` |
+| task | text not null | `tldr.rank` (Phase 8); legacy rows `tldr.select`. No code filters on it (queries use `format_kind`) |
 | status | text not null | check in (`running`,`succeeded`,`failed`) |
 | requested_by | uuid fk → app_user | |
 | started_at | timestamptz not null default `now()` | |
 | finished_at | timestamptz null | |
 | model | text not null | slug used |
-| prompt_version | text not null | `jev-select-v1` |
+| prompt_version | text not null | `jev-rank-v1` (Phase 8); legacy `jev-select-v1` |
 | input_fingerprint | text not null | revision sentences fingerprint |
-| sentence_count | integer not null | N |
+| sentence_count | integer not null | N (= number of sentences scored) |
 | bound_min, bound_max | integer not null | |
-| attempts | integer not null default 0 | model calls (≤ 2) |
-| prompt_tokens, completion_tokens, total_tokens | integer null | summed over attempts |
-| cost_usd | numeric(12,6) null | summed; null when provider omitted cost |
+| attempts | integer not null default 0 | Phase 8: decisions requests sent (= batches; 1 for normal articles). Legacy: model calls (≤ 2) |
+| prompt_tokens, completion_tokens, total_tokens | integer null | Phase 8: `usage.input_tokens` / `usage.output_tokens` / their sum, summed over batches |
+| cost_usd | numeric(12,6) null | `usage.cost` summed over batches; null when the provider omitted cost on every request |
 | latency_ms | integer null | |
-| provider_generation_ids | text[] not null default '{}' | OpenRouter ids |
-| output | jsonb null | `{ picks: [{ index, sid, reason }] }` on success; `{ rawOutputs: [...] }` on invalid output |
+| provider_generation_ids | text[] not null default '{}' | response `id` per request |
+| output | jsonb null | Phase 8 success: `{ scores: Array<{ index: number, sid: string, relevance: number }>, selected: string[], k: number, batches: number }` — `scores` = every eligible sentence in document order, `relevance` = Jev's `noul` in [0,1] as returned; `selected` = the k top-ranked sids in document order. Failure with a response: `{ rawOutputs: string[] }` (raw response bodies, each ≤ 50 000 chars). Legacy success: `{ picks: [{ index, sid, reason }] }` — read as "no scores" |
 | error_code, error_message | text null | |
 | created_at | timestamptz | |
 
 Index (site_id, started_at desc); (article_id, started_at desc).
+
+**Where relevance scores live (Phase 8).** Only in `ai_generation.output.scores` of a succeeded
+`tldr` row. The editor reads the article's latest succeeded row and matches by `sid`
+(`spec/architecture.md` §3 "Relevance in the editor"). No column, table or migration is added:
+scores are written once per generation and read only by the editor, so jsonb on the row that
+produced them is the one place. > **Assumed:** no migration in Phase 8 — every change is jsonb
+content or column semantics, and legacy rows/payloads stay readable as they are.
 
 ### newsletter_subscriber
 The owned list (`spec/capabilities/newsletter-list.md`). Phase 2 created it with `status in
@@ -474,13 +484,17 @@ created `draft` and move on by themselves only when `site.newsletter_auto_send` 
   `ai_generation` row with `requested_by` = the seeding admin, cost recorded) and publish the
   draft deck (`published_payload` = draft, `published_revision_id` = the article's published
   revision); without a real key, build the deck from the committed fixture
-  `src/server/seed/decks/<slug>.json` (`source: 'writer'`, `reason: null`, `generationId: null`,
+  `src/server/seed/decks/<slug>.json` (`source: 'writer'`, `generationId: null`,
   texts matched by exact string to the published revision's eligible sentences; unmatched lines
   dropped with a warning; < 1 matched line → skip with a warning). Idempotent: a published deck
   is never touched; second run prints `decks: 0 seeded (0 calls)`. `--write-fixture` (real key
   required) rewrites each `<slug>.json` from the deck just generated (or already published).
-  Fixture shape: `{ "slug": string, "model": string, "promptVersion": string, "capturedAt": ISO,
-  "lines": Array<{ "text": string, "reason": string }> }`.
+  Fixture shape (Phase 8): `{ "slug": string, "model": string, "promptVersion": string,
+  "capturedAt": ISO, "lines": Array<{ "text": string, "relevance": number }> }` — lines in deck
+  (document) order, `relevance` copied from the generation's scores. The loader also accepts the
+  legacy line shape `{ "text", "reason" }` (reason ignored, relevance absent), so an old fixture
+  still seeds. The committed fixtures are regenerated in the Phase 8 gate (`model`
+  `typesafe/jev-1.13`, `promptVersion` `jev-rank-v1`).
 - Designer mode (`pglite://`): `pnpm dev:design` seeds **in-process** through
   `runDesignerSetup()` (`src/server/designer/setup.ts`, one PGlite handle — no child scripts):
   site → the generated designer admin `designer@blog0.local` (display name `Designer`), always,

@@ -266,31 +266,45 @@ to the editor.
     image"): preview thumbnail, **Alt text** (empty → "Empty alt marks the image decorative" and
     still proceeds), **Caption**, **Insert** / **Cancel**. Uploading: "Uploading… 42%" (XHR
     progress). Error: `.admin-error` under the toolbar with **Try again**.
-- **TLDR tab (`TldrTab`)**:
-  - Header: status chip, bounds hint "Jev will pick 5–7 lines for this length", primary
-    **Generate with Jev** (or **Regenerate**; confirm "Replace your current deck with Jev's new
-    picks?" when a draft exists). Unsaved changes → "Save & generate". Disabled with reason when
-    0 eligible sentences. When `TldrStateDto.jevAvailable` is false the button is disabled and a
-    `.stub`-styled notice reads "No OpenRouter key configured — add `BLOG0_OPENROUTER_API_KEY` to
-    `.env` to generate with Jev. You can still pick lines yourself from the article on the right."
-  - Saving first: button disabled, "Saving…"; then Running: spinner "Jev is reading… Ns", prior
+- **TLDR tab (`TldrTab`)** (Phase 8: relevance ranking replaces reasons):
+  - Header: status chip, bounds hint "Jev will pick the top <k> lines for this length"
+    (`bounds.target`; "all <k> lines" when k = sentence count), primary **Generate with Jev** (or
+    **Regenerate**; confirm "Replace your current deck with Jev's new top lines?" when a draft
+    exists). Unsaved changes → "Save & generate". Disabled with reason when 0 eligible sentences.
+    When `TldrStateDto.jevAvailable` is false the button is disabled and a `.stub`-styled notice
+    reads "No OpenRouter key configured — add `BLOG0_OPENROUTER_API_KEY` to `.env` to generate
+    with Jev. You can still pick lines yourself from the article on the right."
+  - Saving first: button disabled, "Saving…"; then Running: spinner "Jev is ranking… Ns", prior
     deck visible but dimmed.
-  - Success notice: "Jev picked N lines — saved as your draft deck. Edit them or publish."
-    ("1 line" when N = 1).
-  - Generation meta line (latest): "Jev · <model> · <promptVersion> · <tokens> tokens · $<cost
-    to 4 dp> (or ‘cost n/a’) · <name> · <relative time>".
+  - Success notice: "Jev ranked <N> sentences and picked the top <k> — saved as your draft deck.
+    Edit them or publish." ("1 sentence" / "top line" for 1).
+  - Generation meta line (latest): "Jev · <model> · <promptVersion> · ranked <sentenceCount>
+    sentences · <totalTokens> tokens · $<cost to 4 dp> (or ‘cost n/a’) · <name> · <relative
+    time>"; when `attempts > 1` "ranked … sentences in <attempts> requests".
   - Failure card: "Jev couldn’t make a deck: <message>." **Try again** · "or pick lines yourself
     from the article on the right."
-  - Two columns: **Deck** (`DeckList`: ordinal `01`, line text, reason in italic "Jev: …" or
-    "Added by you", ↑ ↓ ✕ buttons with aria-labels, `missing` lines flagged "No longer in the
-    article") and **Article lines** (`SentencePicker`: eligible sentences grouped under their
-    heading path; checking inserts at the document-order position among deck lines that are
-    still in document order, otherwise appends; unchecking removes).
+  - **Relevance label** (one formatter, `relevanceLabel(x)` in `components/admin/labels.ts`):
+    `relevance 0.82` — two decimals (`0.00`–`1.00`), monospace `.tldr-rel` span, muted colour;
+    nothing is rendered when relevance is null. There are **no reasons anywhere**.
+  - Two columns: **Deck** (`DeckList`: ordinal `01`, line text, meta line "Jev · relevance 0.82"
+    for Jev lines ("Jev" alone when unscored, e.g. a pre-Phase-8 deck) or "Added by you ·
+    relevance 0.41" / "Added by you" for writer lines; ↑ ↓ ✕ buttons with aria-labels; `missing`
+    lines flagged "No longer in the article") and **Article lines** (`SentencePicker`).
+  - `SentencePicker`: a two-option segmented switch **By relevance** | **In article order**
+    (`role=radiogroup`, aria-label "Sort article lines"). Default **By relevance** whenever any
+    sentence has a score, else **In article order** (the switch is then disabled with title "No
+    scores yet — generate with Jev"). *By relevance*: one flat list sorted by relevance
+    descending, ties and unscored sentences in document order (unscored after all scored); each
+    row shows its checkbox, the relevance label, the sentence, and its section (last heading or
+    "Intro") as a small muted caption. *In article order*: today's grouped list under heading
+    paths, each row also showing its relevance label. The choice is local UI state (not
+    persisted). Checking inserts at the document-order position among deck lines that are still
+    in document order, otherwise appends; unchecking removes (unchanged in both orders).
   - Footer: **Save deck** (dirty indicator), **Preview deck** (`DeckPreview`: the real
-    `TldrDeck` over the editor), **Reset to Jev’s picks** (when a generation exists), **Clear
-    deck** (confirm).
-  - Empty: "No deck yet. Jev reads the saved article and picks 4–8 lines, word for word. One
-    call, usually under a cent."
+    `TldrDeck` over the editor), **Reset to Jev’s picks** (when a succeeded generation exists —
+    rebuilds the deck from `latestGeneration.picks`), **Clear deck** (confirm).
+  - Empty: "No deck yet. Jev scores every sentence of the saved article for relevance and puts the
+    top 4–8 in the deck, word for word. One call, usually well under a cent."
 
 ### Listen tab (`components/admin/editor/ListenTab.tsx` + `components/admin/listen/*`)
 

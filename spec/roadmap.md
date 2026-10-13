@@ -37,8 +37,10 @@ explicit click, cached forever, never per reader view).
 1. A writer signs in, pastes Markdown, and sees the rendered Read preview update within 1 s of
    pausing typing.
 2. One click on **Generate** produces a deck of 4–8 lines (scaled to length), every line
-   byte-identical to a sentence of the saved article, each with a one-line reason, in under 60 s,
-   with model / prompt version / tokens / $ cost / who / when recorded.
+   byte-identical to a sentence of the saved article, in under 60 s, with model / prompt version /
+   tokens / $ cost / who / when recorded. Phase 8: the lines are the top-ranked of a relevance
+   score Jev (`typesafe/jev-1.13`) gives **every** sentence; the editor shows each score
+   ("relevance 0.82") instead of a reason.
 3. The published article page renders Read and plays the TLDR deck exactly like the design
    (intro slide, dwell by word count, type scaled by length, progress segments, wheel/touch/keys,
    end slide with Read + Share, deep link `/p/<slug>/tldr`).
@@ -90,12 +92,14 @@ rotator, sentence builder, in-deck poll).
 > **Assumed:** Listen estimate constants — 150 words/minute and a 0.6 s pause per paragraph (1.5 word-equivalents); the first paragraph starts at 0 (`spec/capabilities/listen-sync.md`).
 > **Assumed:** Phases 5–6 are planned at lower fidelity; their capability files are written spec-first at the start of each phase.
 > **Decided (user, 2026-10-13):** Phase 7 — Newsletter: blog0 owns the list (double opt-in, proof of consent, append-only suppression); Listmonk sends; it is built before Phase 6. Everything else about it is `Assumed:` in `spec/capabilities/newsletter-{list,issues}.md` and `spec/architecture.md` §12.6/§13.
-> Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model slug (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and the open design divergences (`spec/architecture.md` → `## Design divergences (ask user)`).
+> **Decided (user, 2026-10-13):** "Jev" is the OpenRouter decisions model `typesafe/jev-1.13`; Jev ranks all sentences by relevance and the top ones form the TLDR deck (Phase 8); reasons are removed; the reader disclosure copy stays.
+> Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model call shape (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and the open design divergences (`spec/architecture.md` → `## Design divergences (ask user)`).
 
 ## Phases of Development
 
-Scaffold and Phases 1–3 (with the Phase 3 fix) and Phase 5 are **done**; Phase 4 is **on hold**;
-**Phase 7 (Newsletter) is specified and next**; Phase 6 is planned after it.
+Scaffold and Phases 1–3 (with the Phase 3 fix), Phase 5 and Phase 7 are **done**; Phase 4 is
+**on hold**; **Phase 8 (Jev ranking) is specified and next — the last development phase before
+the freeze**; Phase 6 stays planned but is not scheduled before the freeze.
 
 ### Planning rules (Phase 4 onward)
 
@@ -153,10 +157,16 @@ Scaffold and Phases 1–3 (with the Phase 3 fix) and Phase 5 are **done**; Phase
 | `listmonk:down` | `bash scripts/listmonk-dev.sh down` |
 | `listmonk:reset` | `bash scripts/listmonk-dev.sh reset` (fresh `listmonk` database) |
 
-`check:openrouter` prints only booleans/numbers, never the key: key present, `GET {base}/key`
-valid, configured model (and the `spec/agent.md` §3 fallback list) listed on `GET {base}/models`,
-and one real structured call (`response_format` json_schema `{ ok: boolean }`) → `structured
-call: ok · tokens <n> · cost $<x|n/a> · <ms> ms`; exit 1 on any failure.
+`check:openrouter` prints only booleans/numbers, never the key. Phase 8 (decisions models are not
+in the `/models` catalog, and there is no fallback chain): `key present: true`, `key valid: true`
+(`GET {BLOG0_OPENROUTER_BASE_URL}/key`), then **one real 1-question decisions call** to
+`BLOG0_OPENROUTER_DECISIONS_URL` with `BLOG0_JEV_MODEL` — `state: { title: 'check', dek: '',
+article: 'The sky is blue. Grass is green.' }`, question `check` `{ type: 'noul', instructions:
+'Is this sentence about colour? Sentence: "The sky is blue."', criteria: { true: 'It names a
+colour.', false: 'It does not name a colour.' } }` — and asserts `answers.check.type === 'noul'`
+with a number in [0,1] → `decisions call: ok · model <slug> · noul <0.xx> · tokens <in>/<out> ·
+cost $<x|n/a> · <ms> ms`. A 400/404 prints "BLOG0_JEV_MODEL=<slug> is not an available decisions
+model — the default is typesafe/jev-1.13". Exit 1 on any failure.
 
 ---
 
@@ -662,3 +672,115 @@ then "pending docker", not passed. The CI workflow change is proven by its first
    → the confirmation arrives; **Send test to me** arrives with `[Test]` in the subject. No
    labelled stubs remain in this phase; the only non-delivering surface is the explicitly
    labelled **Stub** sender/mail in the Site → Newsletter status strip.
+
+---
+
+### Phase 8 — Jev ranking (typesafe/jev-1.13)
+
+**Goal:** the last development phase before the freeze. "Jev" becomes what the user means by it —
+the OpenRouter **decisions** model `typesafe/jev-1.13` — and the TLDR deck is chosen by ranking:
+one Generate click sends the article (state) and one relevance question per eligible sentence in
+one decisions request, Jev returns a probability per sentence, the server keeps every score and
+puts the top k (4–8 by length) into the draft deck in document order. Reasons disappear
+everywhere; the editor shows "relevance 0.82" on each line and sorts the sentence picker by
+relevance; hand-editing, staleness, publish and the reader disclosure are unchanged. Capabilities
+touched: `jev-tldr` (rewritten), `ai-cost-ledger` (token/cost semantics), `article-reading`
+(disclosure — no change). HOW: `spec/agent.md` (whole file), `spec/architecture.md` §3
+(Generate, Relevance in the editor, Deck edit), §7 (`llm.call`, `jev.run`), §10
+(`BLOG0_JEV_MODEL`, `BLOG0_OPENROUTER_DECISIONS_URL`), `## Stack` (LLM access), divergences 7–8;
+data `spec/data.md` (`ai_generation.output`, `TldrPayload`, fixture shape — **no migration**);
+HTTP `spec/api.md` (TLDR DTOs); screen `spec/ui.md` §4 TLDR tab.
+
+**Before fan-out (orchestrator, one commit `phase-8: tldr dto contract, jev config rows`):**
+- `src/lib/api/dto.ts`: the TLDR section exactly as `spec/api.md` (`SentenceDto.relevance`,
+  `DeckSlideDto.relevance` replacing `reason`, `GenerationDto.sentenceCount`,
+  `GenerationDto.picks[].relevance` replacing `reason`). Contract only — both slices build
+  against it.
+- `src/server/config.ts` + `.env.example` + `tests/unit/config.test.ts` (takes over):
+  `jevModel` default `typesafe/jev-1.13`; new `openrouterDecisionsUrl` from
+  `BLOG0_OPENROUTER_DECISIONS_URL` (default `https://openrouter.ai/api/alpha/decisions`, absolute
+  http(s) URL, trailing `/` trimmed); `.env.example` comments name the decisions model and drop
+  the fallback list.
+- Local `.env` (gitignored): if it sets `BLOG0_JEV_MODEL` to anything other than
+  `typesafe/jev-1.13`, change that one line (an explicit value would otherwise keep the chat model
+  and every real-key test would fail with `LLM_MODEL_NOT_FOUND`); report the change, never print
+  the key.
+- No new dependencies; no migration.
+
+**Slices** — two code-generators, concurrent; disjoint files. Neither edits `dto.ts`,
+`config.ts`, `.env.example` or `package.json` after the contract commit.
+
+| Slice | Owns | Depends on |
+|---|---|---|
+| **S8.1 Backend — decisions client + Jev ranker + seeds + scripts** | `src/server/llm/{types,openrouter,index}.ts` (take over: the decisions client replaces `completeJson`; `key.ts` untouched), `src/server/jev/{state,build-input,validate,run,prompt}.ts` (take over), `src/server/jev/{batches,rank}.ts` + `src/server/jev/prompts/rank-v1.md` (new; `select-v1.md` stays, unreferenced; `bounds.ts`, `articles.ts` unchanged), `src/server/articles/{tldr,schemas,repo}.ts` (take over: row `task`/`output`/usage mapping, `latestSucceededGeneration`, `readScores`, relevance on sentence/slide/pick DTOs, PUT body without `reason`), `src/server/formats/payload.ts` (takes over: drop `reason` + `TLDR_REASON_MAX`), `src/server/seed/seed-tldr.ts` + `src/server/seed/decks/index.ts` (take over: fixture shape with `relevance`, legacy `reason` lines accepted) + `src/server/seed/decks/*.json` (regenerated in the gate), `scripts/check-openrouter.ts` (takes over: `/key` + one 1-question decisions call; no catalog, no fallback list), `scripts/eval-jev.ts` (takes over: ranking table per `spec/agent.md` §7), `.github/workflows/ci.yml` (takes over: the container step's `test -f …/rank-v1.md`), `README.md` + `docs/deploy.md` (take over: env rows, `check:openrouter` sample output, "Jev = typesafe/jev-1.13"), `tests/unit/jev/**` (take over `stub.ts`, `run`, `deadline`, `build-input`, `validate`; new `batches`, `rank`, `prompt`), `tests/unit/llm/{openrouter,index}.test.ts` (take over), `tests/unit/seed/decks-fixture.test.ts` (takes over), `tests/integration/{jev-openrouter,tldr-flow,logging,seed-tldr,articles-api,designer-mode}.test.ts` and any other integration test or `tests/helpers/*` that asserts `reason`, `picks`, `jev-select-v1`, `completeJson` or the old model (take over those expectations only) | contract commit |
+| **S8.2 Frontend — TLDR tab + DTO consumers + E2E Generate step** | `src/components/admin/editor/{TldrTab.tsx,tldr-generate.ts}`, `src/components/admin/tldr/{DeckList.tsx,SentencePicker.tsx,deck-edit.ts}`, `src/components/admin/labels.ts` (`relevanceLabel`, `boundsHint` "top k", `generationMeta` "ranked N sentences"), `src/styles/admin.css` (`.tldr-rel`, the picker's segmented switch and section caption; drop `.deck__reason` styling if unused), `tests/unit/admin/{labels,deck-edit,tldr-generate,components,api}.test.ts(x)` (take over the TLDR expectations), `tests/e2e/tldr.spec.ts` (takes over the Generate step: k deck lines each matching `relevance [01]\.\d\d`; picker in **By relevance** order — the first row's score ≥ every other row's; switching to **In article order** shows the heading groups; add a writer line → "Added by you · relevance …"; publish → intro slide disclosure "Lines selected by Jev (AI), verbatim from the article."; `llm.call` log line with `"model":"typesafe/jev-1.13"` and `"outcome":"ok"`), `tests/e2e/helpers/*` only if the Generate step needs a helper change | contract commit (builds against `dto.ts`); S8.1 only at runtime (the E2E run in the gate) |
+
+Slice notes (rules live in `spec/agent.md` and the capability; these are hand-offs):
+- S8.1 runs one real call first (`pnpm check:openrouter`, then one `runJev` on
+  `tech-company-first`) to settle the two `Assumed:` call-shape items of `spec/agent.md` §3
+  (sid ids, `criteria` key shape) and the wrong-slug error body; it records the outcome in
+  `spec/agent.md` §3 in the same commit.
+- S8.1's unit stub returns decisions responses with `provider: '<stub:jev>'`; real-key paths
+  never use it (`spec/architecture.md` → Real-key tests).
+- S8.2 never computes or rounds a score beyond display (`toFixed(2)`); sorting uses the raw
+  number.
+
+> **Assumed:** two concurrent slices after a contract commit (the phase is one capability across
+> two layers; the DTO is the only shared surface, so the orchestrator writes it first).
+> **Assumed:** k = the existing `target` bound (4–8); `min`/`max` survive only as the hand-edit
+> hint, so no bounds change.
+> **Assumed / deferred (user: keep pure ranking):** pure top-k can cluster at the end of an article
+> (observed on real output); a "one line per third" coverage guard is a deferred option, not built
+> (`spec/agent.md` §6). `eval:jev` prints coverage and per-third counts so the decision can be
+> revisited with data.
+
+**Gate (exact)** — `.env` as in the planning rules, with a real `BLOG0_OPENROUTER_API_KEY` and
+`BLOG0_JEV_MODEL` unset or `typesafe/jev-1.13`. Real-key commands carry `BLOG0_REQUIRE_REAL_KEY=1`
+so a missing key fails instead of skipping. The fixture step touches **only `blog0_test`** —
+never `blog0_dev` (writers' articles):
+```bash
+pnpm install --frozen-lockfile
+pnpm check:openrouter                         # "key valid: true" · "decisions call: ok · model typesafe/jev-1.13 · noul 0.xx · tokens n/n · cost $… · … ms"
+pnpm db:migrate && pnpm db:verify             # "blog0_dev @ PostgreSQL 18.x — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK" (no Phase 8 migration)
+pnpm typecheck && pnpm lint && pnpm test:unit             # + jev/{batches,rank,validate,run,deadline,build-input,prompt}, llm/openrouter, seed/decks-fixture, admin TLDR tests
+BLOG0_REQUIRE_REAL_KEY=1 pnpm eval:jev        # 6 articles: each prints N, k, batches, the top-k lines with scores, coverage, picks per third, tokens, cost, latency; then totals; exit 0; total cost < $0.005
+BLOG0_REQUIRE_REAL_KEY=1 pnpm test:integration            # real blog0_test + real Jev: jev-openrouter (incl. forced batching + wrong slug), tldr-flow, seed-tldr, logging, articles-api, designer-mode …
+# Regenerate the committed seed deck fixtures with real Jev — blog0_test only (≈5 calls, < $0.002):
+dropdb --if-exists -h localhost -U sai blog0_test && pnpm db:create                          # "blog0_test: created"
+BLOG0_DATABASE_URL=postgres://sai@localhost:5432/blog0_test pnpm db:migrate
+BLOG0_DATABASE_URL=postgres://sai@localhost:5432/blog0_test pnpm db:seed                      # "site blog0 ok, admin <masked> ok"
+BLOG0_DATABASE_URL=postgres://sai@localhost:5432/blog0_test pnpm db:seed:posts                # "5 posts: 5 created"
+BLOG0_DATABASE_URL=postgres://sai@localhost:5432/blog0_test pnpm seed:tldr -- --source jev --write-fixture   # "decks: 5 seeded (5 calls, $0.00xx)" with the $ figure < 0.0020; 5 fixture files written
+grep -L '"promptVersion": "jev-rank-v1"' src/server/seed/decks/*.json                       # prints nothing
+grep -L '"model": "typesafe/jev-1.13"' src/server/seed/decks/*.json                         # prints nothing
+grep -l '"reason"' src/server/seed/decks/*.json                                             # prints nothing
+pnpm test:unit tests/unit/seed                # the regenerated fixtures match the seed posts' sentences
+BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_REQUIRE_REAL_KEY=1 BLOG0_DIST_DIR=.next-gate pnpm test:e2e   # tldr (one real Generate) → reader → listen → smoke → newsletter
+pnpm test:e2e:design                          # designer mode seeds decks from the NEW fixtures (no key) and smokes the deck
+pnpm test:container                           # exit 0 → "container-e2e: PASS" (image ships rank-v1.md); exit 3 → "PENDING DOCKER"
+# Boot check (background tool): pnpm start   then:
+curl -fsS http://localhost:3410/api/health/ready                                            # "pending":0
+```
+The `ci.yml` change is proven by its first run on push (`gh run watch`); until then that line is
+`PENDING CI`. A `PENDING DOCKER` container line makes the gate "pending docker", not passed.
+
+**How the user tests it:**
+1. `pnpm check:openrouter` → "decisions call: ok · model typesafe/jev-1.13 …".
+2. `pnpm build && pnpm start`, sign in at `http://localhost:3410/admin`, open any article (or
+   paste `src/server/seed/posts/tech-company-first.md` into a new one and **Save**) → **TLDR** tab:
+   the hint says "Jev will pick the top N lines for this length".
+3. **Generate with Jev** (or **Regenerate** → confirm): within a few seconds "Jev ranked 31
+   sentences and picked the top 5 — saved as your draft deck." Each deck line reads
+   "Jev · relevance 0.xx"; the meta line shows `typesafe/jev-1.13 · jev-rank-v1 · ranked 31
+   sentences · … tokens · $0.000x`. There is no reason text anywhere.
+4. **Article lines** list every sentence by relevance, highest first, with its score and
+   section; switch to **In article order** → the heading groups, scores still shown. Check a
+   high-scoring line from another part of the article → it joins the deck as "Added by you ·
+   relevance 0.xx" in document position; move it, remove another, **Save deck**, reload → same
+   deck.
+5. Edit one sentence in **Write**, **Save**, back to **TLDR**: the chip is **stale**, that
+   sentence shows no score, the others keep theirs; nothing regenerated.
+6. **Publish** → **View live** → **TLDR**: intro slide "Lines selected by Jev (AI), verbatim from
+   the article." (or the editors' variant if you added lines) and the deck plays as before.
+7. An article whose deck was made before this phase still opens: its lines show "Jev" without a
+   score until you regenerate. No labelled stubs are introduced by this phase.

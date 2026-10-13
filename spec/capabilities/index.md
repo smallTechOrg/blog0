@@ -4,7 +4,7 @@
 |---|---|---|---|
 | Admin auth | `admin-auth.md` | 1 (Team page: 4, on hold) | Per-user email+password sessions, seeded first admin, CLI to add admins |
 | Article authoring | `article-authoring.md` | 1 | Markdown editor with live Read preview, revisions on save, publish/unpublish/delete draft |
-| Jev TLDR deck | `jev-tldr.md` | 1 | One explicit AI call picks verbatim lines + reasons; writer hand-edits; generation ledger |
+| Jev TLDR deck | `jev-tldr.md` | 1, 8 | One explicit AI call (Phase 8: `typesafe/jev-1.13` decisions) scores every sentence; top k verbatim lines become the deck; writer hand-edits with relevance shown; generation ledger |
 | Article reading | `article-reading.md` | 1 | Public Read view + TLDR deck exactly like the design, `/p/<slug>/tldr` deep link, capsule |
 | Format lifecycle | `format-lifecycle.md` | 1, 3 (statuses) → 4 (Regenerate, on hold) | Extensible formats with computed status; TLDR stale + explicit Regenerate; Listen text-changed warning |
 | AI cost ledger | `ai-cost-ledger.md` | 1 (recording) → 4 (dashboard, on hold) | Per-generation cost and month-to-date total |

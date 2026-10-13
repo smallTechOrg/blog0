@@ -102,7 +102,7 @@ gracefully when the platform stops it.
 
 ## Success Criteria
 - [ ] `docker build -t blog0:local .` succeeds from a clean clone; `docker image inspect blog0:local --format '{{.Size}}'` < 524288000 (500 MB).
-- [ ] `docker run --rm blog0:local id -u` prints `1000`; `docker run --rm --entrypoint sh blog0:local -c 'test ! -e .env && test -f src/server/jev/prompts/select-v1.md && test -f src/server/db/migrations/meta/_journal.json && test -f release.mjs'` exits 0.
+- [ ] `docker run --rm blog0:local id -u` prints `1000`; `docker run --rm --entrypoint sh blog0:local -c 'test ! -e .env && test -f src/server/jev/prompts/rank-v1.md && test -f src/server/db/migrations/meta/_journal.json && test -f release.mjs'` exits 0.
 - [ ] `docker run --rm blog0:local` with no env exits 1 within 15 s and its output contains `BLOG0_DATABASE_URL is required in production`.
 - [ ] Release step against an empty database prints `0 pending: OK` and `site blog0 ok (created)`; a second run prints `already up to date` and `site blog0 ok`; against `pglite://x` it exits 2.
 - [ ] Running container with an unreachable DB: `GET /api/health/live` → 200 `{"status":"live"…}`, `GET /api/health/ready` → 503 `NOT_READY` with `details.reason = "DB_UNAVAILABLE"`; `docker inspect` health becomes `healthy` within 60 s.
