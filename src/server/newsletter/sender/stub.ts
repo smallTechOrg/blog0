@@ -1,6 +1,13 @@
 import 'server-only';
 
+import { and, count, eq } from 'drizzle-orm';
+
+import { getDb } from '@/server/db/client';
+import { newsletterIssue, newsletterMessage, newsletterSubscriber, site } from '@/server/db/schema';
 import { log, maskEmail } from '@/server/log';
+
+import { fillPlaceholders } from '../issues/render';
+import { consentLine, unsubscribeUrl } from '../links';
 
 import {
   SenderError,
@@ -15,8 +22,18 @@ import {
 // Recording stub sender (spec/architecture.md §13.3): the default sender; what designer mode,
 // integration tests and the E2E suite use. In-memory half (wave 1): subscribers in a Map
 // (`providerId = 'stub-' + subscriberId`), campaigns keyed `'stub-' + issueId`, `sendIssue`
-// records the enabled subscribers as recipients. Wave 2 (S7.3) adds the `newsletter_message`
-// rows per confirmed subscriber; `fetchStats` then counts those rows.
+// records the enabled subscribers as recipients. With `recordToDb` (what getNewsletterSender()
+// builds — slice S7.3) `sendIssue` instead writes one `newsletter_message` row per subscriber who
+// is `confirmed` in blog0 at that moment (`kind 'issue'`, `transport 'stub_sender'`, `status
+// 'stubbed'`, placeholders filled with that subscriber's own unsubscribe link + consent line) and
+// `fetchStats` counts those rows. Both modes are idempotent per campaign.
+
+export interface StubSenderOptions {
+  /** Deliver into `newsletter_message` (blog0's confirmed subscribers) instead of the in-memory list. */
+  recordToDb?: boolean;
+}
+
+const CAMPAIGN_PREFIX = 'stub-';
 
 export interface StubCampaign {
   issue: SenderIssue;
@@ -29,6 +46,11 @@ export class StubNewsletterSender implements NewsletterSender {
   readonly kind = 'stub' as const;
   readonly subscribers = new Map<string, SenderSubscriber>(); // by providerId
   readonly campaigns = new Map<string, StubCampaign>(); // by campaignId
+  readonly #recordToDb: boolean;
+
+  constructor(options: StubSenderOptions = {}) {
+    this.#recordToDb = options.recordToDb ?? false;
+  }
 
   reset(): void {
     this.subscribers.clear();
@@ -72,6 +94,7 @@ export class StubNewsletterSender implements NewsletterSender {
   }
 
   async sendIssue(campaignId: string): Promise<void> {
+    if (this.#recordToDb) return this.#deliverToDb(campaignId);
     const c = this.#campaign(campaignId);
     if (c.status === 'sent') return;
     c.recipients = [...this.subscribers.values()].filter((s) => s.status === 'enabled').map((s) => s.email);
@@ -89,9 +112,88 @@ export class StubNewsletterSender implements NewsletterSender {
   }
 
   async fetchStats(campaignId: string): Promise<SenderStats> {
+    if (this.#recordToDb) {
+      const issue = await this.#issueRow(campaignId);
+      const [row] = await getDb()
+        .select({ n: count() })
+        .from(newsletterMessage)
+        .where(and(eq(newsletterMessage.issueId, issue.id), eq(newsletterMessage.kind, 'issue')));
+      const n = Number(row?.n ?? 0);
+      return { recipients: n, sent: n, delivered: null, opens: null, clicks: null, bounces: null, unsubscribes: null };
+    }
     const c = this.#campaign(campaignId);
     const n = c.status === 'sent' ? c.recipients.length : 0;
     return { recipients: n, sent: n, delivered: null, opens: null, clicks: null, bounces: null, unsubscribes: null };
+  }
+
+  async #issueRow(campaignId: string) {
+    const issueId = campaignId.startsWith(CAMPAIGN_PREFIX) ? campaignId.slice(CAMPAIGN_PREFIX.length) : '';
+    if (!/^[0-9a-f-]{36}$/i.test(issueId)) throw new SenderError('INVALID', `stub sender: unknown campaign ${campaignId}`);
+    const [issue] = await getDb().select().from(newsletterIssue).where(eq(newsletterIssue.id, issueId)).limit(1);
+    if (!issue) throw new SenderError('INVALID', `stub sender: unknown campaign ${campaignId}`);
+    return issue;
+  }
+
+  /** One `newsletter_message` per currently confirmed subscriber; a campaign that already has rows is left alone. */
+  async #deliverToDb(campaignId: string): Promise<void> {
+    const issue = await this.#issueRow(campaignId);
+    const memory = this.campaigns.get(campaignId);
+    const html = memory?.issue.html ?? issue.renderedHtml;
+    const text = memory?.issue.text ?? issue.renderedText;
+    const subject = memory?.issue.subject ?? issue.title;
+    if (html === null || text === null) throw new SenderError('INVALID', `stub sender: campaign ${campaignId} has no frozen body`);
+
+    const recipients = await getDb().transaction(async (tx) => {
+      // Serialise concurrent starts of the same campaign on the issue row.
+      await tx.select({ id: newsletterIssue.id }).from(newsletterIssue).where(eq(newsletterIssue.id, issue.id)).for('update');
+      const [already] = await tx
+        .select({ n: count() })
+        .from(newsletterMessage)
+        .where(and(eq(newsletterMessage.issueId, issue.id), eq(newsletterMessage.kind, 'issue')));
+      if (Number(already?.n ?? 0) > 0) return null;
+      const [siteRow] = await tx.select().from(site).where(eq(site.id, issue.siteId)).limit(1);
+      const confirmed = await tx
+        .select()
+        .from(newsletterSubscriber)
+        .where(and(eq(newsletterSubscriber.siteId, issue.siteId), eq(newsletterSubscriber.status, 'confirmed')))
+        .orderBy(newsletterSubscriber.createdAt);
+      if (confirmed.length > 0) {
+        await tx.insert(newsletterMessage).values(
+          confirmed.map((sub) => {
+            const values = { unsubscribeUrl: unsubscribeUrl(sub.id), consentLine: consentLine(sub, siteRow) };
+            return {
+              siteId: issue.siteId,
+              kind: 'issue' as const,
+              subscriberId: sub.id,
+              issueId: issue.id,
+              toEmail: sub.email,
+              subject,
+              html: fillPlaceholders(html, values, 'html'),
+              text: fillPlaceholders(text, values, 'text'),
+              transport: 'stub_sender',
+              status: 'stubbed' as const,
+            };
+          }),
+        );
+      }
+      return confirmed.map((sub) => sub.email);
+    });
+    if (recipients === null) return;
+
+    if (memory) {
+      memory.status = 'sent';
+      memory.recipients = recipients;
+      memory.sentAt = new Date();
+    }
+    log.info('newsletter.issue', {
+      sender: 'stub',
+      action: 'send',
+      issueId: issue.id,
+      campaignId,
+      recipients: recipients.length,
+      sample: recipients.slice(0, 3).map(maskEmail),
+      outcome: 'stubbed',
+    });
   }
 
   async fetchSuppressions(_since: Date): Promise<SenderSuppression[]> {

@@ -432,6 +432,20 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
   Bounces, Unsubscribes — "n/a" for null) + "as of <relative time>".
 - States: loading "Loading the issue…", `AdminLoadError` + Retry, 404 → "That issue isn’t here."
 
+> **Assumed (S7.4):** the Subscriber **Messages** card has no **Open confirm link** — `SubscriberMessageDto`
+> carries no `confirmUrl` (and adding one would put a live token in an admin JSON response);
+> designer mode confirms by hand from the `confirm_url` in the server's `newsletter.mail` log line.
+> **Assumed (S7.4):** a capped pending row's disabled **Resend confirmation** reads "Limit reached — try
+> again later (3 confirmation emails per 24 hours)." (the list/detail DTO has no `retryAt`); the exact
+> "Limit reached — try after <date, time>." appears when the server answers `CONFIRMATION_ALREADY_SENT`.
+> **Assumed (S7.4):** the search `q` joins `status` in the admin URL; CSV export takes the status filter only.
+> **Assumed (S7.4):** the HTML preview iframe is a fixed 760 px (min 480 px) scrolling frame — an empty
+> `sandbox` (no `allow-same-origin`) cannot be measured to fit its content.
+> **Assumed (S7.4):** "Posts refreshed from their published versions" shows when a draft's `posts`
+> differ before/after `GET …/preview` (the preview DTO has no flag; the issue is re-read once).
+> **Assumed (S7.4):** **Send** first reads `GET /api/admin/newsletter/settings` for the dialog's recipient
+> count (`status.counts.confirmed`) and sender line; the server re-counts at send time.
+
 ### Phase 4 screens (on hold)
 TLDR stale banner with **Regenerate**, AI usage (month picker, total, table), Team. History tab
 browsing/restore is deferred (`spec/capabilities/revision-history.md`).

@@ -271,6 +271,9 @@ export class ListmonkSender implements NewsletterSender {
       return { providerId: String(data.id), changed: true };
     }
 
+    // No blog0 name: Listmonk derived one from the address on create — keep it, never compare it
+    // (comparing against '' made every re-sync report `changed`; S7.3 regression).
+    if (s.name === null) body.name = existing.name;
     const same =
       existing.status === 'enabled' &&
       existing.name === body.name &&

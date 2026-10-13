@@ -10,6 +10,8 @@ import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
 import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { apiRequest, signInHref } from '../api';
 
+import { NewsletterSettings } from './NewsletterSettings';
+
 import {
   draftFrom,
   FIELD_LABELS,
@@ -26,13 +28,14 @@ import {
 // Admin → Site /admin/site (spec/ui.md §4 "Later admin screens"; spec/api.md GET/PATCH
 // /api/admin/site): tagline, contact email, About strap/stand/body, social URLs, with a live
 // preview of the About page. States: loading, load error + Retry (or Sign in again), editing,
-// saving, saved, save error (per-field from the server's VALIDATION_FAILED details).
+// saving, saved, save error (per-field from the server's VALIDATION_FAILED details). Phase 7 mounts
+// the Newsletter card (NewsletterSettings.tsx) under the form.
 
 const PATH = '/admin/site';
 
 const fetchSettings = () => apiRequest<SiteSettingsResponse>('/api/admin/site');
 
-export function SiteSettingsView({ wordmark }: { wordmark: string }) {
+export function SiteSettingsView({ wordmark, timeZone }: { wordmark: string; timeZone: string }) {
   const { load, setLoad, reload } = useAdminLoad(fetchSettings);
 
   return (
@@ -59,6 +62,8 @@ export function SiteSettingsView({ wordmark }: { wordmark: string }) {
         {load.kind === 'ready' ? (
           <SiteSettingsForm wordmark={wordmark} saved={load.data.site} onSaved={(site) => setLoad({ kind: 'ready', data: { site } })} />
         ) : null}
+        {/* Phase 7: the second card — its own load and Save (spec/ui.md §4 "Site"). */}
+        <NewsletterSettings timeZone={timeZone} />
       </div>
     </main>
   );

@@ -133,6 +133,41 @@ blog0 keeps the issue, its send log and its stats.
 > (`%%BLOG0_UNSUBSCRIBE_URL%%`, `%%BLOG0_CONSENT_LINE%%`) are defined in `sender/types.ts` so the
 > adapter and the renderer (S7.3) share one definition. `docker compose` falls back to the
 > standalone `docker-compose` binary when the plugin is absent (this host).
+> **Assumed (S7.3):** on a publish the digest applies only the **posts** rule; the **days** rule fires
+> only from `pnpm newsletter:tick` (this is what the digest success criterion requires — "a third
+> publish 8 days later creates nothing until the tick"). A digest takes at most 10 posts (the issue
+> limit), oldest first; any further qualifying posts wait for the next digest. The digest anchor is the
+> newest digest issue's `created_at`, else `newsletter_mode_set_at`.
+> **Assumed (S7.3):** the sync (`syncAll`, and the live `afterConfirm` / `afterSuppress` hooks) skips
+> every row with the **stub** sender, so designer mode writes no `provider_synced` events (the
+> "Synced" timeline entry of the user walk appears with Listmonk only). Counting: `synced` / `blocklisted`
+> = rows the provider changed for, `skipped` = pending / legacy rows, rows already equal at the provider
+> count nowhere. The full sync blocklists suppressed addresses through `syncSubscriber({ status:
+> 'blocklisted' })`, which also creates a blocklisted entry for an address Listmonk never had (so an
+> import there can never mail it) — hence `blocklisted 1` on the first run; the live hook uses
+> `removeSubscriber`.
+> **Assumed (S7.3):** `SENDER_UNAVAILABLE` (listmonk `healthcheck` failing within 3 s) is answered
+> before the send transaction, so the issue is left untouched (still `draft` / `failed`); a failure in
+> a later step marks it `failed`. Auto-send with 0 confirmed subscribers leaves the draft waiting
+> (logged `outcome: 'skipped'`).
+> **Assumed (S7.3):** the stub sender writes its `newsletter_message` rows when built with
+> `{ recordToDb: true }` — what `getNewsletterSender()` builds; a bare `new StubNewsletterSender()`
+> keeps the in-memory behaviour its unit test pins. Its delivery reads the frozen bodies from the
+> issue row, so a retry after a restart still works.
+> **Assumed (S7.3):** deleting a draft that already had a test message keeps the `test_issue` row (an
+> audit of what was mailed) with `issue_id` cleared — the FK is `on delete restrict`. The `deleted`
+> event kind is never stored (the draft's events cascade); the deletion is logged instead.
+> **Assumed (S7.3):** a manual post list of 0 or > 10 articles answers 422 `ISSUE_POSTS_INVALID`
+> (the routes relax the shared zod count so the service decides); malformed ids / unknown keys stay
+> 400 `VALIDATION_FAILED`.
+> **Assumed (S7.3):** preview and test messages fill the placeholders with the admin's own subscriber
+> link + consent line when the admin's address is a confirmed subscriber, else a sample link
+> (`/newsletter/unsubscribe?t=sample`) and a consent line dated today. The excerpt uses the first prose
+> paragraph (`kind 'p'`), falling back to the first paragraph of any kind.
+> **Assumed (S7.3):** `newsletter:tick` reads provider suppressions from the last 30 days on every run
+> (idempotent — already-suppressed addresses are skipped) and applies one only when it is newer than
+> the subscriber's latest consent / confirmation, so an old provider blocklist never undoes a
+> re-subscription.
 
 ## Success Criteria
 - [ ] Integration: with settings `per_post` + `autoSend false`, publishing a new article creates one `draft` issue whose single post snapshot has the article's title, dek, an excerpt, `readUrl` = `<BLOG0_PUBLIC_BASE_URL>/p/<slug>`, `tldrUrl` null; publishing a change to the same article creates no second issue; unpublishing creates nothing.

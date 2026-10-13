@@ -1,32 +1,71 @@
 'use client';
 
-import type { SubscriberListResponse, SubscriberStatus } from '@/lib/api/dto';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+
+import type { SubscriberListResponse } from '@/lib/api/dto';
 
 import { AdminLoadError, stamped, useAdminLoad } from '../AdminLoad';
 import { apiRequest } from '../api';
 import { relativeTime } from '../relative-time';
 
-// Admin → Subscribers (spec/ui.md §4 "Later admin screens"): count, table, Export CSV.
-// States: loading, error + Retry (or Sign in again), empty, populated.
+import { StatusFilter } from './StatusFilter';
+import {
+  AUDIT_HREF,
+  adminListHref,
+  csvHref,
+  emptyMessage,
+  legacySentence,
+  listPath,
+  LIST_PAGE,
+  sourceCells,
+  statusPillLabel,
+  statusTagClass,
+  subscriberHref,
+  type StatusFilterValue,
+} from './subscribers-api';
 
-const PATH = '/admin/subscribers';
-export const CSV_HREF = '/api/admin/subscribers?format=csv';
+// Admin → Subscribers /admin/subscribers (spec/ui.md §4 "Subscribers"; capability newsletter-list):
+// counts per status as filter pills, search by email (debounced), the table with links to the
+// per-subscriber audit view, the legacy banner, Export CSV (active filter) and Export audit (JSON).
+// States: loading, error + Retry (or Sign in again), empty (per filter/search), populated.
 
-const fetchSubscribers = () => stamped(apiRequest<SubscriberListResponse>('/api/admin/subscribers'));
+const SEARCH_DEBOUNCE_MS = 300;
+const Q_MAX = 100;
 
-/** Phase 7 statuses (spec/api.md SubscriberStatus); the Phase 7 rewrite of this view (slice S7.4) adds filters + detail. */
-const STATUS_LABELS: Record<SubscriberStatus, string> = {
-  pending: 'Pending',
-  confirmed: 'Confirmed',
-  unsubscribed: 'Unsubscribed',
-  bounced: 'Bounced',
-  legacy_unconfirmed: 'Legacy',
-};
+export interface SubscribersViewProps {
+  timeZone: string;
+  initialStatus?: StatusFilterValue;
+  initialQuery?: string;
+}
 
-export function SubscribersView({ timeZone }: { timeZone: string }) {
-  const { load: state, reload } = useAdminLoad(fetchSubscribers);
+export function SubscribersView({ timeZone, initialStatus = 'all', initialQuery = '' }: SubscribersViewProps) {
+  const [filter, setFilter] = useState<StatusFilterValue>(initialStatus);
+  const [query, setQuery] = useState(initialQuery);
+  const [q, setQ] = useState(initialQuery.trim());
+
+  // Search is debounced 300 ms before it reaches the request key.
+  useEffect(() => {
+    const next = query.trim();
+    if (next === q) return;
+    const t = setTimeout(() => setQ(next), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query, q]);
+
+  // The filter + search live in the admin URL (reload / share keeps them).
+  useEffect(() => {
+    const href = adminListHref(filter, q);
+    if (window.location.pathname + window.location.search !== href) window.history.replaceState(window.history.state, '', href);
+  }, [filter, q]);
+
+  const path = listPath(filter, q);
+  // Counts and the total survive a reload of the list (no flicker of the pills while filtering).
+  const [counts, setCounts] = useState<SubscriberListResponse['counts'] | null>(null);
+  const { load: state, reload } = useAdminLoad(() => stamped(apiRequest<SubscriberListResponse>(path)), path, (d) => setCounts(d.counts));
   const ready = state.kind === 'ready' ? state.data : null;
-  const total = ready ? ready.total : null;
+
+  const all = counts ? counts.all : null;
+  const legacy = counts ? counts.legacy_unconfirmed : 0;
 
   return (
     <main className="desk-main">
@@ -34,14 +73,44 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
         <div className="desk-page__head">
           <h1 className="desk-page__title">
             Subscribers
-            {total !== null ? <span className="admin-faint"> · {total}</span> : null}
+            {all !== null ? <span className="admin-faint"> · {all}</span> : null}
           </h1>
-          {total ? (
-            <a href={CSV_HREF} className="admin-btn admin-btn--primary" download>
-              Export CSV
-            </a>
+          {all ? (
+            <div className="admin-actions">
+              <a href={csvHref(filter)} className="admin-btn admin-btn--primary" download>
+                Export CSV
+              </a>
+              <a href={AUDIT_HREF} className="admin-btn" download title="Every subscriber, event and suppression — the proof of consent">
+                Export audit (JSON)
+              </a>
+            </div>
           ) : null}
         </div>
+
+        <div className="subs-tools">
+          <StatusFilter counts={counts} value={filter} onChange={setFilter} />
+          <label className="subs-search">
+            <span className="sr">Find by email</span>
+            <input
+              type="search"
+              className="admin-input"
+              placeholder="Find by email"
+              value={query}
+              maxLength={Q_MAX}
+              onChange={(e) => setQuery(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+        </div>
+
+        {legacy > 0 ? (
+          <div className="admin-alert is-warn subs-legacy" role="note">
+            <p>{legacySentence(legacy)}</p>
+            <p>
+              <Link href="/admin/site#newsletter">Manage in Site → Newsletter</Link>
+            </p>
+          </div>
+        ) : null}
 
         {state.kind === 'loading' ? (
           <p className="admin-muted" role="status" aria-live="polite">
@@ -49,11 +118,11 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
           </p>
         ) : null}
 
-        {state.kind === 'error' ? <AdminLoadError error={state} what="the subscribers" onRetry={reload} signInPath={PATH} /> : null}
+        {state.kind === 'error' ? <AdminLoadError error={state} what="the subscribers" onRetry={reload} signInPath={LIST_PAGE} /> : null}
 
         {ready && ready.subscribers.length === 0 ? (
           <div className="desk-empty">
-            <p>No subscribers yet. Signups from the footer form on every public page land here.</p>
+            <p>{emptyMessage(filter, q)}</p>
           </div>
         ) : null}
 
@@ -65,24 +134,54 @@ export function SubscribersView({ timeZone }: { timeZone: string }) {
                   <th scope="col">Email</th>
                   <th scope="col">Name</th>
                   <th scope="col">Status</th>
-                  <th scope="col">Subscribed</th>
+                  <th scope="col">Signed up</th>
+                  <th scope="col">Confirmed</th>
+                  <th scope="col">Source</th>
+                  <th scope="col">Synced</th>
                 </tr>
               </thead>
               <tbody>
-                {ready.subscribers.map((s) => (
-                  <tr key={s.email}>
-                    <td className="admin-table__title mono">{s.email}</td>
-                    <td>{s.name ? s.name : <span className="admin-faint">—</span>}</td>
-                    <td>
-                      <span className="tag">{STATUS_LABELS[s.status]}</span>
-                    </td>
-                    <td className="admin-table__updated">
-                      <time dateTime={s.createdAt} title={s.createdAt}>
-                        {relativeTime(s.createdAt, ready.now, timeZone)}
-                      </time>
-                    </td>
-                  </tr>
-                ))}
+                {ready.subscribers.map((s) => {
+                  const src = sourceCells(s);
+                  return (
+                    <tr key={s.id}>
+                      <td className="admin-table__title mono">
+                        <Link href={subscriberHref(s.id)}>{s.email}</Link>
+                      </td>
+                      <td>{s.name ? s.name : <span className="admin-faint">—</span>}</td>
+                      <td>
+                        <span className={statusTagClass(s.status)}>{statusPillLabel(s)}</span>
+                      </td>
+                      <td className="admin-table__updated">
+                        <time dateTime={s.createdAt} title={s.createdAt}>
+                          {relativeTime(s.createdAt, ready.now, timeZone)}
+                        </time>
+                      </td>
+                      <td className="admin-table__updated">
+                        {s.confirmedAt ? (
+                          <time dateTime={s.confirmedAt} title={s.confirmedAt}>
+                            {relativeTime(s.confirmedAt, ready.now, timeZone)}
+                          </time>
+                        ) : (
+                          <span className="admin-faint">—</span>
+                        )}
+                      </td>
+                      <td>
+                        {src.main}
+                        {src.faint ? <span className="admin-table__slug mono">{src.faint}</span> : null}
+                      </td>
+                      <td className="admin-table__updated">
+                        {s.providerSyncedAt ? (
+                          <time dateTime={s.providerSyncedAt} title={s.providerSyncedAt}>
+                            ✓ {relativeTime(s.providerSyncedAt, ready.now, timeZone)}
+                          </time>
+                        ) : (
+                          <span className="admin-faint">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

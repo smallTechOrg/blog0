@@ -309,7 +309,8 @@ test.describe('reader site (blog0)', () => {
     try {
       await strapField.fill(edited);
       await expect(page.getByText('Unsaved changes')).toBeVisible();
-      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      // The Site page also holds the Newsletter settings card (its own Save); scope to the site form.
+      await page.getByRole('form', { name: 'Site settings' }).getByRole('button', { name: 'Save', exact: true }).click();
       await expect(page.getByText('Saved — the home page and /about show it on the next load.')).toBeVisible();
 
       await page.goto('/');

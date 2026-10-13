@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { deskSection } from '@/components/admin/DeskHeader';
 
-// DeskHeader (spec/ui.md §4): Desk, Site, Subscribers; the article screens belong to Desk.
+// DeskHeader (spec/ui.md §4): Desk, Site, Subscribers, Newsletter; the article screens belong to Desk.
 
 describe('deskSection', () => {
   it('marks the section the admin is in', () => {
@@ -11,10 +11,15 @@ describe('deskSection', () => {
     expect(deskSection('/admin/articles/abc')).toBe('/admin');
     expect(deskSection('/admin/site')).toBe('/admin/site');
     expect(deskSection('/admin/subscribers')).toBe('/admin/subscribers');
+    expect(deskSection('/admin/subscribers/abc')).toBe('/admin/subscribers');
+    expect(deskSection('/admin/newsletter')).toBe('/admin/newsletter');
+    expect(deskSection('/admin/newsletter/new')).toBe('/admin/newsletter');
+    expect(deskSection('/admin/newsletter/abc')).toBe('/admin/newsletter');
   });
 
   it('marks nothing for unknown or look-alike paths', () => {
     expect(deskSection('/admin/sitemap')).toBeNull();
+    expect(deskSection('/admin/newsletters')).toBeNull();
     expect(deskSection('/admin/login')).toBeNull();
     expect(deskSection('/')).toBeNull();
   });

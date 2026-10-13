@@ -66,7 +66,11 @@ export function verifyUnsubscribeToken(token: string, secret: string): string | 
   const [idPart, sigPart] = token.split('.');
   const id = base64urlToUuid(idPart);
   if (!id) return null;
+  // Canonical encoding only: base64url's last character carries spare padding bits, so a
+  // tampered last character can decode to the same bytes. Re-encode and require an exact match.
+  if (uuidToBase64url(id) !== idPart) return null;
   const given = Buffer.from(sigPart, 'base64url');
+  if (given.toString('base64url') !== sigPart) return null;
   const expected = unsubscribeSignature(id, secret);
   if (given.length !== expected.length) return null;
   return timingSafeEqual(given, expected) ? id : null;

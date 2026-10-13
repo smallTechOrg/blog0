@@ -20,6 +20,7 @@ import { formatAdapters } from '../formats';
 import { ApiError } from '../http/api';
 import { log } from '../log';
 import { audioRefOf, deleteAssetIfUnreferenced, deleteStoredFiles } from '../media/cleanup';
+import { onArticleFirstPublished } from '../newsletter/issues/triggers';
 import {
   findArticle,
   findRevision,
@@ -302,7 +303,7 @@ export async function publishArticle(
   now: Date = new Date(),
   options: { requestId?: string } = {},
 ): Promise<ArticleDetailDto> {
-  const staleKey = await getDb().transaction(async (tx) => {
+  const { removedKey: staleKey, firstPublish } = await getDb().transaction(async (tx) => {
     const row = await lockArticle(tx, ctx.siteId, id);
     if (!row) throw notFound(id);
     const revision = await assertCurrentRevision(tx, ctx.siteId, row, revisionId);
@@ -365,9 +366,11 @@ export async function publishArticle(
       user_id: ctx.user.id,
       first_publish: row.firstPublishedAt === null,
     });
-    return removedKey;
+    return { removedKey, firstPublish: row.firstPublishedAt === null };
   });
   await deleteStoredFiles([staleKey], { requestId: options.requestId });
+  // Newsletter (spec/architecture.md §13.5): after commit, first publish only; never throws.
+  if (firstPublish) await onArticleFirstPublished({ siteId: ctx.siteId, articleId: id, now, requestId: options.requestId });
   return getArticleDetail(ctx.siteId, id);
 }
 
