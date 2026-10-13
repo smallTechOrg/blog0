@@ -1,38 +1,44 @@
 // The committed TLDR deck fixtures (src/server/seed/decks/<slug>.json) must stay valid:
-// one per seed post, the right shape, 4–8 lines, every line byte-identical to an ELIGIBLE sentence
-// of that seed post as rendered by the content pipeline. A fixture drifting from its article fails
-// here (the unit gate) rather than silently losing lines at seed time.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+// one per seed post, the right shape, k lines (k = the length bound target, 4–8), every line
+// byte-identical to an ELIGIBLE sentence of that seed post as rendered by the content pipeline, each
+// with Jev's relevance score, captured from typesafe/jev-1.13 with prompt jev-rank-v1 (Phase 8) and
+// no legacy `reason`. A fixture drifting from its article fails here (the unit gate) rather than
+// silently losing lines at seed time.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderArticle } from '@/server/content';
+import { computeBounds } from '@/server/jev/bounds';
 import { DeckFixtureError, deckFixtureSchema, loadDeckFixture, matchFixtureLines, writeDeckFixture, type DeckFixture } from '@/server/seed/decks';
 import { loadSeedPosts, SEED_POSTS } from '@/server/seed/posts';
 import { formatSeedTldrSummary, resolveSeedTldrSource, SeedTldrError } from '@/server/seed/seed-tldr';
 
 describe('committed deck fixtures', () => {
   for (const post of loadSeedPosts()) {
-    it(`${post.slug}.json: valid, 4–8 lines, every line an eligible sentence of the article verbatim`, async () => {
+    it(`${post.slug}.json: jev-rank-v1 + typesafe/jev-1.13, k lines with relevance, every line an eligible sentence verbatim`, async () => {
       const fixture = loadDeckFixture(post.slug);
       expect(fixture, `src/server/seed/decks/${post.slug}.json is missing — run: pnpm seed:tldr -- --write-fixture`).not.toBeNull();
       expect(fixture!.slug).toBe(post.slug);
-      expect(fixture!.lines.length).toBeGreaterThanOrEqual(4);
-      expect(fixture!.lines.length).toBeLessThanOrEqual(8);
+      expect(fixture!.model).toBe('typesafe/jev-1.13');
+      expect(fixture!.promptVersion).toBe('jev-rank-v1');
+      expect(readFileSync(path.join(process.cwd(), 'src', 'server', 'seed', 'decks', `${post.slug}.json`), 'utf8')).not.toContain('"reason"');
 
       const rendered = await renderArticle({ title: post.title, dek: post.dek, bodyMd: post.bodyMd });
+      expect(fixture!.lines.length).toBe(computeBounds(rendered.sentences).target);
       const eligible = new Set(rendered.sentences.map((s) => s.text));
       for (const line of fixture!.lines) {
         expect(eligible.has(line.text), `not an eligible sentence of ${post.slug}: ${line.text}`).toBe(true);
-        expect(line.reason.length).toBeGreaterThan(0);
-        expect(line.reason.length).toBeLessThanOrEqual(200);
+        expect(line.relevance, `line without relevance in ${post.slug}`).toBeTypeOf('number');
+        expect(line.relevance).toBeGreaterThanOrEqual(0);
+        expect(line.relevance).toBeLessThanOrEqual(1);
       }
       const match = matchFixtureLines(fixture!.lines, rendered.sentences);
       expect(match.unmatched).toEqual([]);
       expect(match.matched).toHaveLength(fixture!.lines.length); // no duplicate lines
-      // Lines keep article order (Jev picks are ascending).
+      // Lines keep article order (the top k are presented in document order).
       const order = match.matched.map((m) => rendered.sentences.findIndex((s) => s.sid === m.sid));
       expect(order).toEqual([...order].sort((a, b) => a - b));
     });
@@ -53,19 +59,19 @@ describe('matchFixtureLines', () => {
   ];
 
   it('matches by exact text and keeps fixture order', () => {
-    const r = matchFixtureLines([{ text: 'Gamma is third.', reason: 'g' }, { text: 'Alpha is first.', reason: 'a' }], sentences);
-    expect(r.matched).toEqual([{ sid: 's-c', text: 'Gamma is third.', reason: 'g' }, { sid: 's-a', text: 'Alpha is first.', reason: 'a' }]);
+    const r = matchFixtureLines([{ text: 'Gamma is third.', relevance: 0.9 }, { text: 'Alpha is first.' }], sentences);
+    expect(r.matched).toEqual([{ sid: 's-c', text: 'Gamma is third.' }, { sid: 's-a', text: 'Alpha is first.' }]);
     expect(r.unmatched).toEqual([]);
   });
 
   it('drops near-misses (whitespace, case, punctuation) and duplicates', () => {
     const r = matchFixtureLines(
       [
-        { text: 'Alpha is first', reason: 'no period' },
-        { text: 'beta is second.', reason: 'case' },
-        { text: 'Gamma is third. ', reason: 'trailing space' },
-        { text: 'Beta is second.', reason: 'ok' },
-        { text: 'Beta is second.', reason: 'dup' },
+        { text: 'Alpha is first', relevance: 0.1 },
+        { text: 'beta is second.', relevance: 0.2 },
+        { text: 'Gamma is third. ', relevance: 0.3 },
+        { text: 'Beta is second.', relevance: 0.4 },
+        { text: 'Beta is second.', relevance: 0.5 },
       ],
       sentences,
     );
@@ -75,7 +81,7 @@ describe('matchFixtureLines', () => {
 
   it('empty input → nothing matched', () => {
     expect(matchFixtureLines([], sentences)).toEqual({ matched: [], unmatched: [] });
-    expect(matchFixtureLines([{ text: 'x', reason: 'y' }], [])).toEqual({ matched: [], unmatched: ['x'] });
+    expect(matchFixtureLines([{ text: 'x' }], [])).toEqual({ matched: [], unmatched: ['x'] });
   });
 });
 
@@ -88,9 +94,9 @@ describe('fixture files', () => {
   const valid: DeckFixture = {
     slug: 'humans-are-software',
     model: 'test/model',
-    promptVersion: 'jev-v1',
+    promptVersion: 'jev-rank-v1',
     capturedAt: '2026-10-12T10:00:00.000Z',
-    lines: [{ text: 'A line.', reason: 'Because.' }],
+    lines: [{ text: 'A line.', relevance: 0.82 }],
   };
 
   it('round-trips through writeDeckFixture/loadDeckFixture', () => {
@@ -114,6 +120,22 @@ describe('fixture files', () => {
     writeFileSync(path.join(dir, 'c.json'), JSON.stringify(valid));
     expect(() => loadDeckFixture('c', dir!)).toThrow(/expected 'c'/);
     expect(deckFixtureSchema.safeParse({ ...valid, capturedAt: 'yesterday' }).success).toBe(false);
+    expect(deckFixtureSchema.safeParse({ ...valid, lines: [{ text: 'A line.', relevance: 1.2 }] }).success).toBe(false);
+  });
+
+  it('still loads a legacy (pre-Phase-8) fixture with { text, reason } lines: reason stripped, relevance absent', () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'blog0-decks-'));
+    const legacy = { ...valid, model: 'google/gemini-2.5-flash', promptVersion: 'jev-select-v1', lines: [{ text: 'A line.', reason: 'Because.' }] };
+    writeFileSync(path.join(dir, 'humans-are-software.json'), JSON.stringify(legacy));
+    const loaded = loadDeckFixture('humans-are-software', dir);
+    expect(loaded!.lines).toEqual([{ text: 'A line.' }]);
+    expect(matchFixtureLines(loaded!.lines, [{ sid: 's-1', text: 'A line.' }]).matched).toEqual([{ sid: 's-1', text: 'A line.' }]);
+  });
+
+  it('writes no reason key', () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'blog0-decks-'));
+    const file = writeDeckFixture(valid, dir);
+    expect(readFileSync(file, 'utf8')).not.toContain('"reason"');
   });
 });
 

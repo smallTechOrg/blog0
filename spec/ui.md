@@ -305,6 +305,13 @@ to the editor.
     rebuilds the deck from `latestGeneration.picks`), **Clear deck** (confirm).
   - Empty: "No deck yet. Jev scores every sentence of the saved article for relevance and puts the
     top 4–8 in the deck, word for word. One call, usually well under a cent."
+  > **Assumed (S8.2):** the picker's sort choice starts unset and follows the default (By relevance
+  > once any score exists, so a first Generate flips the list to relevance order) until the writer
+  > picks an option; the article-order group legend for sentences before the first heading reads
+  > "Intro" (was "Opening"), matching the By-relevance section caption; the bounds hint uses the
+  > singular for k = 1 ("the top line" / "the only line"); the meta line omits "ranked N sentences"
+  > when `sentenceCount` is 0 (pre-Phase-8 rows). Reset to Jev's picks takes each pick's own
+  > relevance, falling back to the sentence's current score when the pick has none.
 
 ### Listen tab (`components/admin/editor/ListenTab.tsx` + `components/admin/listen/*`)
 

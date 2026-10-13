@@ -1,24 +1,24 @@
 {
   "slug": "artefact-driven-development",
-  "model": "google/gemini-2.5-flash",
-  "promptVersion": "jev-select-v1",
-  "capturedAt": "2026-10-12T14:14:17.460Z",
+  "model": "typesafe/jev-1.13",
+  "promptVersion": "jev-rank-v1",
+  "capturedAt": "2026-10-13T15:01:30.111Z",
   "lines": [
     {
+      "text": "Two critical techniques to maximise flow when working with AI:",
+      "relevance": 0.55
+    },
+    {
       "text": "Decades of nightmares developing software by hand (and not AI) has taught software engineers this incredibly easy but hard lesson: Backup, version, backup, version, backup, version.",
-      "reason": "Introduces the first key technique: versioning everything."
+      "relevance": 0.47
     },
     {
       "text": "And we know your prompts are cool and all, but really context is everything.",
-      "reason": "Introduces the second key technique: context as everything."
-    },
-    {
-      "text": "I can shift from GPT to Claude in seconds because my context and artefacts are all transferrable.",
-      "reason": "Illustrates the benefit of transferable context and artefacts."
+      "relevance": 0.61
     },
     {
       "text": "And Context, well it’s nothing but a collection of Artefacts.",
-      "reason": "Defines context as a collection of artefacts."
+      "relevance": 0.7
     }
   ]
 }

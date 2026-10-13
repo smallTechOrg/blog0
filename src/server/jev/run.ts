@@ -1,29 +1,34 @@
 import 'server-only';
 
 import { CONFIG_DEFAULTS } from '../config';
-import type { LlmClient, LlmJsonResponse, LlmUsage } from '../llm/types';
+import type { DecisionsResponse, LlmClient, LlmUsage } from '../llm/types';
 import { LlmError } from '../llm/types';
 import { writerMessage } from '../llm/openrouter';
 import { log } from '../log';
+import { batchQuestions, planBatches } from './batches';
 import { computeBounds } from './bounds';
-import { buildMessages, guardInput, JEV_SCHEMA_NAME, JEV_SELECTION_SCHEMA, repairMessages } from './build-input';
-import { JEV_PROMPT_VERSION } from './prompt';
+import { buildState, guardInput } from './build-input';
+import { JEV_PROMPT_VERSION, loadRankPrompt, type RankPrompt } from './prompt';
+import { rankScores, topK } from './rank';
 import {
-  JEV_MAX_ATTEMPTS,
-  JEV_MAX_TOKENS,
-  JEV_TEMPERATURE,
+  JEV_BATCH_CONCURRENCY,
+  JEV_DEADLINE_MS,
+  JEV_MIN_ATTEMPT_MS,
+  JEV_REQUEST_CHAR_BUDGET,
   type JevError,
   type JevInput,
   type JevResult,
   type JevRunState,
   type JevUsage,
 } from './state';
-import { validatePicks } from './validate';
+import { invalidOutputMessage, validateAnswers } from './validate';
 
-// Jev assembly (spec/agent.md §2): computeBounds → guardInput → buildMessages → callModel →
-// validate → (repair → callModel) → finalize. Max 2 model calls, all within deps.deadlineMs.
-// No DB access here: the generation row and the draft deck are written by
-// src/server/articles/tldr.ts around this call.
+// Jev assembly (spec/agent.md §2): computeBounds → buildState → guardInput → planBatches →
+// callBatches → validateAnswers → rank → finalize. One decisions request per batch (normally one),
+// ≤ JEV_BATCH_CONCURRENCY in flight, all within deps.deadlineMs. No DB access here: the generation
+// row and the draft deck are written by src/server/articles/tldr.ts around this call.
+
+export { JEV_DEADLINE_MS, JEV_MIN_ATTEMPT_MS } from './state';
 
 export interface JevDeps {
   llm: LlmClient;
@@ -31,27 +36,22 @@ export interface JevDeps {
   model: string;
   /** Monotonic-ish clock in ms (injected for deterministic tests). */
   now: () => number;
-  /** Per-attempt timeout (BLOG0_JEV_TIMEOUT_MS). Default 45 000. */
+  /** Per-request timeout (BLOG0_JEV_TIMEOUT_MS). Default 45 000; capped at the time remaining. */
   timeoutMs?: number;
-  /** Fills {{site_name}} in the prompt. Default 'blog0'. */
-  siteName?: string;
   /**
-   * Overall budget for the whole run (both attempts, incl. the adapter's transport retries), measured
-   * on `now()` from the start of runJev. Default 110 000 — under the route's maxDuration = 120 s.
-   * No attempt starts with less than JEV_MIN_ATTEMPT_MS left; each attempt's timeout is capped at the
-   * time remaining; exhaustion returns LLM_TIMEOUT.
+   * Budget for the whole run (every batch, incl. the adapter's transport retries), measured on
+   * `now()` from the start of runJev. Default 110 000 — under the route's maxDuration = 120 s.
+   * No batch starts with less than JEV_MIN_ATTEMPT_MS left; exhaustion returns LLM_TIMEOUT.
    */
   deadlineMs?: number;
+  /** Request size budget in chars (default JEV_REQUEST_CHAR_BUDGET); tests force batching with it. */
+  requestCharBudget?: number;
+  /** Max concurrent batch requests (default JEV_BATCH_CONCURRENCY). */
+  concurrency?: number;
 }
 
-export const JEV_DEADLINE_MS = 110_000;
-/** An attempt is not started when less than this remains before the deadline (it could not finish). */
-export const JEV_MIN_ATTEMPT_MS = 5_000;
-
-export const INVALID_TWICE_MESSAGE = 'Jev returned an invalid selection twice. Try again, or pick lines yourself.';
-
 export function emptyUsage(): JevUsage {
-  return { promptTokens: null, completionTokens: null, totalTokens: null, costUsd: null, providerGenerationIds: [] };
+  return { inputTokens: null, outputTokens: null, totalTokens: null, costUsd: null, providerGenerationIds: [] };
 }
 
 function add(a: number | null, b: number | null): number | null {
@@ -60,12 +60,13 @@ function add(a: number | null, b: number | null): number | null {
   return a + b;
 }
 
-/** Sums usage across attempts; a field stays null only when no attempt reported it. */
+/** Sums one response's usage into the run total; a field stays null only when no response reported it. */
 export function addUsage(total: JevUsage, usage: LlmUsage, providerGenerationId: string | null): JevUsage {
+  const responseTotal = usage.inputTokens === null && usage.outputTokens === null ? null : (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
   return {
-    promptTokens: add(total.promptTokens, usage.promptTokens),
-    completionTokens: add(total.completionTokens, usage.completionTokens),
-    totalTokens: add(total.totalTokens, usage.totalTokens),
+    inputTokens: add(total.inputTokens, usage.inputTokens),
+    outputTokens: add(total.outputTokens, usage.outputTokens),
+    totalTokens: add(total.totalTokens, responseTotal),
     costUsd: usage.costUsd === null && total.costUsd === null ? null : Number(((total.costUsd ?? 0) + (usage.costUsd ?? 0)).toFixed(10)),
     providerGenerationIds: providerGenerationId ? [...total.providerGenerationIds, providerGenerationId] : total.providerGenerationIds,
   };
@@ -75,28 +76,18 @@ export function initState(input: JevInput, model: string): JevRunState {
   return {
     input,
     bounds: { min: 0, max: 0, target: 0 },
+    k: 0,
     promptVersion: JEV_PROMPT_VERSION,
     model,
-    messages: [],
-    attempts: 0,
+    state: { title: '', dek: '', article: '' },
+    batches: [],
+    requestsSent: 0,
     rawOutputs: [],
-    validationErrors: [],
-    picks: null,
+    answerIssues: { missing: [], invalid: [], extra: 0 },
+    scores: null,
     usage: emptyUsage(),
     error: null,
   };
-}
-
-type CallResult = { ok: true; content: string } | { ok: false; error: JevError };
-
-function deadlineError(state: JevRunState, deadlineMs: number): JevError {
-  log.warn('jev.deadline', {
-    request_id: state.input.requestId,
-    article_id: state.input.articleId,
-    attempts: state.attempts,
-    deadline_ms: deadlineMs,
-  });
-  return { code: 'LLM_TIMEOUT', message: writerMessage('LLM_TIMEOUT', state.model) };
 }
 
 const DEADLINE = Symbol('jev-deadline');
@@ -116,107 +107,168 @@ async function raceDeadline<T>(call: Promise<T>, ms: number): Promise<T | typeof
   }
 }
 
-async function callModel(state: JevRunState, deps: JevDeps, remainingMs: number, deadlineMs: number): Promise<CallResult> {
-  state.attempts += 1;
-  let res: LlmJsonResponse;
-  try {
-    const call = deps.llm.completeJson({
-      model: state.model,
-      messages: state.messages,
-      schemaName: JEV_SCHEMA_NAME,
-      schema: JEV_SELECTION_SCHEMA,
-      temperature: JEV_TEMPERATURE,
-      maxTokens: JEV_MAX_TOKENS,
-      requestId: state.input.requestId,
-      promptVersion: state.promptVersion,
-      timeoutMs: Math.min(deps.timeoutMs ?? CONFIG_DEFAULTS.jevTimeoutMs, remainingMs),
-    });
-    const settled = await raceDeadline(call, remainingMs);
-    if (settled === DEADLINE) return { ok: false, error: deadlineError(state, deadlineMs) };
-    res = settled;
-  } catch (error) {
-    if (error instanceof LlmError) return { ok: false, error: { code: error.code, message: error.message } };
-    throw error;
+type CallBatchesResult = { ok: true; answersByBatch: Array<Record<string, unknown>> } | { ok: false; error: JevError };
+
+/**
+ * One decide() per planned batch, ≤ concurrency in flight, launched in batch order. The first failing
+ * batch (in batch order) decides the error; no new batch starts after a failure; batches already in
+ * flight are awaited so their usage/cost is recorded.
+ */
+async function callBatches(s: JevRunState, prompt: RankPrompt, deps: JevDeps, t0: number): Promise<CallBatchesResult> {
+  const deadlineMs = deps.deadlineMs ?? JEV_DEADLINE_MS;
+  const timeoutMs = deps.timeoutMs ?? CONFIG_DEFAULTS.jevTimeoutMs;
+  const count = s.batches.length;
+  const answers: Array<Record<string, unknown> | undefined> = new Array(count);
+  const raw: Array<string | undefined> = new Array(count);
+  const failures = new Map<number, JevError>();
+  let next = 0;
+  let stopped = false;
+  let deadlineLogged = false;
+
+  const deadlineError = (): JevError => {
+    if (!deadlineLogged) {
+      deadlineLogged = true;
+      log.warn('jev.deadline', {
+        request_id: s.input.requestId,
+        article_id: s.input.articleId,
+        batches: s.requestsSent,
+        deadline_ms: deadlineMs,
+      });
+    }
+    return { code: 'LLM_TIMEOUT', message: writerMessage('LLM_TIMEOUT', s.model) };
+  };
+  const fail = (i: number, error: JevError) => {
+    failures.set(i, error);
+    stopped = true;
+  };
+
+  const worker = async (): Promise<void> => {
+    while (!stopped && next < count) {
+      const i = next++;
+      const remainingMs = deadlineMs - (deps.now() - t0);
+      if (remainingMs < JEV_MIN_ATTEMPT_MS) {
+        fail(i, deadlineError());
+        return;
+      }
+      s.requestsSent += 1;
+      let res: DecisionsResponse | typeof DEADLINE;
+      try {
+        const call = deps.llm.decide({
+          model: s.model,
+          state: { ...s.state },
+          questions: batchQuestions(s.batches[i], s.input, prompt),
+          requestId: s.input.requestId,
+          promptVersion: s.promptVersion,
+          timeoutMs: Math.min(timeoutMs, remainingMs),
+          batch: { index: i + 1, count },
+        });
+        res = await raceDeadline(call, remainingMs);
+      } catch (error) {
+        if (error instanceof LlmError) {
+          fail(i, { code: error.code, message: error.message });
+          return;
+        }
+        throw error;
+      }
+      if (res === DEADLINE) {
+        fail(i, deadlineError());
+        return;
+      }
+      s.usage = addUsage(s.usage, res.usage, res.providerGenerationId);
+      answers[i] = res.answers;
+      raw[i] = res.rawBody;
+    }
+  };
+
+  const workers = Array.from({ length: Math.max(1, Math.min(deps.concurrency ?? JEV_BATCH_CONCURRENCY, count)) }, () => worker());
+  const settled = await Promise.allSettled(workers);
+  s.rawOutputs = raw.filter((r): r is string => r !== undefined);
+  const unexpected = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (unexpected) throw unexpected.reason;
+  if (failures.size > 0) {
+    const first = Math.min(...failures.keys());
+    return { ok: false, error: failures.get(first)! };
   }
-  state.usage = addUsage(state.usage, res.usage, res.providerGenerationId);
-  state.rawOutputs.push(res.content);
-  return { ok: true, content: res.content };
+  return { ok: true, answersByBatch: answers as Array<Record<string, unknown>> };
 }
 
-function finalize(state: JevRunState, error: JevError | null, t0: number, deps: JevDeps): JevResult {
-  state.error = error;
+function finalize(s: JevRunState, error: JevError | null, t0: number, deps: JevDeps): JevResult {
+  s.error = error;
   const latencyMs = Math.max(0, Math.round(deps.now() - t0));
+  const selected = !error && s.scores ? topK(s.scores, s.k) : null;
+  const ranked = selected ? rankScores(s.scores!) : null;
+  const issues = s.answerIssues;
   const fields = {
-    request_id: state.input.requestId,
-    article_id: state.input.articleId,
-    revision_id: state.input.revisionId,
-    sentence_count: state.input.sentences.length,
-    bounds: state.bounds,
-    picks: state.picks?.length ?? 0,
-    attempts: state.attempts,
-    model: state.model,
-    prompt_version: state.promptVersion,
+    request_id: s.input.requestId,
+    article_id: s.input.articleId,
+    revision_id: s.input.revisionId,
+    sentence_count: s.input.sentences.length,
+    k: s.k,
+    batches: s.requestsSent,
+    model: s.model,
+    prompt_version: s.promptVersion,
     latency_ms: latencyMs,
     outcome: error ? 'error' : 'ok',
     ...(error ? { err_code: error.code } : {}),
-    ...(state.validationErrors.length > 0 ? { validation_errors: state.validationErrors } : {}),
+    ...(issues.missing.length > 0 ? { missing_answers: issues.missing.length } : {}),
+    ...(issues.invalid.length > 0 ? { invalid_answers: issues.invalid.length } : {}),
+    ...(issues.extra > 0 ? { extra_answers: issues.extra } : {}),
+    ...(ranked && ranked.length > 0 ? { top_relevance: ranked[0].relevance, kth_relevance: ranked[Math.max(0, s.k - 1)].relevance } : {}),
   };
   const common = {
-    bounds: state.bounds,
-    model: state.model,
-    promptVersion: state.promptVersion,
-    attempts: state.attempts,
-    usage: state.usage,
+    k: s.k,
+    bounds: s.bounds,
+    model: s.model,
+    promptVersion: s.promptVersion,
+    batches: s.requestsSent,
+    usage: s.usage,
     latencyMs,
   };
-  if (error || state.picks === null) {
+  if (error || !selected) {
     log.warn('jev.run', fields);
     return {
       ok: false,
-      error: error ?? { code: 'LLM_INVALID_OUTPUT', message: INVALID_TWICE_MESSAGE },
+      error: error ?? { code: 'LLM_INVALID_OUTPUT', message: invalidOutputMessage(s.input.sentences.length, s.input.sentences.length) },
       ...common,
-      rawOutputs: state.rawOutputs,
+      rawOutputs: s.rawOutputs,
     };
   }
   log.info('jev.run', fields);
-  return { ok: true, picks: state.picks, ...common };
+  return { ok: true, scores: s.scores!, selected, ...common };
 }
 
 export async function runJev(input: JevInput, deps: JevDeps): Promise<JevResult> {
   const t0 = deps.now();
-  const state = initState(input, deps.model);
-  state.bounds = computeBounds(input.sentences);
-  const guard = guardInput(input, state.bounds);
-  if (guard) return finalize(state, guard, t0, deps);
-  state.messages = buildMessages(input, state.bounds, { siteName: deps.siteName ?? 'blog0' });
+  const s = initState(input, deps.model);
+  s.bounds = computeBounds(input.sentences);
+  s.k = s.bounds.target;
+  s.state = buildState(input);
+  const guard = guardInput(input, s.state);
+  if (guard) return finalize(s, guard, t0, deps);
 
-  const deadlineMs = deps.deadlineMs ?? JEV_DEADLINE_MS;
   try {
-    while (state.attempts < JEV_MAX_ATTEMPTS) {
-      const remainingMs = deadlineMs - (deps.now() - t0);
-      if (remainingMs < JEV_MIN_ATTEMPT_MS) return finalize(state, deadlineError(state, deadlineMs), t0, deps);
-      const res = await callModel(state, deps, remainingMs, deadlineMs);
-      if (!res.ok) return finalize(state, res.error, t0, deps);
-      const v = validatePicks(res.content, input.sentences, state.bounds);
-      if (v.ok) {
-        state.picks = v.picks;
-        state.validationErrors = [];
-        return finalize(state, null, t0, deps);
-      }
-      state.validationErrors = v.errors;
-      if (state.attempts < JEV_MAX_ATTEMPTS) state.messages = repairMessages(state, res.content, v.errors);
+    const prompt = loadRankPrompt();
+    s.batches = planBatches(input, s.state, prompt, deps.model, deps.requestCharBudget ?? JEV_REQUEST_CHAR_BUDGET);
+    const res = await callBatches(s, prompt, deps, t0);
+    if (!res.ok) return finalize(s, res.error, t0, deps);
+    const v = validateAnswers(s.batches, res.answersByBatch);
+    s.answerIssues = { missing: v.ok ? [] : v.missing, invalid: v.ok ? [] : v.invalid, extra: v.extra };
+    if (!v.ok) {
+      const bad = v.missing.length + v.invalid.length;
+      return finalize(s, { code: 'LLM_INVALID_OUTPUT', message: invalidOutputMessage(bad, input.sentences.length) }, t0, deps);
     }
+    s.scores = input.sentences.map((x) => ({ index: x.index, sid: x.sid, relevance: v.scoresBySid.get(x.sid)! }));
+    return finalize(s, null, t0, deps);
   } catch (error) {
     log.error('jev.run', {
       request_id: input.requestId,
       article_id: input.articleId,
       revision_id: input.revisionId,
-      attempts: state.attempts,
+      batches: s.requestsSent,
       outcome: 'error',
       err_code: 'INTERNAL',
       err_message: error instanceof Error ? error.message : 'unknown error',
     });
     throw error;
   }
-  return finalize(state, { code: 'LLM_INVALID_OUTPUT', message: INVALID_TWICE_MESSAGE }, t0, deps);
 }

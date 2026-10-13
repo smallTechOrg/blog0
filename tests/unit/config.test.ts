@@ -40,7 +40,8 @@ describe('loadConfig', () => {
     expect(config.publicBaseUrl).toBe('http://localhost:3410');
     expect(config.siteSlug).toBe('blog0');
     expect(config.openrouterBaseUrl).toBe('https://openrouter.ai/api/v1');
-    expect(config.jevModel).toBe('google/gemini-2.5-flash');
+    expect(config.openrouterDecisionsUrl).toBe('https://openrouter.ai/api/alpha/decisions');
+    expect(config.jevModel).toBe('typesafe/jev-1.13');
     expect(config.jevTimeoutMs).toBe(45_000);
     expect(config.logLevel).toBe('info');
     expect(config.logFile).toBeNull();
@@ -74,6 +75,7 @@ describe('loadConfig', () => {
       BLOG0_SITE_SLUG: 'Not A Slug',
       BLOG0_ADMIN_PASSWORD: 'short',
       BLOG0_JEV_TIMEOUT_MS: '12abc',
+      BLOG0_OPENROUTER_DECISIONS_URL: 'ftp://openrouter.ai/api/alpha/decisions',
     });
 
     const problems = problemsOf(env);
@@ -88,15 +90,17 @@ describe('loadConfig', () => {
         expect.stringMatching(/^BLOG0_SITE_SLUG must be lowercase/),
         expect.stringMatching(/^BLOG0_ADMIN_PASSWORD must be at least 12/),
         expect.stringMatching(/^BLOG0_JEV_TIMEOUT_MS must be an integer/),
+        expect.stringMatching(/^BLOG0_OPENROUTER_DECISIONS_URL must be an absolute http\(s\) URL/),
       ]),
     );
-    expect(problems).toHaveLength(8);
+    expect(problems).toHaveLength(9);
   });
 
   it('trims values and strips a trailing comment from non-secret fields', () => {
     const env = baseEnv({
       BLOG0_PORT: ' 4000   # local override',
-      BLOG0_JEV_MODEL: 'anthropic/claude-haiku-4.5 # cheaper',
+      BLOG0_JEV_MODEL: 'typesafe/jev-1.12 # older decisions model',
+      BLOG0_OPENROUTER_DECISIONS_URL: ' https://proxy.example.com/api/alpha/decisions/  # proxy',
       BLOG0_PUBLIC_BASE_URL: 'https://blog.example.com/  ',
       BLOG0_LOG_FILE: '   ',
       BLOG0_SESSION_SECRET: `  ${SESSION_SECRET}#keep  `,
@@ -105,7 +109,8 @@ describe('loadConfig', () => {
     const config = loadConfig(env);
 
     expect(config.port).toBe(4000);
-    expect(config.jevModel).toBe('anthropic/claude-haiku-4.5');
+    expect(config.jevModel).toBe('typesafe/jev-1.12');
+    expect(config.openrouterDecisionsUrl).toBe('https://proxy.example.com/api/alpha/decisions');
     expect(config.publicBaseUrl).toBe('https://blog.example.com');
     expect(config.logFile).toBeNull();
     expect(config.sessionSecret.reveal()).toBe(`${SESSION_SECRET}#keep`);

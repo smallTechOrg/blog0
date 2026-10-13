@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { resetConfigForTests } from '@/server/config';
-import { getLlmClient, OpenRouterClient, resetLlmClientForTests } from '@/server/llm';
+import { getLlmClient, OpenRouterDecisionsClient, resetLlmClientForTests } from '@/server/llm';
 import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
 
 const ENV_KEYS = ['BLOG0_DATABASE_URL', 'BLOG0_SESSION_SECRET', 'BLOG0_OPENROUTER_API_KEY'] as const;
@@ -18,7 +18,7 @@ describe('getLlmClient', () => {
     resetLlmClientForTests();
   });
 
-  it('builds one OpenRouter client from config and resets for tests', () => {
+  it('builds one OpenRouter decisions client from config and resets for tests', () => {
     process.env.BLOG0_DATABASE_URL = 'postgres://sai@localhost:5432/blog0_dev';
     process.env.BLOG0_SESSION_SECRET = 'unit-test-session-secret-that-is-long-enough-1234';
     process.env.BLOG0_OPENROUTER_API_KEY = 'unit-test-key';
@@ -29,7 +29,9 @@ describe('getLlmClient', () => {
     resetLlmClientForTests();
     const c = getLlmClient();
 
-    expect(a).toBeInstanceOf(OpenRouterClient);
+    expect(a).toBeInstanceOf(OpenRouterDecisionsClient);
+    expect(typeof a.decide).toBe('function');
+    expect('completeJson' in a).toBe(false);
     expect(a).toBe(b);
     expect(c).not.toBe(a);
   });

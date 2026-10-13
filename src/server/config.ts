@@ -71,7 +71,11 @@ export interface Config {
   sessionSecretSource: 'env' | 'generated';
   /** null only on the pglite engine with no (or a placeholder) key — Jev then answers LLM_NOT_CONFIGURED. */
   openrouterApiKey: Secret | null;
+  /** Only `pnpm check:openrouter`'s `GET {base}/key` uses it (Phase 8: no app code calls it). */
   openrouterBaseUrl: string;
+  /** The Jev endpoint — OpenRouter's decisions API (alpha path, hence its own variable). */
+  openrouterDecisionsUrl: string;
+  /** An OpenRouter decisions model; no fallback chain (spec/agent.md §3). */
   jevModel: string;
   jevTimeoutMs: number;
   logLevel: LogLevel;
@@ -140,7 +144,8 @@ export const CONFIG_DEFAULTS = {
   publicBaseUrl: 'http://localhost:3410',
   siteSlug: 'blog0',
   openrouterBaseUrl: 'https://openrouter.ai/api/v1',
-  jevModel: 'google/gemini-2.5-flash',
+  openrouterDecisionsUrl: 'https://openrouter.ai/api/alpha/decisions',
+  jevModel: 'typesafe/jev-1.13',
   jevTimeoutMs: 45_000,
   logLevel: 'info' as LogLevel,
   adminName: 'Sai Krishna V',
@@ -328,6 +333,13 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
   const openrouterBaseUrl = httpUrl(rawOpenrouterBase);
   if (openrouterBaseUrl === null) problems.push('BLOG0_OPENROUTER_BASE_URL must be an absolute http(s) URL');
 
+  const rawOpenrouterDecisions =
+    plain(env, 'BLOG0_OPENROUTER_DECISIONS_URL') ?? CONFIG_DEFAULTS.openrouterDecisionsUrl;
+  const openrouterDecisionsUrl = httpUrl(rawOpenrouterDecisions);
+  if (openrouterDecisionsUrl === null) {
+    problems.push('BLOG0_OPENROUTER_DECISIONS_URL must be an absolute http(s) URL');
+  }
+
   const jevModel = plain(env, 'BLOG0_JEV_MODEL') ?? CONFIG_DEFAULTS.jevModel;
   const jevTimeoutMs = int(problems, env, 'BLOG0_JEV_TIMEOUT_MS', CONFIG_DEFAULTS.jevTimeoutMs, 1000, 600_000);
 
@@ -393,6 +405,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     sessionSecretSource,
     openrouterApiKey: openrouterApiKey === undefined ? null : new Secret(openrouterApiKey),
     openrouterBaseUrl: openrouterBaseUrl as string,
+    openrouterDecisionsUrl: openrouterDecisionsUrl as string,
     jevModel,
     jevTimeoutMs,
     logLevel: logLevel as LogLevel,

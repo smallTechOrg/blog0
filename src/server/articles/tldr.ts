@@ -13,27 +13,38 @@ import { missingSlides, tldrAdapter } from '../formats/tldr';
 import { GENERATION_STALE_MS, isGenerationActive } from '../formats/types';
 import { ApiError } from '../http/api';
 import { computeBounds } from '../jev/bounds';
-import { guardInput, jevInputFromRendered } from '../jev/build-input';
+import { buildState, guardInput, jevInputFromRendered } from '../jev/build-input';
 import { JEV_PROMPT_VERSION } from '../jev/prompt';
 import { runJev } from '../jev/run';
 import type { JevErrorCode, JevResult } from '../jev/state';
 import { getLlmClient, isLlmConfigured } from '../llm';
 import type { LlmClient } from '../llm/types';
-import { getCurrentSite } from '../site/current';
-import { findArticle, findFormatRow, latestGeneration, lockArticle, requireCurrentRevision, upsertFormatDraft, userNames } from './repo';
+import {
+  findArticle,
+  findFormatRow,
+  latestGeneration,
+  latestSucceededGeneration,
+  lockArticle,
+  requireCurrentRevision,
+  upsertFormatDraft,
+  userNames,
+} from './repo';
 import type { SaveDeckBody } from './schemas';
 import { notFound, type ActorContext } from './service';
 import { iso, renderRevision, UNKNOWN_USER } from './views';
 
-// TLDR (spec/architecture.md §3 "Generate", "Deck edit"): the editor's TLDR state, the generation
-// row, the Jev call and the draft deck. Jev only returns indices; every slide's text is taken from
-// the server's own sentence list.
+// TLDR (spec/architecture.md §3 "Generate", "Relevance in the editor", "Deck edit"): the editor's
+// TLDR state, the generation row, the Jev call and the draft deck. Jev only returns a relevance
+// score per sentence id we issued; every slide's text is taken from the server's own sentence list.
+// Scores live only in ai_generation.output.scores; the editor reads the latest succeeded row.
 
 const ABANDONED_CODE = 'GENERATION_ABANDONED';
 const ABANDONED_MESSAGE = 'This generation never finished (the server may have restarted) — try again.';
 
 const TLDR = 'tldr';
-const TASK = 'tldr.select';
+const TASK = 'tldr.rank';
+/** Each stored raw response body is capped (spec/data.md → ai_generation.output). */
+const RAW_OUTPUT_MAX_CHARS = 50_000;
 
 /** HTTP status per Jev/LLM error code (spec/api.md → Error codes). */
 const JEV_ERROR_STATUS: Record<JevErrorCode, number> = {
@@ -116,7 +127,7 @@ export async function generateTldr(
     requestId,
   });
   const bounds = computeBounds(input.sentences);
-  const guard = guardInput(input, bounds);
+  const guard = guardInput(input, buildState(input));
   if (guard) throw new ApiError(guard.code, JEV_ERROR_STATUS[guard.code], guard.message);
 
   // 2. One run per article: lock the article row, refuse while a young `running` row exists.
@@ -159,13 +170,11 @@ export async function generateTldr(
   // 3. The model call happens outside any transaction.
   let result: JevResult;
   try {
-    const site = await getCurrentSite();
     result = await runJev(input, {
       llm,
       model,
       now: () => performance.now(),
       timeoutMs: config.jevTimeoutMs,
-      siteName: site.brandName,
     });
   } catch (error) {
     await db
@@ -176,9 +185,9 @@ export async function generateTldr(
   }
 
   const usage = {
-    attempts: result.attempts,
-    promptTokens: result.usage.promptTokens,
-    completionTokens: result.usage.completionTokens,
+    attempts: result.batches, // decisions requests sent
+    promptTokens: result.usage.inputTokens,
+    completionTokens: result.usage.outputTokens,
     totalTokens: result.usage.totalTokens,
     costUsd: result.usage.costUsd,
     latencyMs: result.latencyMs,
@@ -195,7 +204,7 @@ export async function generateTldr(
         status: 'failed',
         errorCode: result.error.code,
         errorMessage: result.error.message,
-        output: result.rawOutputs.length > 0 ? { rawOutputs: result.rawOutputs } : null,
+        output: result.rawOutputs.length > 0 ? { rawOutputs: result.rawOutputs.map((r) => r.slice(0, RAW_OUTPUT_MAX_CHARS)) } : null,
       })
       .where(and(eq(aiGeneration.id, generation.id), eq(aiGeneration.siteId, ctx.siteId)))
       .returning();
@@ -205,11 +214,18 @@ export async function generateTldr(
     });
   }
 
-  // 4b. Success: record usage + picks, replace the draft deck with slides built from OUR sentences.
+  // 4b. Success: record usage + every score, replace the draft deck with the top k built from OUR
+  // sentences (document order).
   const bySid = new Map(input.sentences.map((s) => [s.sid, s]));
   const payload: TldrPayload = {
-    slides: result.picks.map((p) => ({ sid: p.sid, text: bySid.get(p.sid)!.text, source: 'jev', reason: p.reason })),
+    slides: result.selected.map((p) => ({ sid: p.sid, text: bySid.get(p.sid)!.text, source: 'jev' })),
     generationId: generation.id,
+  };
+  const output: RankOutput = {
+    scores: result.scores.map(({ index, sid, relevance }) => ({ index, sid, relevance })),
+    selected: result.selected.map((p) => p.sid),
+    k: result.k,
+    batches: result.batches,
   };
   let succeeded: AiGenerationRow | undefined;
   await db.transaction(async (tx) => {
@@ -218,7 +234,7 @@ export async function generateTldr(
       .set({
         ...usage,
         status: 'succeeded',
-        output: { picks: result.picks.map((p) => ({ index: p.index, sid: p.sid, reason: p.reason })) },
+        output,
       })
       .where(and(eq(aiGeneration.id, generation.id), eq(aiGeneration.siteId, ctx.siteId)))
       .returning();
@@ -266,12 +282,7 @@ export async function saveDeck(ctx: ActorContext, id: string, body: SaveDeckBody
 
     const existing = readTldrPayload((await findFormatRow(ctx.siteId, id, TLDR, tx))?.draftPayload);
     const payload: TldrPayload = {
-      slides: body.slides.map((s) => ({
-        sid: s.sid,
-        text: bySid.get(s.sid)!.text,
-        source: s.source,
-        reason: s.reason && s.reason.trim() !== '' ? s.reason.trim() : null,
-      })),
+      slides: body.slides.map((s) => ({ sid: s.sid, text: bySid.get(s.sid)!.text, source: s.source })),
       generationId: existing?.generationId ?? null,
     };
     await upsertFormatDraft(tx, ctx.siteId, id, TLDR, draftOf(ctx, payload, revision.id, revision.sentencesFingerprint));
@@ -295,10 +306,52 @@ export async function clearDeck(ctx: ActorContext, id: string): Promise<TldrStat
 // TLDR state (GET …/tldr and every TLDR mutation's response)
 // ---------------------------------------------------------------------------------------------
 
+/** ai_generation.output of a succeeded Phase 8 run (spec/data.md). */
+export interface RankOutput {
+  scores: Array<{ index: number; sid: string; relevance: number }>;
+  selected: string[];
+  k: number;
+  batches: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * sid → relevance from a generation's `output.scores`. Legacy (`{ picks: [{ index, sid, reason }] }`),
+ * failed (`{ rawOutputs }`) and malformed outputs give an empty map; malformed entries are skipped.
+ */
+export function readScores(output: unknown): Map<string, number> {
+  const scores = new Map<string, number>();
+  const list = isRecord(output) ? output.scores : undefined;
+  if (!Array.isArray(list)) return scores;
+  for (const entry of list) {
+    if (!isRecord(entry)) continue;
+    const { sid, relevance } = entry;
+    if (typeof sid !== 'string' || typeof relevance !== 'number' || !Number.isFinite(relevance) || relevance < 0 || relevance > 1) continue;
+    if (!scores.has(sid)) scores.set(sid, relevance);
+  }
+  return scores;
+}
+
+/** The k selected sentences of a succeeded generation (document order); legacy picks get relevance null. */
 function storedPicks(output: unknown): GenerationDto['picks'] {
-  const picks = (output as { picks?: unknown } | null)?.picks;
-  if (!Array.isArray(picks)) return null;
-  return (picks as NonNullable<GenerationDto['picks']>).map((p) => ({ index: p.index, sid: p.sid, reason: p.reason }));
+  if (!isRecord(output)) return null;
+  if (Array.isArray(output.selected) && Array.isArray(output.scores)) {
+    const scores = readScores(output);
+    const indexBySid = new Map<string, number>();
+    for (const e of output.scores) if (isRecord(e) && typeof e.sid === 'string' && typeof e.index === 'number') indexBySid.set(e.sid, e.index);
+    return output.selected
+      .filter((sid): sid is string => typeof sid === 'string')
+      .map((sid) => ({ index: indexBySid.get(sid) ?? -1, sid, relevance: scores.get(sid) ?? null }));
+  }
+  if (Array.isArray(output.picks)) {
+    return output.picks
+      .filter((p): p is { index: number; sid: string } => isRecord(p) && typeof p.sid === 'string' && typeof p.index === 'number')
+      .map((p) => ({ index: p.index, sid: p.sid, relevance: null }));
+  }
+  return null;
 }
 
 function toGenerationDto(gen: AiGenerationRow, names: Map<string, string>, now: Date = new Date()): GenerationDto {
@@ -313,6 +366,7 @@ function toGenerationDto(gen: AiGenerationRow, names: Map<string, string>, now: 
     finishedAt: iso(gen.finishedAt),
     latencyMs: gen.latencyMs,
     attempts: gen.attempts,
+    sentenceCount: gen.sentenceCount,
     promptTokens: gen.promptTokens,
     completionTokens: gen.completionTokens,
     totalTokens: gen.totalTokens,
@@ -323,7 +377,7 @@ function toGenerationDto(gen: AiGenerationRow, names: Map<string, string>, now: 
   };
 }
 
-function toSentenceDtos(rendered: RenderedArticle): SentenceDto[] {
+function toSentenceDtos(rendered: RenderedArticle, relevance: Map<string, number>): SentenceDto[] {
   const headingByPid = new Map(rendered.paragraphs.map((p) => [p.pid, p.headingPath]));
   return rendered.sentences.map((s) => ({
     sid: s.sid,
@@ -332,16 +386,20 @@ function toSentenceDtos(rendered: RenderedArticle): SentenceDto[] {
     text: s.text,
     words: s.words,
     headingPath: headingByPid.get(s.pid) ?? [],
+    relevance: relevance.get(s.sid) ?? null,
   }));
 }
 
 async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new Date(), db: Executor = getDb()): Promise<TldrStateDto> {
   const revision = await requireCurrentRevision(siteId, row, db);
-  const [rendered, formatRow, gen] = await Promise.all([
+  const [rendered, formatRow, gen, scored] = await Promise.all([
     renderRevision(revision),
     findFormatRow(siteId, row.id, TLDR, db),
     latestGeneration(siteId, row.id, TLDR, db),
+    latestSucceededGeneration(siteId, row.id, TLDR, db),
   ]);
+  // Relevance by sid from the latest SUCCEEDED generation (a later failed/running one keeps the scores).
+  const relevance = readScores(scored?.output);
   const names = await userNames(siteId, [formatRow?.draftUpdatedBy, gen?.requestedBy], db);
 
   const draftPayload = readTldrPayload(formatRow?.draftPayload);
@@ -350,7 +408,13 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
     const missing = new Set(missingSlides(draftPayload.slides, rendered.sentences));
     draft = {
       slides: draftPayload.slides.map(
-        (s): DeckSlideDto => ({ sid: s.sid, text: s.text, source: s.source, reason: s.reason, missing: missing.has(s.sid) }),
+        (s): DeckSlideDto => ({
+          sid: s.sid,
+          text: s.text,
+          source: s.source,
+          relevance: relevance.get(s.sid) ?? null,
+          missing: missing.has(s.sid),
+        }),
       ),
       revisionId: formatRow.draftRevisionId ?? revision.id,
       updatedAt: (formatRow.draftUpdatedAt ?? formatRow.updatedAt).toISOString(),
@@ -367,7 +431,7 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
   return {
     status: tldrAdapter.computeStatus({ row: formatRow, currentRevision: revision, latestGeneration: gen, now }),
     bounds: rendered.sentences.length === 0 ? null : computeBounds(rendered.sentences),
-    sentences: toSentenceDtos(rendered),
+    sentences: toSentenceDtos(rendered, relevance),
     draft,
     published,
     latestGeneration: gen ? toGenerationDto(gen, names, now) : null,

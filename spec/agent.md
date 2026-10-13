@@ -209,13 +209,22 @@ lives in `src/server/articles/tldr.ts` (see `spec/architecture.md` §3).
   (+0–250 ms jitter), honouring `Retry-After` up to 10 s; a timeout is not retried. Run deadline
   110 s (route `maxDuration = 120`).
 
-> **Assumed:** question ids are the sentence `sid`s (`p-<8 hex>[-n]-s<k>`, ASCII `[a-z0-9-]`). If
-> the first real call shows the endpoint rejects them, ids become `s<index>` mapped back
-> server-side — the generator decides from that call and records it here.
-> **Assumed:** `criteria` is sent as `{ "true": string, "false": string }` (the verified call's
-> two criteria); the generator confirms the exact key shape against the API reference with the
-> first real call.
+> **Verified (S8.1, 2026-10-13, real call):** question ids are the sentence `sid`s
+> (`p-<8 hex>[-n]-s<k>`, ASCII `[a-z0-9-]`) — a request with ids `p-3f2c9a1b-s0` and
+> `p-3f2c9a1b-2-s1` answered `200 { "model": "typesafe/jev-1.13-20260917", "answers":
+> { "p-3f2c9a1b-s0": { "type": "noul", "noul": 0.98 }, "p-3f2c9a1b-2-s1": { "type": "noul",
+> "noul": 0.02 } }, "usage": { "input_tokens": 394, "output_tokens": 60, "cost": 0.000016548 },
+> "id": "gen-dec-…", "provider": "TypeSafe" }`. No id mapping is needed. (The response `model`
+> carries a dated suffix; the row stores the slug we sent.)
+> **Verified (S8.1, same call):** `criteria` is `{ "true": string, "false": string }`; omitting
+> `false` answers `400` (a zod `invalid_union` body), so both keys are always sent.
+> **Verified (S8.1):** a wrong slug answers `400 {"error":{"message":"Model typesafe/does-not-exist
+> does not exist","code":400}}`; a chat slug (`google/gemini-2.5-flash`) answers the same shape
+> ("Model google/gemini-2.5-flash does not exist"). `MODEL_NOT_FOUND_RE` matches it (its
+> `model … does not exist` branch allows dots in the slug, e.g. `typesafe/jev-1.12`).
 > **Assumed:** the sentence is embedded as `JSON.stringify(text)` (quoted, inner quotes escaped).
+> **Assumed (S8.1):** `JevDeps` also takes an optional `concurrency` (default
+> `JEV_BATCH_CONCURRENCY` = 3; tests only) beside `requestCharBudget`.
 
 ## 4. Prompt (versioned file)
 
@@ -305,7 +314,7 @@ picker is sorted by relevance, so the next-best lines from other parts are one c
 - **Eval script (non-gating quality, gating as a run):** `pnpm eval:jev` runs the same 6
   articles and prints, per article: slug, N, k, batches, the **top k lines with scores** in rank
   order (`0.91  [12]  <first 70 chars>`), coverage (`(max selected index − min selected index + 1)
-  / N`), picks per third (`first/middle/last`, with `clustered` when all k fall in one third),
+  / N`), thirds covered (`n/3`), picks per third (`first/middle/last`, with `clustered` when all k fall in one third),
   input/output tokens, cost, latency; then totals (cost, mean latency). Exit 1 if any run fails
   with a real key; PENDING KEY → prints the reason, exit 0. Run on every prompt version change;
   paste the output into the commit/PR.

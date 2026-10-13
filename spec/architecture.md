@@ -86,10 +86,11 @@ double click produce exactly one row.
 
 **Relevance in the editor.** `buildTldrState` loads the article's **latest succeeded** `tldr`
 generation (`latestSucceededGeneration` in `src/server/articles/repo.ts`) and reads
-`output.scores` into a `sid → relevance` map (`readScores(output)`: legacy `{ picks: [{ index, sid,
+`output.scores` into a `sid → relevance` map (`readScores(output)` in `src/server/articles/tldr.ts`: legacy `{ picks: [{ index, sid,
 reason }] }` outputs and malformed outputs give an empty map). `SentenceDto.relevance`,
 `DeckSlideDto.relevance` and `GenerationDto.picks[].relevance` come from that map (null when the
-sid is absent). Sids are content-derived, so an unchanged sentence keeps its score across edits;
+sid is absent). Sids are content-derived (paragraph hash + position), so a sentence in an unchanged
+paragraph keeps its score across edits — editing one sentence clears the scores of its whole paragraph;
 scores are never stored in the format payload (one fact, one place).
 
 **Deck edit.** `PUT /api/admin/articles/:id/tldr` `{revisionId, slides:[{sid, source}]}` (an extra

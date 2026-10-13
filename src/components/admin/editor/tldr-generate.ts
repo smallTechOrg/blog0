@@ -14,16 +14,21 @@ export interface GenerateLabelInput {
 
 /** The primary button's label for each phase (busy labels while a click is in flight). */
 export function generateButtonLabel(input: GenerateLabelInput): string {
-  if (input.phase === 'running') return `Jev is reading… ${input.elapsed}s`;
+  if (input.phase === 'running') return `Jev is ranking… ${input.elapsed}s`;
   if (input.phase === 'saving') return 'Saving…';
   if (input.editorDirty) return 'Save & generate';
   if (input.hasDraft || input.latestSucceeded) return 'Regenerate';
   return 'Generate with Jev';
 }
 
-/** Success notice: the server already saved Jev's picks as the draft deck (Save deck is disabled). */
-export function generatedNotice(lineCount: number): string {
-  return `Jev picked ${lineCount} ${lineCount === 1 ? 'line' : 'lines'} — saved as your draft deck. Edit them or publish.`;
+/**
+ * Success notice (spec/ui.md §4): the server already saved Jev's top lines as the draft deck (Save
+ * deck is disabled). "Jev ranked <N> sentences and picked the top <k> — saved as your draft deck."
+ */
+export function generatedNotice(sentenceCount: number, lineCount: number): string {
+  const ranked = `${sentenceCount} ${sentenceCount === 1 ? 'sentence' : 'sentences'}`;
+  const top = lineCount === 1 ? 'the top line' : `the top ${lineCount}`;
+  return `Jev ranked ${ranked} and picked ${top} — saved as your draft deck. Edit them or publish.`;
 }
 
 /**

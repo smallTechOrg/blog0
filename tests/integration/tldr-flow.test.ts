@@ -5,9 +5,10 @@
 //    LLM_MODEL_NOT_FOUND. With no real key (and none required) it is SKIPPED as "PENDING KEY" — never
 //    stubbed into a pass.
 // 2. Hand-pick suite — every deck/publish/stale rule with writer-picked lines (no LLM at all).
-// 3. "(fake transport)" suites — error-path/structure tests only: an OpenRouterClient whose fetch
-//    returns provider ERRORS (401 / unparseable output) or blocks, to prove failure recording,
+// 3. "(fake transport)" suites — error-path/structure tests only: an OpenRouterDecisionsClient whose
+//    fetch returns provider ERRORS (401 / incomplete answers) or blocks, to prove failure recording,
 //    the untouched draft, hand-pick after failure, and the double-click guard. No fake success.
+// Phase 8: Jev ranks every sentence; relevance is read from the latest succeeded generation by sid.
 import { and, count, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -25,13 +26,13 @@ import type {
 } from '@/lib/api/dto';
 import { createArticle as serviceCreateArticle, type ActorContext } from '@/server/articles/service';
 import { getTldrState, resetJevDepsForTests, saveDeck as serviceSaveDeck, setJevDepsForTests } from '@/server/articles/tldr';
-import { getConfig, Secret } from '@/server/config';
+import { Secret } from '@/server/config';
 import { getDb } from '@/server/db/client';
-import { aiGeneration, appUser, articleFormat, site } from '@/server/db/schema';
+import { aiGeneration, appUser, articleFormat, articleRevision, site } from '@/server/db/schema';
 import { JEV_PROMPT_VERSION } from '@/server/jev/prompt';
 import { resetLlmClientForTests } from '@/server/llm';
 import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
-import { OpenRouterClient } from '@/server/llm/openrouter';
+import { OpenRouterDecisionsClient } from '@/server/llm/openrouter';
 import { getPublishedArticle } from '@/server/public/articles';
 import { loadSeedPosts } from '@/server/seed/posts';
 import { siteSeedFor } from '@/server/site/defaults';
@@ -107,10 +108,10 @@ function editSentence(bodyMd: string, text: string): string {
 // Fake transports for error-path/structure tests ONLY (they never return a successful selection).
 // ---------------------------------------------------------------------------------------------
 
-function fakeOpenRouter(fetchImpl: typeof fetch): OpenRouterClient {
-  return new OpenRouterClient({
+function fakeOpenRouter(fetchImpl: typeof fetch): OpenRouterDecisionsClient {
+  return new OpenRouterDecisionsClient({
     apiKey: new Secret('fake-transport-key-not-real'),
-    baseUrl: 'https://openrouter.invalid/api/v1',
+    decisionsUrl: 'https://openrouter.invalid/api/alpha/decisions',
     referer: ORIGIN,
     fetch: fetchImpl,
     sleep: async () => {},
@@ -128,15 +129,17 @@ function http401Transport(counter: { calls: number }): typeof fetch {
   }) as typeof fetch;
 }
 
-function garbageOutputTransport(counter: { calls: number }): typeof fetch {
-  return (async () => {
+/** A 200 decisions response that answers every question but the first, and one out of range (an ERROR path). */
+function incompleteAnswersTransport(counter: { calls: number }): typeof fetch {
+  return (async (_url: unknown, init?: RequestInit) => {
     counter.calls += 1;
+    const ids = Object.keys((JSON.parse(String(init?.body)) as { questions: Record<string, unknown> }).questions);
+    const answers: Record<string, unknown> = {};
+    ids.slice(1).forEach((id, i) => {
+      answers[id] = { type: 'noul', noul: i === 0 ? 1.5 : 0.5 };
+    });
     return new Response(
-      JSON.stringify({
-        id: `fake-transport-${counter.calls}`,
-        choices: [{ message: { content: 'not json at all' } }],
-        usage: { prompt_tokens: 50, completion_tokens: 5, total_tokens: 55, cost: 0.0001 },
-      }),
+      JSON.stringify({ model: 'fake/transport', answers, usage: { input_tokens: 50, output_tokens: 5, cost: 0.0001 }, id: `fake-transport-${counter.calls}`, provider: 'fake-transport' }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }) as typeof fetch;
@@ -179,11 +182,18 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const { tldr: state, generation } = data(gen.env);
 
     const sentences = new Map(state.sentences.map((s) => [s.sid, s]));
+    const n = state.sentences.length;
     expect(state.status).toBe('ready');
     expect(state.bounds).not.toBeNull();
+    // every eligible sentence carries Jev's score
+    for (const s of state.sentences) {
+      expect(s.relevance).toBeTypeOf('number');
+      expect(s.relevance).toBeGreaterThanOrEqual(0);
+      expect(s.relevance).toBeLessThanOrEqual(1);
+    }
     const slides = state.draft!.slides;
-    expect(slides.length).toBeGreaterThanOrEqual(state.bounds!.min);
-    expect(slides.length).toBeLessThanOrEqual(state.bounds!.max);
+    const k = state.bounds!.target;
+    expect(slides).toHaveLength(k);
     const indices = slides.map((s) => sentences.get(s.sid)!.index);
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
     expect(new Set(indices).size).toBe(indices.length);
@@ -191,29 +201,51 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
       expect(slide.source).toBe('jev');
       expect(slide.missing).toBe(false);
       expect(slide.text).toBe(sentences.get(slide.sid)!.text);
-      expect(slide.reason!.trim().length).toBeGreaterThan(0);
-      expect(slide.reason!.length).toBeLessThanOrEqual(200);
+      expect(slide.relevance).toBe(sentences.get(slide.sid)!.relevance);
     }
-    expect(generation).toMatchObject({ status: 'succeeded', model: getConfig().jevModel, promptVersion: JEV_PROMPT_VERSION, requestedBy: 'Asha Writer' });
-    expect(generation.attempts === 1 || generation.attempts === 2).toBe(true);
-    expect(generation.totalTokens).toBeGreaterThan(0);
+    // the deck is the top k: its lowest score ≥ every other sentence's score
+    const picked = new Set(slides.map((s) => s.sid));
+    const minPicked = Math.min(...slides.map((s) => s.relevance!));
+    const others = state.sentences.filter((s) => !picked.has(s.sid)).map((s) => s.relevance!);
+    expect(minPicked).toBeGreaterThanOrEqual(Math.max(...others));
+    expect(JSON.stringify(state)).not.toContain('"reason"');
+    expect(generation).toMatchObject({
+      status: 'succeeded',
+      model: 'typesafe/jev-1.13',
+      promptVersion: 'jev-rank-v1',
+      requestedBy: 'Asha Writer',
+      attempts: 1,
+      sentenceCount: n,
+    });
+    expect(generation.promptTokens).toBeGreaterThan(0);
+    expect(generation.totalTokens).toBe(generation.promptTokens! + (generation.completionTokens ?? 0));
     expect(generation.latencyMs).toBeGreaterThan(0);
-    expect(generation.picks!.map((p) => p.sid)).toEqual(slides.map((s) => s.sid));
+    expect(generation.picks).toEqual(slides.map((s) => ({ index: sentences.get(s.sid)!.index, sid: s.sid, relevance: s.relevance })));
     if (generation.costUsd === null) expect(logs.find('llm.cost_missing').length).toBeGreaterThan(0);
     else expect(generation.costUsd).toBeGreaterThanOrEqual(0);
     const [row] = await getDb().select().from(aiGeneration).where(eq(aiGeneration.id, generation.id));
-    expect(row).toMatchObject({ status: 'succeeded', revisionId, requestedBy: writer.user.id, promptVersion: JEV_PROMPT_VERSION, task: 'tldr.select' });
-    expect(row.providerGenerationIds.length).toBeGreaterThan(0);
-    expect(logs.find('llm.call').some((l) => l.outcome === 'ok' && l.prompt_version === JEV_PROMPT_VERSION)).toBe(true);
+    expect(row).toMatchObject({ status: 'succeeded', revisionId, requestedBy: writer.user.id, promptVersion: 'jev-rank-v1', model: 'typesafe/jev-1.13', task: 'tldr.rank', attempts: 1, sentenceCount: n });
+    expect(row.providerGenerationIds).toHaveLength(1);
+    const output = row.output as { scores: Array<{ index: number; sid: string; relevance: number }>; selected: string[]; k: number; batches: number };
+    expect(output.scores).toHaveLength(n);
+    expect(output.scores.map((x) => x.sid)).toEqual(state.sentences.map((x) => x.sid));
+    for (const x of output.scores) expect(sentences.get(x.sid)!.relevance).toBe(x.relevance);
+    expect(output.selected).toEqual(slides.map((x) => x.sid));
+    expect(output).toMatchObject({ k, batches: 1 });
+    expect(logs.find('llm.call').some((l) => l.outcome === 'ok' && l.prompt_version === JEV_PROMPT_VERSION && l.model === 'typesafe/jev-1.13')).toBe(true);
+    expect(logs.find('jev.run')[0]).toMatchObject({ outcome: 'ok', k, batches: 1, sentence_count: n });
 
-    // Edit: drop the first line, add a writer line not picked, move the last line up one.
-    const unpicked = state.sentences.find((s) => !slides.some((x) => x.sid === s.sid))!;
-    const edited = slides.slice(1).map((s) => ({ sid: s.sid, source: s.source, reason: s.reason }));
-    edited.push({ sid: unpicked.sid, source: 'writer', reason: null });
+    // Edit: drop the first line, add the best-scored unpicked line as a writer line, move it up one.
+    const unpicked = [...state.sentences].filter((s) => !picked.has(s.sid)).sort((a, b) => b.relevance! - a.relevance!)[0];
+    const edited = slides.slice(1).map((s) => ({ sid: s.sid, source: s.source as 'jev' | 'writer' }));
+    edited.push({ sid: unpicked.sid, source: 'writer' });
     [edited[edited.length - 2], edited[edited.length - 1]] = [edited[edited.length - 1], edited[edited.length - 2]];
     const afterEdit = data((await putDeck(created.id, { revisionId, slides: edited })).env).tldr;
     expect(afterEdit.draft!.slides.map((s) => s.sid)).toEqual(edited.map((s) => s.sid));
-    expect((await tldr(created.id)).draft!.slides.map((s) => s.sid)).toEqual(edited.map((s) => s.sid));
+    const reloaded = await tldr(created.id);
+    expect(reloaded.draft!.slides.map((s) => s.sid)).toEqual(edited.map((s) => s.sid));
+    const writerLine = reloaded.draft!.slides.find((s) => s.sid === unpicked.sid)!;
+    expect(writerLine).toMatchObject({ source: 'writer', relevance: unpicked.relevance });
 
     // Publish → public view model shows exactly the edited deck, mixed disclosure.
     const published = data((await publish(created.id, revisionId)).env).article;
@@ -231,6 +263,15 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const changed = await save(created.id, { baseRevisionId: revisionId, bodyMd: editSentence(post.bodyMd, target.text) });
     const stale = await tldr(created.id);
     expect(stale.status).toBe('stale');
+    // Scores survive by sid: unchanged sentences keep theirs; the edited sentence (and, because sids
+    // derive from paragraph text, the rest of its paragraph) has none until the next Generate.
+    const edited1 = stale.sentences.find((s) => s.text.includes('or so we were told'))!;
+    expect(edited1.relevance).toBeNull();
+    const kept = stale.sentences.filter((s) => sentences.has(s.sid));
+    expect(kept.length).toBeGreaterThan(n / 2);
+    for (const s of kept) expect(s.relevance).toBe(sentences.get(s.sid)!.relevance);
+    for (const s of stale.sentences.filter((x) => !sentences.has(x.sid))) expect(s.relevance).toBeNull();
+    expect(stale.latestGeneration!.id).toBe(generation.id);
     expect(stale.draft!.slides.find((s) => s.sid === target.sid)!.missing).toBe(true);
     const blocked = await publish(created.id, changed.article.currentRevision.id);
     expect(blocked.status).toBe(422);
@@ -248,14 +289,15 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const before = await tldr(created.id);
     const deck = [{ sid: before.sentences[0].sid, source: 'writer' as const }];
     await putDeck(created.id, { revisionId, slides: deck });
-    setJevDepsForTests({ model: 'blog0-test/definitely-not-a-model' });
+    setJevDepsForTests({ model: 'typesafe/does-not-exist' });
 
     const { status, env } = await generate(created.id, revisionId);
 
     expect(status).toBe(502);
     const e = err(env);
     expect(e.code).toBe('LLM_MODEL_NOT_FOUND');
-    expect((e.details as GenerateTldrErrorDetails).generation).toMatchObject({ status: 'failed', errorCode: 'LLM_MODEL_NOT_FOUND' });
+    expect(e.message).toBe("Model 'typesafe/does-not-exist' isn't available as a decisions model — set BLOG0_JEV_MODEL (default typesafe/jev-1.13).");
+    expect((e.details as GenerateTldrErrorDetails).generation).toMatchObject({ status: 'failed', errorCode: 'LLM_MODEL_NOT_FOUND', picks: null, attempts: 1 });
     const after = await tldr(created.id);
     expect(after.draft!.slides.map((s) => s.sid)).toEqual([deck[0].sid]);
     const [row] = await getDb().select().from(aiGeneration).where(eq(aiGeneration.articleId, created.id));
@@ -301,11 +343,15 @@ describe('hand-picked deck lifecycle', () => {
     const afterPublish = await tldr(created.id);
 
     expect(saved.status).toBe('ready');
+    // A legacy `reason` key in the PUT body is stripped, not refused; no generation → no relevance.
     expect(reloaded.draft!.slides).toEqual([
-      { sid: sentences[6].sid, text: sentences[6].text, source: 'writer', reason: 'Closing line', missing: false },
-      { sid: sentences[0].sid, text: sentences[0].text, source: 'writer', reason: null, missing: false },
-      { sid: sentences[3].sid, text: sentences[3].text, source: 'writer', reason: null, missing: false },
+      { sid: sentences[6].sid, text: sentences[6].text, source: 'writer', relevance: null, missing: false },
+      { sid: sentences[0].sid, text: sentences[0].text, source: 'writer', relevance: null, missing: false },
+      { sid: sentences[3].sid, text: sentences[3].text, source: 'writer', relevance: null, missing: false },
     ]);
+    expect(reloaded.sentences.every((s) => s.relevance === null)).toBe(true);
+    const [fmt] = await getDb().select().from(articleFormat).where(eq(articleFormat.articleId, created.id));
+    expect(JSON.stringify(fmt.draftPayload)).not.toContain('"reason"');
     expect(reloaded.draft!.revisionId).toBe(created.currentRevision.id);
     expect(reloaded.draft!.updatedBy).toBe('Asha Writer');
     expect(published.formats.find((f) => f.kind === 'tldr')).toEqual({ kind: 'tldr', status: 'ready', published: true, hasUnpublishedChanges: false });
@@ -314,6 +360,104 @@ describe('hand-picked deck lifecycle', () => {
     expect(view!.deck!.shareUrl).toBe(`${ORIGIN}/p/ordered/tldr`);
     expect(afterPublish.published!.slides.map((s) => s.text)).toEqual([sentences[6].text, sentences[0].text, sentences[3].text]);
     expect(await generationRows(created.id)).toBe(0);
+  });
+
+  it('reads a pre-Phase-8 deck (slides with reasons) and legacy generation: relevance null, then saves and publishes it', async () => {
+    const created = await createArticle({ title: 'Legacy deck', topic: 'Analysis', bodyMd: BODY });
+    const revisionId = created.currentRevision.id;
+    const { sentences } = await tldr(created.id);
+    const db = getDb();
+    const [legacyGen] = await db
+      .insert(aiGeneration)
+      .values({
+        siteId: writer.user.siteId,
+        articleId: created.id,
+        revisionId,
+        formatKind: 'tldr',
+        task: 'tldr.select',
+        status: 'succeeded',
+        requestedBy: writer.user.id,
+        startedAt: new Date(Date.now() - 60_000),
+        finishedAt: new Date(Date.now() - 59_000),
+        model: 'google/gemini-2.5-flash',
+        promptVersion: 'jev-select-v1',
+        inputFingerprint: 'x',
+        sentenceCount: 8,
+        boundMin: 4,
+        boundMax: 5,
+        attempts: 1,
+        output: { picks: [0, 2].map((i) => ({ index: i, sid: sentences[i].sid, reason: 'States the thesis' })) },
+      })
+      .returning();
+    await db.insert(articleFormat).values({
+      siteId: writer.user.siteId,
+      articleId: created.id,
+      kind: 'tldr',
+      draftPayload: {
+        slides: [
+          { sid: sentences[0].sid, text: sentences[0].text, source: 'jev', reason: 'States the thesis' },
+          { sid: sentences[2].sid, text: sentences[2].text, source: 'writer', reason: null },
+        ],
+        generationId: legacyGen.id,
+      },
+      draftRevisionId: revisionId,
+      draftFingerprint: (await db.select().from(articleRevision).where(eq(articleRevision.id, revisionId)))[0].sentencesFingerprint,
+      draftUpdatedBy: writer.user.id,
+      draftUpdatedAt: new Date(),
+    });
+
+    const state = await tldr(created.id);
+
+    expect(state.status).toBe('ready');
+    expect(state.draft!.slides).toEqual([
+      { sid: sentences[0].sid, text: sentences[0].text, source: 'jev', relevance: null, missing: false },
+      { sid: sentences[2].sid, text: sentences[2].text, source: 'writer', relevance: null, missing: false },
+    ]);
+    expect(state.sentences.every((s) => s.relevance === null)).toBe(true);
+    expect(state.latestGeneration).toMatchObject({ id: legacyGen.id, promptVersion: 'jev-select-v1', sentenceCount: 8 });
+    expect(state.latestGeneration!.picks).toEqual([
+      { index: 0, sid: sentences[0].sid, relevance: null },
+      { index: 2, sid: sentences[2].sid, relevance: null },
+    ]);
+    expect(JSON.stringify(state)).not.toContain('"reason"');
+
+    const saved = await putDeck(created.id, { revisionId, slides: state.draft!.slides.map((s) => ({ sid: s.sid, source: s.source, reason: 'legacy client' })) });
+    expect(saved.status).toBe(200);
+    const published = await publish(created.id, revisionId);
+    expect(published.status).toBe(200);
+    expect((await getPublishedArticle('legacy-deck'))!.deck!.slides.map((s) => s.text)).toEqual([sentences[0].text, sentences[2].text]);
+  });
+
+  it('reads relevance from the latest SUCCEEDED generation by sid (a later failed run keeps the scores)', async () => {
+    const created = await createArticle({ title: 'Scores', topic: 'Analysis', bodyMd: BODY });
+    const revisionId = created.currentRevision.id;
+    const { sentences } = await tldr(created.id);
+    const base = {
+      siteId: writer.user.siteId,
+      articleId: created.id,
+      revisionId,
+      formatKind: 'tldr',
+      task: 'tldr.rank',
+      requestedBy: writer.user.id,
+      model: 'typesafe/jev-1.13',
+      promptVersion: 'jev-rank-v1',
+      inputFingerprint: 'x',
+      sentenceCount: sentences.length,
+      boundMin: 4,
+      boundMax: 5,
+      attempts: 1,
+    };
+    const scoresOf = (f: (i: number) => number) => sentences.map((s, i) => ({ index: i, sid: s.sid, relevance: f(i) }));
+    await getDb().insert(aiGeneration).values([
+      { ...base, status: 'succeeded', startedAt: new Date(Date.now() - 300_000), output: { scores: scoresOf(() => 0.1), selected: [], k: 4, batches: 1 } },
+      { ...base, status: 'succeeded', startedAt: new Date(Date.now() - 200_000), output: { scores: scoresOf((i) => i / 10), selected: [sentences[7].sid, sentences[6].sid], k: 4, batches: 1 } },
+      { ...base, status: 'failed', startedAt: new Date(Date.now() - 100_000), errorCode: 'LLM_INVALID_OUTPUT', output: { rawOutputs: ['{}'] } },
+    ]);
+
+    const state = await tldr(created.id);
+
+    expect(state.sentences.map((s) => s.relevance)).toEqual(sentences.map((_, i) => i / 10));
+    expect(state.latestGeneration).toMatchObject({ status: 'failed', picks: null, errorCode: 'LLM_INVALID_OUTPUT' });
   });
 
   it('rejects unknown, duplicate, empty and 13-slide decks with 422 DECK_INVALID listing the bad sids', async () => {
@@ -497,21 +641,30 @@ describe('Generate error paths (fake transport)', () => {
     expect(state.draft).toBeNull();
   });
 
-  it('returns LLM_INVALID_OUTPUT after two unparseable answers and stores the raw outputs and summed usage (fake transport: non-JSON content)', async () => {
+  it('returns LLM_INVALID_OUTPUT after ONE request when answers are missing/out of range, storing the raw body and usage (fake transport: incomplete answers)', async () => {
     const counter = { calls: 0 };
-    setJevDepsForTests({ llm: fakeOpenRouter(garbageOutputTransport(counter)) });
+    setJevDepsForTests({ llm: fakeOpenRouter(incompleteAnswersTransport(counter)) });
     const created = await createArticle({ title: 'Garbage', bodyMd: BODY });
+    const { sentences } = await tldr(created.id);
+    await putDeck(created.id, { revisionId: created.currentRevision.id, slides: [{ sid: sentences[1].sid, source: 'writer' }] });
 
     const { status, env } = await generate(created.id, created.currentRevision.id);
 
     expect(status).toBe(502);
-    expect(err(env).code).toBe('LLM_INVALID_OUTPUT');
-    expect(counter.calls).toBe(2);
+    expect(err(env)).toMatchObject({
+      code: 'LLM_INVALID_OUTPUT',
+      message: "Jev didn't score every sentence (2 of 8 missing or invalid) — try again, or pick lines yourself.",
+    });
+    expect(counter.calls).toBe(1);
     const [row] = await getDb().select().from(aiGeneration).where(eq(aiGeneration.articleId, created.id));
-    expect(row).toMatchObject({ status: 'failed', errorCode: 'LLM_INVALID_OUTPUT', attempts: 2, totalTokens: 110, promptTokens: 100 });
-    expect(row.costUsd).toBeCloseTo(0.0002, 6);
-    expect((row.output as { rawOutputs: string[] }).rawOutputs).toHaveLength(2);
-    expect((await tldr(created.id)).draft).toBeNull();
+    expect(row).toMatchObject({ status: 'failed', errorCode: 'LLM_INVALID_OUTPUT', attempts: 1, totalTokens: 55, promptTokens: 50, completionTokens: 5, task: 'tldr.rank' });
+    expect(row.costUsd).toBeCloseTo(0.0001, 6);
+    const raw = (row.output as { rawOutputs: string[] }).rawOutputs;
+    expect(raw).toHaveLength(1);
+    expect(JSON.parse(raw[0])).toMatchObject({ provider: 'fake-transport' });
+    const after = await tldr(created.id);
+    expect(after.draft!.slides.map((s) => s.sid)).toEqual([sentences[1].sid]);
+    expect(after.sentences.every((s) => s.relevance === null)).toBe(true);
   });
 
   it('refuses a second Generate while the first is running with 409 GENERATION_IN_PROGRESS and creates exactly one row (fake transport: blocked then HTTP 401)', async () => {

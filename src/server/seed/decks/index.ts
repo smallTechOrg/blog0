@@ -7,13 +7,16 @@ import { z } from 'zod';
 
 import type { Sentence } from '@/lib/content/types';
 
-import { TLDR_MAX_SLIDES, TLDR_REASON_MAX } from '../../formats/payload';
+import { TLDR_MAX_SLIDES } from '../../formats/payload';
 
 // Committed TLDR deck fixtures (spec/data.md → Seed data, `pnpm seed:tldr`): one
 // `<slug>.json` per seed post, captured from real Jev output with `pnpm seed:tldr -- --write-fixture`.
 // Used when no real OpenRouter key is configured (designer mode, the reader E2E): every line is
 // matched by EXACT text to an eligible sentence of the article; a line that no longer matches is
-// dropped with a warning. Shape: { slug, model, promptVersion, capturedAt, lines: [{ text, reason }] }.
+// dropped with a warning. Shape (Phase 8): { slug, model, promptVersion, capturedAt,
+// lines: [{ text, relevance }] } — lines in deck (document) order, relevance copied from the
+// generation's scores. The legacy line shape { text, reason } still loads (reason stripped,
+// relevance absent), so an old fixture still seeds.
 
 /** Resolved from the repo root (every command runs there — see README). */
 export const DECKS_DIR = path.join(process.cwd(), 'src', 'server', 'seed', 'decks');
@@ -24,7 +27,7 @@ export const deckFixtureSchema = z.object({
   promptVersion: z.string().min(1),
   capturedAt: z.iso.datetime(),
   lines: z
-    .array(z.object({ text: z.string().min(1), reason: z.string().max(TLDR_REASON_MAX) }))
+    .array(z.object({ text: z.string().min(1), relevance: z.number().min(0).max(1).optional() }))
     .min(1)
     .max(TLDR_MAX_SLIDES),
 });
@@ -76,7 +79,7 @@ export function writeDeckFixture(fixture: DeckFixture, dir: string = DECKS_DIR):
 
 export interface FixtureMatch {
   /** Matched slides in fixture order (first occurrence of a text wins; duplicates are dropped). */
-  matched: Array<{ sid: string; text: string; reason: string }>;
+  matched: Array<{ sid: string; text: string }>;
   /** Fixture lines with no byte-identical eligible sentence. */
   unmatched: string[];
 }
@@ -95,7 +98,7 @@ export function matchFixtureLines(lines: DeckFixture['lines'], sentences: readon
     }
     if (used.has(sid)) continue;
     used.add(sid);
-    result.matched.push({ sid, text: line.text, reason: line.reason });
+    result.matched.push({ sid, text: line.text });
   }
   return result;
 }

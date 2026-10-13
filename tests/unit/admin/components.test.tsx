@@ -11,7 +11,7 @@ import { confirmLeave, LEAVE_EDITOR_CONFIRM, PublishBar } from '@/components/adm
 import { AudioUploader, CONFIRM_REMOVE, UNSAVED_TEXT_HINT } from '@/components/admin/listen/AudioUploader';
 import { FormatChips } from '@/components/admin/FormatChips';
 import { DeckList } from '@/components/admin/tldr/DeckList';
-import { groupByHeading } from '@/components/admin/tldr/SentencePicker';
+import { groupByHeading, NO_SCORES_TITLE, SentencePicker } from '@/components/admin/tldr/SentencePicker';
 import type { ArticleDetailDto, ArticleListItemDto, FormatChipDto, ListenStateDto, SentenceDto } from '@/lib/api/dto';
 
 const CHIPS: FormatChipDto[] = [
@@ -72,13 +72,19 @@ describe('ArticleTable', () => {
   });
 });
 
+function metaLines(html: string): string[] {
+  return [...html.matchAll(/<p class="deck__meta">(.*?)<\/p>/g)].map((m) => m[1].replace(/<[^>]+>/g, ''));
+}
+
 describe('DeckList', () => {
-  it('numbers lines, labels the source and flags vanished lines with labelled controls', () => {
+  it('numbers lines, shows source + relevance (no reasons) and flags vanished lines with labelled controls', () => {
     const html = renderToStaticMarkup(
       <DeckList
         lines={[
-          { sid: 's1', text: 'First line.', source: 'jev', reason: 'Sets the thesis', missing: false },
-          { sid: 's2', text: 'Second line.', source: 'writer', reason: null, missing: true },
+          { sid: 's1', text: 'First line.', source: 'jev', relevance: 0.8234, missing: false },
+          { sid: 's2', text: 'Second line.', source: 'writer', relevance: null, missing: true },
+          { sid: 's3', text: 'Third line.', source: 'writer', relevance: 0.41, missing: false },
+          { sid: 's4', text: 'Fourth line.', source: 'jev', relevance: null, missing: false },
         ]}
         onMove={() => {}}
         onRemove={() => {}}
@@ -86,8 +92,9 @@ describe('DeckList', () => {
     );
 
     expect(html).toContain('>01<');
-    expect(html).toContain('Jev: Sets the thesis');
-    expect(html).toContain('Added by you');
+    expect(metaLines(html)).toEqual(['Jev · relevance 0.82', 'Added by you', 'Added by you · relevance 0.41', 'Jev']);
+    expect(html).toContain('<span class="tldr-rel mono">relevance 0.82</span>');
+    expect(html).not.toMatch(/reason|Jev:/i);
     expect(html).toContain('No longer in the article');
     expect(html).toContain('aria-label="Move line 1 up"');
     expect(html).toContain('aria-label="Remove line 2"');
@@ -258,7 +265,7 @@ describe('editor stubs', () => {
 
 describe('groupByHeading', () => {
   it('groups consecutive sentences under their heading path', () => {
-    const s = (i: number, h: string[]): SentenceDto => ({ sid: `s${i}`, index: i, pid: 'p', text: 't', words: 5, headingPath: h });
+    const s = (i: number, h: string[]): SentenceDto => ({ sid: `s${i}`, index: i, pid: 'p', text: 't', words: 5, headingPath: h, relevance: null });
 
     const groups = groupByHeading([s(0, []), s(1, ['Intro']), s(2, ['Intro']), s(3, ['Intro', 'Detail'])]);
 
@@ -267,5 +274,61 @@ describe('groupByHeading', () => {
       ['Intro', 2],
       ['Intro › Detail', 1],
     ]);
+  });
+});
+
+describe('SentencePicker', () => {
+  const s = (i: number, h: string[], relevance: number | null): SentenceDto => ({
+    sid: `s${i}`, index: i, pid: `p${i}`, text: `Sentence ${i} text here.`, words: 4, headingPath: h, relevance,
+  });
+  const SCORED = [s(0, [], 0.2), s(1, ['Part one'], 0.95), s(2, ['Part one'], null), s(3, ['Part one', 'Detail'], 0.6)];
+
+  function rowSids(html: string): string[] {
+    return [...html.matchAll(/data-sid="([^"]+)"/g)].map((m) => m[1]);
+  }
+
+  function render(sentences: SentenceDto[], extra: Partial<Parameters<typeof SentencePicker>[0]> = {}): string {
+    return renderToStaticMarkup(
+      <SentencePicker sentences={sentences} chosen={new Set(['s1'])} deckSize={1} onToggle={() => {}} {...extra} />,
+    );
+  }
+
+  it('defaults to By relevance when scores exist: one flat list, highest first, unscored last, each with score and section', () => {
+    const html = render(SCORED);
+
+    expect(html).toContain('role="radiogroup" aria-label="Sort article lines"');
+    expect(html).toMatch(/aria-checked="true"[^>]*data-order="relevance"/);
+    expect(rowSids(html)).toEqual(['s1', 's3', 's0', 's2']);
+    expect(html).not.toContain('<fieldset');
+    expect(html).toContain('relevance 0.95');
+    expect(html).toContain('<span class="picker__sec">Intro</span>');
+    expect(html).toContain('<span class="picker__sec">Detail</span>');
+    expect(html).not.toContain(NO_SCORES_TITLE);
+    expect(html).toMatch(/class="picker__line is-on" data-sid="s1"/);
+  });
+
+  it('In article order: the grouped list under heading paths, each row with its relevance label', () => {
+    const html = render(SCORED, { initialOrder: 'article' });
+
+    expect(html).toMatch(/aria-checked="true"[^>]*data-order="article"/);
+    expect(rowSids(html)).toEqual(['s0', 's1', 's2', 's3']);
+    expect(html).toContain('<legend class="picker__head">Part one</legend>');
+    expect(html).toContain('<legend class="picker__head">Part one › Detail</legend>');
+    expect(html).toContain('relevance 0.60');
+    expect(html).not.toContain('picker__sec');
+  });
+
+  it('with no scores: article order, the switch disabled with "No scores yet — generate with Jev", no relevance labels', () => {
+    const html = render(SCORED.map((x) => ({ ...x, relevance: null })), { initialOrder: 'relevance' });
+
+    expect(rowSids(html)).toEqual(['s0', 's1', 's2', 's3']);
+    expect(html).toMatch(/aria-checked="true"[^>]*data-order="article"/);
+    expect(html).toContain(`title="${NO_SCORES_TITLE}"`);
+    expect((html.match(/role="radio"[^>]*disabled=""/g) ?? []).length).toBe(2);
+    expect(html).not.toContain('tldr-rel');
+  });
+
+  it('shows the empty state when the saved article has no eligible sentences', () => {
+    expect(render([])).toContain('No eligible sentences in the saved article yet');
   });
 });

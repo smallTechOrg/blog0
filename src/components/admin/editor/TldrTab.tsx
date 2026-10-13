@@ -34,10 +34,12 @@ import { SentencePicker } from '../tldr/SentencePicker';
 
 import { generateButtonLabel, generatedNotice, runExclusive, type GeneratePhase } from './tldr-generate';
 
-// TLDR tab (spec/ui.md §4, capability jev-tldr). Generate with Jev (one real call per click,
-// "Save & generate" when the editor is dirty), meta/cost line, failure card with hand-pick
-// fallback, hand-edit (remove / add from article lines / reorder), Preview deck (the real
-// TldrDeck), Save deck, Reset to Jev's picks, Clear deck.
+// TLDR tab (spec/ui.md §4, capability jev-tldr). Generate with Jev (one ranking call per click —
+// Jev scores every sentence, the top k become the draft deck; "Save & generate" when the editor
+// is dirty), meta/cost line, failure card with hand-pick fallback, relevance scores on deck lines
+// and article lines (no reasons anywhere), hand-edit (remove / add from article lines sorted by
+// relevance or in article order / reorder), Preview deck (the real TldrDeck), Save deck, Reset to
+// Jev's picks, Clear deck.
 
 export interface TldrTabProps {
   article: ArticleDetailDto;
@@ -59,7 +61,7 @@ type Notice = { tone: 'ok' | 'error'; text: string } | null;
 
 const NO_DECK: DeckState = { saved: [], lines: [] };
 
-export const CONFIRM_REGENERATE = "Replace your current deck with Jev's new picks?";
+export const CONFIRM_REGENERATE = "Replace your current deck with Jev's new top lines?";
 export const CONFIRM_CLEAR = 'Clear the draft deck? The published deck (if any) keeps serving until you publish again.';
 
 function trimStop(message: string): string {
@@ -156,7 +158,10 @@ export function TldrTab(props: TldrTabProps) {
 
     if (res.ok) {
       applyServer(res.data.tldr, true);
-      setNotice({ tone: 'ok', text: generatedNotice(res.data.tldr.draft?.slides.length ?? 0) });
+      setNotice({
+        tone: 'ok',
+        text: generatedNotice(res.data.generation.sentenceCount, res.data.tldr.draft?.slides.length ?? 0),
+      });
       onArticleChanged();
       return;
     }
@@ -277,7 +282,7 @@ export function TldrTab(props: TldrTabProps) {
           <span className={`fchip fchip--${status}`} data-status={status}>
             TLDR {FORMAT_STATUS_LABEL[status] ?? status}
           </span>
-          <span className="admin-hint">{boundsHint(tldr?.bounds ?? null)}</span>
+          <span className="admin-hint">{boundsHint(tldr?.bounds ?? null, tldr ? sentences.length : undefined)}</span>
         </div>
         <button
           type="button"
@@ -348,7 +353,8 @@ export function TldrTab(props: TldrTabProps) {
           </h2>
           {deck.lines.length === 0 ? (
             <p className="tldrtab__empty">
-              No deck yet. Jev reads the saved article and picks 4–8 lines, word for word. One call, usually under a cent.
+              No deck yet. Jev scores every sentence of the saved article for relevance and puts the top 4–8 in the deck, word
+              for word. One call, usually well under a cent.
             </p>
           ) : (
             <DeckList

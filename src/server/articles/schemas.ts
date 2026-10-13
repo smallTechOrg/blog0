@@ -4,7 +4,6 @@ import { z } from 'zod';
 
 import { ARTICLE_LIMITS as MAX } from '@/lib/articles/limits';
 
-import { TLDR_REASON_MAX } from '../formats/payload';
 import { SLUG_RE } from './slug';
 
 // Request bodies for /api/admin/* (spec/api.md). Bad input → 400 VALIDATION_FAILED.
@@ -51,12 +50,13 @@ export const revisionBody = z.object({ revisionId: id });
 export const saveDeckBody = z.object({
   revisionId: id,
   // Count rules (1–12) are a deck rule → 422 DECK_INVALID; the 100 cap only bounds the payload.
+  // Phase 8: a legacy `reason` key (or any other extra key, e.g. a client-sent relevance) is
+  // stripped by zod, not refused — relevance is never accepted from the client.
   slides: z
     .array(
       z.object({
         sid: z.string().trim().min(1).max(64),
         source: z.enum(['jev', 'writer']),
-        reason: z.string().trim().max(TLDR_REASON_MAX).nullable().optional(),
       }),
     )
     .max(100),

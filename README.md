@@ -2,7 +2,8 @@
 
 blog0 is smallTech's official blog on all things AI — an AI-native, multi-format publishing
 platform (public wordmark **blog0**). Writers author Markdown; readers take each article in as
-**Read**, **TLDR** (a verbatim slide deck picked by Jev, the TLDR agent) or **Listen**.
+**Read**, **TLDR** (a verbatim slide deck of the article's most relevant sentences, ranked by
+Jev — the OpenRouter decisions model `typesafe/jev-1.13`) or **Listen**.
 
 Specs live in [`spec/`](spec/) (start with [`spec/roadmap.md`](spec/roadmap.md)).
 
@@ -187,20 +188,20 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
    # blog0_dev @ PostgreSQL 18.1 — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
    ```
 
-6. **Prove the OpenRouter key and the Jev model** with one real structured-output call (prints
-   only booleans/numbers, never the key; exit 1 on any failure):
+6. **Prove the OpenRouter key and Jev** (the decisions model `typesafe/jev-1.13`) with one real
+   1-question decisions call (prints only booleans/numbers, never the key; exit 1 on any failure):
 
    ```bash
    pnpm check:openrouter
    # key present: true
    # key valid: true
-   # model google/gemini-2.5-flash listed: true
-   # ...
-   # structured call: ok · tokens <n> · cost $<x> · <ms> ms
+   # decisions call: ok · model typesafe/jev-1.13 · noul 0.99 · tokens 338/20 · cost $0.000014 · 489 ms
    ```
 
-   If the model is reported unlisted, set `BLOG0_JEV_MODEL` to the first available slug from the
-   printed fallback list (in `.env` and `.env.example`) and record it in `spec/agent.md` §3.
+   Decisions models are not in OpenRouter's `/models` catalog and there is no fallback model. If
+   it prints `BLOG0_JEV_MODEL=<slug> is not an available decisions model`, remove the
+   `BLOG0_JEV_MODEL` line from `.env` (the default is `typesafe/jev-1.13`) or set it to a
+   decisions model.
 
 7. **Seed the site row and the first admin** into the dev database (idempotent; an existing
    admin's password only changes with `--reset-admin-password`). It reads
@@ -294,9 +295,11 @@ again. The phase gates still use `pnpm build && pnpm start`.
 pnpm eval:jev
 ```
 
-Runs Jev for real (one batched OpenRouter call per article, plus retries on invalid output) on the 5 seed posts plus
-`tests/fixtures/articles/hard-cases.md` and prints a table (N, bounds, picks, coverage,
-attempts, tokens, cost, latency). Non-gating; exit 1 if any article fails. With no real key it
+Runs Jev for real (one decisions request per article — it scores every sentence; no retries on
+invalid answers) on the 5 seed posts plus `tests/fixtures/articles/hard-cases.md` and prints, per
+article, N, k, batches, the top k lines with their relevance scores, coverage, thirds covered and
+picks per third, tokens, cost and latency, then totals (≈ $0.0008 for all six). Exit 1 if any
+article fails. With no real key it
 prints `PENDING KEY …` and exits 0 without scoring — unless a real key is required
 (`BLOG0_REQUIRE_REAL_KEY=1`, or that is unset and `CI=true`), where it exits 1.
 
@@ -329,7 +332,7 @@ With a real key present, a rejected key (401/403) or any provider error is alway
 | `pnpm test` | both Vitest projects |
 | `pnpm test:e2e` | Playwright (Chromium) against `pnpm start` on port **3411** using `blog0_test`; run `pnpm build` first |
 | `pnpm test:e2e:design` | Playwright against designer mode (`pnpm dev:design`) on port **3413** with its own PGlite dir `var/pglite-e2e` |
-| `pnpm eval:jev` | Jev evaluation table (real key; non-gating) |
+| `pnpm eval:jev` | Jev ranking report: top k lines with scores per article (real key) |
 | `pnpm release` | the release step run locally via `tsx` (migrate + verify 0 pending + ensure the site row and, when `BLOG0_ADMIN_EMAIL`/`BLOG0_ADMIN_PASSWORD` are set, the first admin) against `BLOG0_DATABASE_URL` (postgres:// only); the image runs the same step as `node release.mjs` |
 | `pnpm build:release` | bundles `scripts/release.ts` into `dist/release.mjs` (esbuild) — the image's release step; the Dockerfile runs it after `pnpm build` |
 | `pnpm test:container` | builds the container image, runs the release step and the full E2E suite against the container on port **3412** (needs Docker) — see [Deploy](#deploy) |
@@ -479,9 +482,10 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (login throttling and the newsletter per-IP cap key on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored and the newsletter per-IP cap skipped |
 | `BLOG0_SESSION_SECRET` | yes on postgres | pglite: generated | ≥ 32 chars (`openssl rand -base64 48`); on `pglite://` an absent value is generated once into `var/pglite-session-secret` (0600) |
 | `BLOG0_OPENROUTER_API_KEY` | yes on postgres | pglite: none | validated at boot for presence (`replace-with-…` rejected); `pending-placeholder` boots but real-key tests report PENDING KEY; liveness by `pnpm check:openrouter`. On `pglite://` absent/placeholder = Jev disabled (`LLM_NOT_CONFIGURED`) |
-| `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | |
-| `BLOG0_JEV_MODEL` | no | `google/gemini-2.5-flash` | see `spec/agent.md` §3 |
-| `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per model attempt |
+| `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | only `pnpm check:openrouter`'s `GET {base}/key` |
+| `BLOG0_OPENROUTER_DECISIONS_URL` | no | `https://openrouter.ai/api/alpha/decisions` | the Jev endpoint (OpenRouter decisions API) |
+| `BLOG0_JEV_MODEL` | no | `typesafe/jev-1.13` | must be an OpenRouter **decisions** model; no fallback (`spec/agent.md` §3) |
+| `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per decisions request |
 | `BLOG0_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `BLOG0_LOG_FILE` | no | — | append JSON lines here too (E2E sets it) |
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | seed + E2E | name `Sai Krishna V` | first admin for `pnpm db:seed`; password ≥ 12; local dev may export them from gitignored `var/dev-admin.env` |

@@ -290,13 +290,16 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
         const generated = await noDeadlock('generateTldr', generateTldr(ctx, created.id, revisionId, 'req-designer-real'));
         expect(generated.generation.status).toBe('succeeded');
         expect(generated.generation.totalTokens).toBeGreaterThan(0);
+        expect(generated.generation).toMatchObject({ model: 'typesafe/jev-1.13', promptVersion: 'jev-rank-v1', attempts: 1 });
         const slides = generated.tldr.draft!.slides;
-        expect(slides.length).toBeGreaterThanOrEqual(1);
+        expect(slides).toHaveLength(generated.tldr.bounds!.target);
+        expect(slides.every((s) => typeof s.relevance === 'number')).toBe(true);
+        expect(generated.tldr.sentences.every((s) => typeof s.relevance === 'number')).toBe(true);
         expect(generated.tldr.jevAvailable).toBe(true);
 
         const savedDeck = await noDeadlock(
           'saveDeck',
-          saveDeck(ctx, created.id, { revisionId, slides: slides.map((s) => ({ sid: s.sid, source: s.source, reason: s.reason })) }),
+          saveDeck(ctx, created.id, { revisionId, slides: slides.map((s) => ({ sid: s.sid, source: s.source })) }),
         );
         expect(savedDeck.draft!.slides.map((s) => s.text)).toEqual(slides.map((s) => s.text));
 

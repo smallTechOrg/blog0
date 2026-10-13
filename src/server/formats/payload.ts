@@ -6,13 +6,14 @@ import { z } from 'zod';
 
 export const TLDR_MIN_SLIDES = 1;
 export const TLDR_MAX_SLIDES = 12;
-export const TLDR_REASON_MAX = 200;
 
+// Phase 8: slides carry no `reason` (Jev ranks; relevance lives only in ai_generation.output.scores).
+// Legacy payloads whose slides have `reason: string | null` parse unchanged — zod strips the
+// unknown key — so pre-Phase-8 decks still read, edit and publish. No migration.
 const tldrSlideSchema = z.object({
   sid: z.string().min(1),
   text: z.string().min(1),
   source: z.enum(['jev', 'writer']),
-  reason: z.string().max(TLDR_REASON_MAX).nullable(),
 });
 
 const tldrPayloadSchema = z.object({

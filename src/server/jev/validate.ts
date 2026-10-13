@@ -1,95 +1,47 @@
 import 'server-only';
 
-import { z } from 'zod';
+import type { JevBatch } from './state';
 
-import type { Sentence } from '@/lib/content/types';
+// spec/agent.md §2 step 6. Pure. For each batch, every question id must be present in that batch's
+// `answers` as `{ type: 'noul', noul: <finite number in [0,1]> }`. Ids we did not ask are ignored
+// (counted as `extra`). Any missing or invalid answer fails the whole run — no repair retry and no
+// imputed scores.
 
-import { JEV_MAX_REASON_CHARS, type JevBounds, type JevPick } from './state';
+export type ValidateResult =
+  | { ok: true; scoresBySid: Map<string, number>; extra: number }
+  | { ok: false; missing: string[]; invalid: string[]; extra: number };
 
-// spec/agent.md §2 step 5. Pure. Rules (each with a precise message for the repair prompt):
-// - JSON parses to { picks: [{ index, reason }] }
-// - index is an integer in [0, N-1]
-// - duplicates are removed (keep first) — not an error
-// - count after dedupe within [min, max]
-// - reason trimmed non-empty; > 200 chars → truncated at a word boundary with "…" (not an error)
-// Valid picks are sorted by index and mapped to sid/text from the SERVER's sentences.
-
-const envelopeSchema = z.object({ picks: z.array(z.unknown()) });
-const pickSchema = z.object({ index: z.unknown().optional(), reason: z.unknown().optional() });
-
-export type ValidateResult = { ok: true; picks: JevPick[] } | { ok: false; errors: string[] };
-
-/** Trim; if longer than `max`, cut at the last word boundary and append "…" (total ≤ max). */
-export function truncateReason(reason: string, max: number = JEV_MAX_REASON_CHARS): string {
-  const trimmed = reason.replace(/\s+/g, ' ').trim();
-  if (trimmed.length <= max) return trimmed;
-  const cut = trimmed.slice(0, max - 1);
-  const space = cut.lastIndexOf(' ');
-  const base = space >= Math.floor(max / 2) ? cut.slice(0, space) : cut;
-  return `${base.replace(/[\s,;:.–—-]+$/, '')}…`;
+function noulOf(answer: unknown): number | null {
+  if (typeof answer !== 'object' || answer === null) return null;
+  const { type, noul } = answer as { type?: unknown; noul?: unknown };
+  if (type !== 'noul') return null;
+  if (typeof noul !== 'number' || !Number.isFinite(noul) || noul < 0 || noul > 1) return null;
+  return noul;
 }
 
-function describe(value: unknown): string {
-  if (typeof value === 'string') return JSON.stringify(value.length > 20 ? `${value.slice(0, 20)}…` : value);
-  if (value === undefined) return 'missing';
-  return JSON.stringify(value) ?? String(value);
+export function validateAnswers(batches: readonly JevBatch[], answersByBatch: ReadonlyArray<Record<string, unknown>>): ValidateResult {
+  const scoresBySid = new Map<string, number>();
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  let extra = 0;
+  batches.forEach((batch, i) => {
+    const answers = answersByBatch[i] ?? {};
+    const asked = new Set(batch.questions.map((q) => q.sid));
+    for (const id of Object.keys(answers)) if (!asked.has(id)) extra++;
+    for (const { sid } of batch.questions) {
+      if (!Object.prototype.hasOwnProperty.call(answers, sid)) {
+        missing.push(sid);
+        continue;
+      }
+      const noul = noulOf(answers[sid]);
+      if (noul === null) invalid.push(sid);
+      else scoresBySid.set(sid, noul);
+    }
+  });
+  if (missing.length > 0 || invalid.length > 0) return { ok: false, missing, invalid, extra };
+  return { ok: true, scoresBySid, extra };
 }
 
-export function validatePicks(content: string, sentences: readonly Sentence[], bounds: JevBounds): ValidateResult {
-  const n = sentences.length;
-
-  let json: unknown;
-  try {
-    json = JSON.parse(content);
-  } catch {
-    return { ok: false, errors: ['the output was not valid JSON'] };
-  }
-  const envelope = envelopeSchema.safeParse(json);
-  if (!envelope.success) {
-    return { ok: false, errors: ['the output must be a JSON object {"picks":[{"index":<int>,"reason":"<text>"}]}'] };
-  }
-
-  const errors: string[] = [];
-  const seen = new Set<number>();
-  const kept: Array<{ index: number; reason: string }> = [];
-
-  envelope.data.picks.forEach((raw, i) => {
-    const item = pickSchema.safeParse(raw);
-    if (!item.success || raw === null || typeof raw !== 'object') {
-      errors.push(`picks[${i}] must be an object with "index" and "reason"`);
-      return;
-    }
-    const { index, reason } = item.data;
-    let bad = false;
-    if (typeof index !== 'number' || !Number.isInteger(index)) {
-      errors.push(`picks[${i}].index ${describe(index)} is not an integer`);
-      bad = true;
-    } else if (index < 0 || index > n - 1) {
-      errors.push(`picks[${i}].index ${index} is out of range 0..${n - 1}`);
-      bad = true;
-    }
-    if (typeof reason !== 'string' || reason.trim() === '') {
-      errors.push(`picks[${i}].reason is ${typeof reason === 'string' ? 'empty' : describe(reason)}; give a one-line reason`);
-      bad = true;
-    }
-    if (bad) return;
-    const idx = index as number;
-    if (seen.has(idx)) return; // duplicate: keep the first, not an error
-    seen.add(idx);
-    kept.push({ index: idx, reason: truncateReason(reason as string) });
-  });
-
-  if (errors.length === 0 && (kept.length < bounds.min || kept.length > bounds.max)) {
-    errors.push(
-      `chose ${kept.length} distinct sentence${kept.length === 1 ? '' : 's'}; choose between ${bounds.min} and ${bounds.max}`,
-    );
-  }
-  if (errors.length > 0) return { ok: false, errors };
-
-  kept.sort((a, b) => a.index - b.index);
-  const picks: JevPick[] = kept.map(({ index, reason }) => {
-    const sentence = sentences[index];
-    return { index, sid: sentence.sid, text: sentence.text, reason };
-  });
-  return { ok: true, picks };
+export function invalidOutputMessage(bad: number, n: number): string {
+  return `Jev didn't score every sentence (${bad} of ${n} missing or invalid) — try again, or pick lines yourself.`;
 }

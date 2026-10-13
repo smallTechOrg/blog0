@@ -2,12 +2,12 @@ import 'server-only';
 
 import { getConfig } from '../config';
 import { ApiError } from '../http/api';
-import { OpenRouterClient } from './openrouter';
+import { OpenRouterDecisionsClient } from './openrouter';
 import type { LlmClient } from './types';
 
-export { OpenRouterClient } from './openrouter';
+export { OpenRouterDecisionsClient } from './openrouter';
 export { LlmError } from './types';
-export type { ChatMessage, LlmClient, LlmErrorCode, LlmJsonRequest, LlmJsonResponse, LlmUsage } from './types';
+export type { DecisionQuestion, DecisionsRequest, DecisionsResponse, LlmClient, LlmErrorCode, LlmUsage } from './types';
 
 let client: LlmClient | null = null;
 
@@ -20,16 +20,17 @@ export function isLlmConfigured(): boolean {
 }
 
 /**
- * Process-wide OpenRouter client built from config (BLOG0_OPENROUTER_*, BLOG0_PUBLIC_BASE_URL).
+ * Process-wide OpenRouter decisions client built from config (BLOG0_OPENROUTER_API_KEY,
+ * BLOG0_OPENROUTER_DECISIONS_URL, BLOG0_PUBLIC_BASE_URL).
  * Throws ApiError LLM_NOT_CONFIGURED (503) when no key is configured (designer mode only).
  */
 export function getLlmClient(): LlmClient {
   if (client === null) {
     const config = getConfig();
     if (config.openrouterApiKey === null) throw new ApiError('LLM_NOT_CONFIGURED', 503, LLM_NOT_CONFIGURED_MESSAGE);
-    client = new OpenRouterClient({
+    client = new OpenRouterDecisionsClient({
       apiKey: config.openrouterApiKey,
-      baseUrl: config.openrouterBaseUrl,
+      decisionsUrl: config.openrouterDecisionsUrl,
       referer: config.publicBaseUrl,
     });
   }

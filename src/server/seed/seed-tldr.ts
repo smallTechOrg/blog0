@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import { publishArticle, type ActorContext } from '../articles/service';
-import { generateTldr, saveDeck } from '../articles/tldr';
+import { generateTldr, readScores, saveDeck } from '../articles/tldr';
 import { renderRevision } from '../articles/views';
 import type { Db } from '../db/client';
 import { aiGeneration, appUser, article, articleFormat, articleRevision } from '../db/schema';
@@ -216,7 +216,7 @@ export async function seedTldr(db: Db, siteId: string, userId: string, opts: See
         }
         await saveDeck(ctx, row.id, {
           revisionId,
-          slides: match.matched.map((m) => ({ sid: m.sid, source: 'writer' as const, reason: null })),
+          slides: match.matched.map((m) => ({ sid: m.sid, source: 'writer' as const })),
         });
       }
       await publishArticle(ctx, row.id, revisionId);
@@ -252,18 +252,28 @@ async function captureFixture(
     return { ok: false, reason: 'fixture not written — the published deck is not pure Jev output (editor lines); fixture left unchanged' };
   }
   const [generation] = await db
-    .select({ model: aiGeneration.model, promptVersion: aiGeneration.promptVersion, finishedAt: aiGeneration.finishedAt, startedAt: aiGeneration.startedAt })
+    .select({
+      model: aiGeneration.model,
+      promptVersion: aiGeneration.promptVersion,
+      finishedAt: aiGeneration.finishedAt,
+      startedAt: aiGeneration.startedAt,
+      output: aiGeneration.output,
+    })
     .from(aiGeneration)
     .where(and(eq(aiGeneration.id, deck.generationId), eq(aiGeneration.siteId, siteId)))
     .limit(1);
   if (!generation) return { ok: false, reason: 'fixture not written — the deck’s generation record is missing' };
+  const scores = readScores(generation.output);
+  if (deck.slides.some((s) => !scores.has(s.sid))) {
+    return { ok: false, reason: 'fixture not written — the deck’s generation has no relevance scores (pre-ranking output); fixture left unchanged' };
+  }
   const file = writeDeckFixture(
     {
       slug,
       model: generation.model,
       promptVersion: generation.promptVersion,
       capturedAt: (generation.finishedAt ?? generation.startedAt).toISOString(),
-      lines: deck.slides.map((s) => ({ text: s.text, reason: s.reason ?? '' })),
+      lines: deck.slides.map((s) => ({ text: s.text, relevance: scores.get(s.sid)! })),
     },
     dir,
   );

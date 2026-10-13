@@ -1,28 +1,28 @@
 {
   "slug": "tech-company-first",
-  "model": "google/gemini-2.5-flash",
-  "promptVersion": "jev-select-v1",
-  "capturedAt": "2026-10-12T14:14:15.781Z",
+  "model": "typesafe/jev-1.13",
+  "promptVersion": "jev-rank-v1",
+  "capturedAt": "2026-10-13T15:01:29.557Z",
   "lines": [
     {
-      "text": "Yes, you can build software today without tech expertise.",
-      "reason": "Acknowledges the initial claim that AI lowers the barrier to building software."
-    },
-    {
       "text": "The point I am coming to folks, is that the barrier is a factor but it is not the ultimate factor.",
-      "reason": "Introduces the core argument that the barrier is not the ultimate factor."
+      "relevance": 0.76
     },
     {
       "text": "And who knows maybe that 1% is the difference between your business surviving or getting washed away.",
-      "reason": "Highlights the critical importance of the 1% of problems for business survival."
+      "relevance": 0.61
     },
     {
       "text": "But when you have built the thing and you are running the thing, you will run into the 1% problems.",
-      "reason": "Explains when the 1% problems will inevitably arise."
+      "relevance": 0.75
+    },
+    {
+      "text": "But if you want to build great products and great businesses, you can’t ignore the 1%.",
+      "relevance": 0.86
     },
     {
       "text": "And yeah that’s when you’ll need Tech, and that’s when you’ll need humans.",
-      "reason": "Concludes that tech expertise and humans are essential for addressing the critical 1%."
+      "relevance": 0.74
     }
   ]
 }

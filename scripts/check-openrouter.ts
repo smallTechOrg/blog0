@@ -1,16 +1,13 @@
-// pnpm check:openrouter — proves the OpenRouter key and the Jev model slug are alive with one real call.
-// Self-contained (plain fetch, not the LLM adapter). Prints only booleans/numbers — never the key.
-// Exit 1 on any failure. Model + fallback list: spec/agent.md §3.
+// pnpm check:openrouter — proves the OpenRouter key and the Jev decisions model are alive with one
+// real 1-question decisions call (spec/roadmap.md → package.json scripts; spec/agent.md §3).
+// Decisions models are not in the /models catalog and there is no fallback chain, so there is no
+// catalog lookup. Self-contained (plain fetch, not the LLM adapter). Prints only booleans/numbers —
+// never the key. Exit 1 on any failure.
 import { loadEnvConfig } from '@next/env';
 
-const FALLBACK_MODELS = [
-  'google/gemini-2.5-flash',
-  'anthropic/claude-haiku-4.5',
-  'openai/gpt-5-mini',
-  'google/gemini-2.5-flash-lite',
-] as const;
-const DEFAULT_MODEL = 'google/gemini-2.5-flash';
+const DEFAULT_MODEL = 'typesafe/jev-1.13';
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 const TIMEOUT_MS = 60_000;
 
 function plain(name: string): string | undefined {
@@ -48,7 +45,7 @@ async function call(url: string, key: string, init: RequestInit = {}): Promise<{
 
 function providerError(body: unknown): string {
   const err = (body as { error?: { message?: unknown; code?: unknown } } | null)?.error;
-  if (err && typeof err.message === 'string') return err.message.slice(0, 300);
+  if (err && typeof err.message === 'string') return err.message.replace(/\s+/g, ' ').slice(0, 300);
   return 'no error message';
 }
 
@@ -62,6 +59,7 @@ async function main(): Promise<void> {
     fail('BLOG0_OPENROUTER_API_KEY is not set — add it to .env at the repo root (see .env.example).');
   }
   const base = (plain('BLOG0_OPENROUTER_BASE_URL') ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const decisionsUrl = (plain('BLOG0_OPENROUTER_DECISIONS_URL') ?? DEFAULT_DECISIONS_URL).replace(/\/+$/, '');
   const model = plain('BLOG0_JEV_MODEL') ?? DEFAULT_MODEL;
 
   // 2. key valid
@@ -72,74 +70,43 @@ async function main(): Promise<void> {
   }
   if (keyRes.status !== 200) fail(`GET /key failed: HTTP ${keyRes.status} — ${providerError(keyRes.body)}`);
 
-  // 3. model listed + fallback availability
-  const modelsRes = await call(`${base}/models`, key);
-  if (modelsRes.status !== 200) fail(`GET /models failed: HTTP ${modelsRes.status} — ${providerError(modelsRes.body)}`);
-  const models = ((modelsRes.body as { data?: Array<{ id: string; supported_parameters?: string[] }> }).data ?? []);
-  const byId = new Map(models.map((m) => [m.id, m]));
-  const listed = byId.has(model);
-  console.log(`model ${model} listed: ${listed}`);
-  if (listed) {
-    const params = byId.get(model)?.supported_parameters ?? [];
-    console.log(`model ${model} supports response_format: ${params.includes('response_format') || params.includes('structured_outputs')}`);
-  }
-  console.log('fallback availability:');
-  for (const slug of FALLBACK_MODELS) console.log(`  ${slug}: ${byId.has(slug)}`);
-  if (!listed) {
-    const first = FALLBACK_MODELS.find((slug) => byId.has(slug));
-    fail(
-      `Model ${model} is not listed on OpenRouter. ` +
-        (first ? `Set BLOG0_JEV_MODEL=${first} in .env and .env.example and record it in spec/agent.md §3.` : 'No fallback is listed either.'),
-    );
-  }
-
-  // 4. one structured-output call
-  const chatRes = await call(`${base}/chat/completions`, key, {
+  // 3. one real 1-question decisions call
+  const res = await call(decisionsUrl, key, {
     method: 'POST',
     body: JSON.stringify({
       model,
-      messages: [{ role: 'user', content: 'Reply with ok=true.' }],
-      max_tokens: 20,
-      temperature: 0,
-      provider: { require_parameters: true },
-      usage: { include: true },
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'check',
-          strict: true,
-          schema: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['ok'],
-            properties: { ok: { type: 'boolean' } },
-          },
+      state: { title: 'check', dek: '', article: 'The sky is blue. Grass is green.' },
+      questions: {
+        check: {
+          type: 'noul',
+          instructions: 'Is this sentence about colour? Sentence: "The sky is blue."',
+          criteria: { true: 'It names a colour.', false: 'It does not name a colour.' },
         },
       },
     }),
   });
-  if (chatRes.status !== 200) {
-    fail(`structured call: FAILED · HTTP ${chatRes.status} · ${providerError(chatRes.body)}`);
+  const notAvailable = `BLOG0_JEV_MODEL=${model} is not an available decisions model — the default is ${DEFAULT_MODEL}`;
+  if (res.status === 400 || res.status === 404) {
+    fail(`decisions call: FAILED · HTTP ${res.status} · ${providerError(res.body)}\n${notAvailable}`);
   }
-  const body = chatRes.body as {
-    choices?: Array<{ message?: { content?: string | null } }>;
-    usage?: { total_tokens?: number; cost?: number };
+  if (res.status !== 200) fail(`decisions call: FAILED · HTTP ${res.status} · ${providerError(res.body)}`);
+  const body = res.body as {
+    answers?: Record<string, { type?: unknown; noul?: unknown }>;
+    usage?: { input_tokens?: unknown; output_tokens?: unknown; cost?: unknown };
     error?: unknown;
-  };
-  if (body?.error) fail(`structured call: FAILED · HTTP ${chatRes.status} · ${providerError(body)}`);
-  let content = (body?.choices?.[0]?.message?.content ?? '').trim();
-  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(content);
-  if (fence) content = fence[1];
-  let parsedOk = false;
-  try {
-    parsedOk = (JSON.parse(content) as { ok?: unknown }).ok === true;
-  } catch {
-    parsedOk = false;
+  } | null;
+  if (body === null) fail(`decisions call: FAILED · HTTP ${res.status} · the body was not JSON`);
+  if (body.error) fail(`decisions call: FAILED · HTTP ${res.status} · ${providerError(body)}`);
+  const answer = body.answers?.check;
+  const noul = answer?.noul;
+  if (answer?.type !== 'noul' || typeof noul !== 'number' || !Number.isFinite(noul) || noul < 0 || noul > 1) {
+    fail(`decisions call: FAILED · HTTP ${res.status} · answers.check is not { type: 'noul', noul: <0..1> }`);
   }
-  if (!parsedOk) fail(`structured call: FAILED · HTTP ${chatRes.status} · content was not {"ok":true} JSON`);
-  const tokens = body.usage?.total_tokens ?? 'n/a';
+  const tokens = (v: unknown) => (typeof v === 'number' ? String(v) : 'n/a');
   const cost = typeof body.usage?.cost === 'number' ? body.usage.cost.toFixed(6) : 'n/a';
-  console.log(`structured call: ok · tokens ${tokens} · cost $${cost} · ${chatRes.ms} ms`);
+  console.log(
+    `decisions call: ok · model ${model} · noul ${noul.toFixed(2)} · tokens ${tokens(body.usage?.input_tokens)}/${tokens(body.usage?.output_tokens)} · cost $${cost} · ${res.ms} ms`,
+  );
 }
 
 main().catch((error: unknown) => {

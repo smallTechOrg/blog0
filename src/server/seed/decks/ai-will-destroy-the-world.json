@@ -1,28 +1,28 @@
 {
   "slug": "ai-will-destroy-the-world",
-  "model": "google/gemini-2.5-flash",
-  "promptVersion": "jev-select-v1",
-  "capturedAt": "2026-10-12T14:15:03.655Z",
+  "model": "typesafe/jev-1.13",
+  "promptVersion": "jev-rank-v1",
+  "capturedAt": "2026-10-13T15:01:30.700Z",
   "lines": [
     {
       "text": "AI will destroy the world.",
-      "reason": "States the article's thesis directly."
+      "relevance": 0.85
     },
     {
-      "text": "We are rushing into it too fast.",
-      "reason": "First reason for AI's destructive potential: rushing too fast."
+      "text": "It doesn’t need to but it will.",
+      "relevance": 0.72
+    },
+    {
+      "text": "And it will for reasons not based on technology.",
+      "relevance": 0.79
     },
     {
       "text": "We are rushing into it without adequate knowledge.",
-      "reason": "Second reason: lack of adequate knowledge."
+      "relevance": 0.82
     },
     {
-      "text": "And lastly we are rushing it with the wrong attitude.",
-      "reason": "Third reason: approaching AI with the wrong attitude."
-    },
-    {
-      "text": "But if we must take a warning from how Big Tech spread social media across the world, and the disastrous impacts of social media on society and culture, we must be extremely wary of handing the mantle of such great responsibility onto big tech again.",
-      "reason": "Connects past tech failures to current AI risks, urging caution."
+      "text": "Secondly, we don’t know how AI works.",
+      "relevance": 0.73
     }
   ]
 }

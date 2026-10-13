@@ -1,28 +1,28 @@
 {
   "slug": "humans-are-software",
-  "model": "google/gemini-2.5-flash",
-  "promptVersion": "jev-select-v1",
-  "capturedAt": "2026-10-12T14:14:13.243Z",
+  "model": "typesafe/jev-1.13",
+  "promptVersion": "jev-rank-v1",
+  "capturedAt": "2026-10-13T15:01:28.802Z",
   "lines": [
     {
       "text": "A human is nothing but a collection of perceptions, memories, feelings, thoughts, desires, intentions, actions and consciousness.",
-      "reason": "States the core thesis of what a human is."
+      "relevance": 0.93
     },
     {
-      "text": "What one feels, that one perceives.",
-      "reason": "Begins the sequence of how perception leads to thought."
+      "text": "What one perceives, that one thinks about.",
+      "relevance": 0.51
     },
     {
       "text": "What one thinks about, that one mentally proliferates.",
-      "reason": "Introduces the concept of mental proliferation."
+      "relevance": 0.52
     },
     {
       "text": "With what one has mentally proliferated as the source, perceptions and notions tinged by mental proliferation beset a man with respect to past, future, and present forms cognizable through the eye.",
-      "reason": "Explains the consequence of mental proliferation on perception."
+      "relevance": 0.46
     },
     {
       "text": "It gets so hard to define that we abstract it into what we call a HUMAN, a body capable of above par reasoning capabilities.",
-      "reason": "Concludes by defining how these processes form our concept of a human."
+      "relevance": 0.45
     }
   ]
 }

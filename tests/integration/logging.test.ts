@@ -18,7 +18,7 @@ import type { ArticleResponse } from '@/lib/api/dto';
 import { resetJevDepsForTests, setJevDepsForTests } from '@/server/articles/tldr';
 import { resetConfigForTests, Secret } from '@/server/config';
 import { resetLoggerForTests } from '@/server/log';
-import { OpenRouterClient } from '@/server/llm/openrouter';
+import { OpenRouterDecisionsClient } from '@/server/llm/openrouter';
 
 import { actAs, call, ORIGIN } from '../helpers/api';
 import { resetDb } from '../helpers/db';
@@ -113,9 +113,9 @@ describe('api.request lines', () => {
 describe('Generate failure logging (fake transport: HTTP 401)', () => {
   it('emits llm.call, jev.run and api.request lines with the error code and without the key or article text', async () => {
     setJevDepsForTests({
-      llm: new OpenRouterClient({
+      llm: new OpenRouterDecisionsClient({
         apiKey: new Secret(FAKE_KEY),
-        baseUrl: 'https://openrouter.invalid/api/v1',
+        decisionsUrl: 'https://openrouter.invalid/api/alpha/decisions',
         referer: ORIGIN,
         retryDelaysMs: [],
         sleep: async () => {},
@@ -139,7 +139,17 @@ describe('Generate failure logging (fake transport: HTTP 401)', () => {
     const [llm] = logs.find('llm.call');
     const [jev] = logs.find('jev.run');
     const [api] = logs.find('api.request');
-    expect(llm).toMatchObject({ request_id: requestId, prompt_version: 'jev-select-v1', attempt: 1, outcome: 'http_error', http_status: 401 });
+    expect(llm).toMatchObject({
+      request_id: requestId,
+      prompt_version: 'jev-rank-v1',
+      batch: 1,
+      batches: 1,
+      questions: 5,
+      attempt: 1,
+      outcome: 'http_error',
+      http_status: 401,
+      err_message: 'User not found.',
+    });
     expect(typeof llm.model).toBe('string');
     expect(typeof llm.latency_ms).toBe('number');
     expect(jev).toMatchObject({
@@ -147,7 +157,8 @@ describe('Generate failure logging (fake transport: HTTP 401)', () => {
       article_id: created!.id,
       revision_id: created!.currentRevision.id,
       sentence_count: 5,
-      attempts: 1,
+      k: 4,
+      batches: 1,
       outcome: 'error',
       err_code: 'LLM_AUTH',
     });

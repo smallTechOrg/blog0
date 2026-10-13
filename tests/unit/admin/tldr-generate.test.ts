@@ -14,19 +14,19 @@ describe('generateButtonLabel', () => {
 
   it('shows a busy label while the editor pre-save runs, then the Jev timer', () => {
     expect(generateButtonLabel({ ...BASE, phase: 'saving', editorDirty: true })).toBe('Saving…');
-    expect(generateButtonLabel({ ...BASE, phase: 'running', elapsed: 7, editorDirty: true })).toBe('Jev is reading… 7s');
+    expect(generateButtonLabel({ ...BASE, phase: 'running', elapsed: 7, editorDirty: true })).toBe('Jev is ranking… 7s');
   });
 });
 
 describe('generatedNotice', () => {
-  it('says the picks are already saved as the draft deck (no "then Save deck")', () => {
-    const text = generatedNotice(6);
-    expect(text).toBe('Jev picked 6 lines — saved as your draft deck. Edit them or publish.');
+  it('says how many sentences Jev ranked and that the top lines are already the draft deck (no "then Save deck")', () => {
+    const text = generatedNotice(42, 6);
+    expect(text).toBe('Jev ranked 42 sentences and picked the top 6 — saved as your draft deck. Edit them or publish.');
     expect(text).not.toMatch(/Save deck/);
   });
 
-  it('uses the singular for one line', () => {
-    expect(generatedNotice(1)).toBe('Jev picked 1 line — saved as your draft deck. Edit them or publish.');
+  it('uses the singular for one sentence and one line', () => {
+    expect(generatedNotice(1, 1)).toBe('Jev ranked 1 sentence and picked the top line — saved as your draft deck. Edit them or publish.');
   });
 });
 

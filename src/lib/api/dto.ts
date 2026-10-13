@@ -114,19 +114,25 @@ export interface PublishBlockedDetails { reasons: PublishBlockedReason[] }
 // TLDR
 // ---------------------------------------------------------------------------------------------
 
-export interface SentenceDto { sid: string; index: number; pid: string; text: string; words: number; headingPath: string[] }
-export interface DeckSlideDto { sid: string; text: string; source: 'jev' | 'writer'; reason: string | null; missing: boolean } // missing = sid/text no longer in current revision
+// Phase 8: `reason` is gone from every TLDR DTO; `relevance` (Jev's score in [0,1], or null when the sentence
+// has no score in the article's latest succeeded generation — never scored, changed since, or a pre-Phase-8 generation)
+// takes its place. Source of every relevance value: spec/architecture.md §3 "Relevance in the editor".
+export interface SentenceDto { sid: string; index: number; pid: string; text: string; words: number; headingPath: string[]; relevance: number | null }
+export interface DeckSlideDto { sid: string; text: string; source: 'jev' | 'writer'; relevance: number | null; missing: boolean } // missing = sid/text no longer in current revision
 export interface GenerationDto {
   id: string; status: 'running' | 'succeeded' | 'failed'; model: string; promptVersion: string;
-  requestedBy: string; startedAt: string; finishedAt: string | null; latencyMs: number | null; attempts: number;
-  promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; costUsd: number | null;
-  picks: Array<{ index: number; sid: string; reason: string }> | null;
+  requestedBy: string; startedAt: string; finishedAt: string | null; latencyMs: number | null;
+  attempts: number;                              // decisions requests sent (1 unless the article was batched)
+  sentenceCount: number;                         // sentences sent to Jev (= scored on success)
+  promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; costUsd: number | null;   // input / output / sum
+  picks: Array<{ index: number; sid: string; relevance: number | null }> | null;   // the k selected sentences, document order; null unless succeeded
+                                                                                    // (legacy generations: their picks with relevance null)
   errorCode: string | null; errorMessage: string | null;
 }
 export interface TldrStateDto {
   status: FormatStatus;
   bounds: { min: number; max: number; target: number } | null;   // null when 0 eligible sentences
-  sentences: SentenceDto[];                                       // current revision, eligible only
+  sentences: SentenceDto[];                                       // current revision, eligible only, DOCUMENT order (the client sorts by relevance)
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
@@ -143,10 +149,13 @@ export interface GenerateTldrResponse { tldr: TldrStateDto; generation: Generati
 /** On a failed generation the failed GenerationDto is in error.details.generation. */
 export interface GenerateTldrErrorDetails { generation: GenerationDto }
 
-/** PUT /api/admin/articles/:id/tldr (1–12 slides; text resolved server-side from sid) */
+/**
+ * PUT /api/admin/articles/:id/tldr (1–12 slides; text resolved server-side from sid).
+ * A legacy `reason` key is stripped, not refused; relevance is never accepted from the client.
+ */
 export interface SaveDeckRequest {
   revisionId: string;
-  slides: Array<{ sid: string; source: 'jev' | 'writer'; reason?: string | null }>;
+  slides: Array<{ sid: string; source: 'jev' | 'writer' }>;
 }
 export interface TldrResponse { tldr: TldrStateDto }
 export type SaveDeckResponse = TldrResponse;

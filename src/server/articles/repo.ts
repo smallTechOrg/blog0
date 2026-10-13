@@ -159,6 +159,29 @@ export async function latestGeneration(siteId: string, articleId: string, format
   return (await latestGenerations(siteId, [articleId], formatKind, db)).get(articleId) ?? null;
 }
 
+/** The article's latest `succeeded` generation for a format kind (the editor's relevance source). */
+export async function latestSucceededGeneration(
+  siteId: string,
+  articleId: string,
+  formatKind: string,
+  db: Executor = getDb(),
+): Promise<AiGenerationRow | null> {
+  const [row] = await db
+    .select()
+    .from(aiGeneration)
+    .where(
+      and(
+        eq(aiGeneration.siteId, siteId),
+        eq(aiGeneration.articleId, articleId),
+        eq(aiGeneration.formatKind, formatKind),
+        eq(aiGeneration.status, 'succeeded'),
+      ),
+    )
+    .orderBy(desc(aiGeneration.startedAt), desc(aiGeneration.createdAt))
+    .limit(1);
+  return row ?? null;
+}
+
 export async function nextRevisionNumber(tx: Tx, siteId: string, articleId: string): Promise<number> {
   const [row] = await tx
     .select({ max: sql<number | null>`max(${articleRevision.number})` })

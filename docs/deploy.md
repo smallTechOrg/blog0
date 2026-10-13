@@ -38,8 +38,9 @@ makes the server log one aggregated error and exit 1 before serving.
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | — | first deploy only | password: **yes** | creates the first admin; password ≥ 12 chars; remove after the first release |
 | `BLOG0_SHUTDOWN_TIMEOUT_MS` | optional | — | no | drain deadline after SIGTERM (1000–120000, default 8000) |
 | `BLOG0_RATE_LIMIT_STORE` | optional | — | no | `auto` (default: counted in Postgres — survives restarts, shared by instances) \| `db` \| `memory` |
-| `BLOG0_OPENROUTER_BASE_URL` | optional | — | no | default `https://openrouter.ai/api/v1` |
-| `BLOG0_JEV_MODEL` / `BLOG0_JEV_TIMEOUT_MS` | optional | — | no | default `google/gemini-2.5-flash` / `45000` |
+| `BLOG0_OPENROUTER_BASE_URL` | optional | — | no | default `https://openrouter.ai/api/v1` (only `pnpm check:openrouter` uses it) |
+| `BLOG0_OPENROUTER_DECISIONS_URL` | optional | — | no | the Jev endpoint; default `https://openrouter.ai/api/alpha/decisions` |
+| `BLOG0_JEV_MODEL` / `BLOG0_JEV_TIMEOUT_MS` | optional | — | no | Jev = the decisions model, default `typesafe/jev-1.13` (no fallback) / `45000` per request |
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | optional | — | no | upload limits, default `50` / `30` / `8` |
 | `BLOG0_LOG_LEVEL` | optional | — | no | `debug` \| `info` (default) \| `warn` \| `error` |
 | `BLOG0_LOG_FILE` | optional | — | no | also append JSON log lines to this path (stdout always gets them) |

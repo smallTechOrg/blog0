@@ -194,7 +194,7 @@ jobs:
       - name: Image contents (no .env; prompts, migrations journal, release.mjs present)
         run: |
           docker run --rm --entrypoint sh blog0:ci -c \
-            'test ! -e .env && test -f src/server/jev/prompts/select-v1.md && test -f src/server/db/migrations/meta/_journal.json && test -f release.mjs'
+            'test ! -e .env && test -f src/server/jev/prompts/rank-v1.md && test -f src/server/db/migrations/meta/_journal.json && test -f release.mjs'
       - name: No env → refuses to boot (exit 1 within 15 s)
         run: |
           set +e

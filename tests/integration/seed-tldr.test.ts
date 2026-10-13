@@ -117,7 +117,7 @@ describe('seedTldr — fixture path (no AI call)', () => {
       expect(deck.published, slug).not.toBeNull();
       expect(deck.published!.slides.map((s) => s.text)).toEqual(fixture.lines.map((l) => l.text));
       expect(deck.published!.generationId).toBeNull();
-      expect(deck.published!.slides.every((s) => s.source === 'writer' && s.reason === null)).toBe(true);
+      expect(deck.published!.slides.every((s) => s.source === 'writer' && !('reason' in s))).toBe(true);
       expect(deck.draft).toEqual(deck.published); // no unpublished changes left behind
       expect(deck.formatPublishedRevisionId).toBe(deck.publishedRevisionId);
       const eligible = await eligibleTexts(slug);
@@ -134,7 +134,7 @@ describe('seedTldr — fixture path (no AI call)', () => {
   it('drops a mangled fixture line with a logged warning and still publishes the deck', async () => {
     const dir = fixtureCopy();
     const file = path.join(dir, 'humans-are-software.json');
-    const fixture = JSON.parse(readFileSync(file, 'utf8')) as { lines: Array<{ text: string; reason: string }> };
+    const fixture = JSON.parse(readFileSync(file, 'utf8')) as { lines: Array<{ text: string; relevance?: number }> };
     const original = fixture.lines.map((l) => l.text);
     fixture.lines[1].text = `${fixture.lines[1].text.slice(0, -1)} (edited)`;
     writeFileSync(file, JSON.stringify(fixture));
@@ -150,6 +150,28 @@ describe('seedTldr — fixture path (no AI call)', () => {
     const deck = (await decksBySlug()).get('humans-are-software')!;
     expect(deck.published!.slides.map((s) => s.text)).toEqual(original.filter((_, i) => i !== 1));
     expect(await generationCount()).toBe(0);
+  });
+
+  it('still seeds from a legacy (pre-Phase-8) fixture whose lines carry reasons instead of scores', async () => {
+    const dir = fixtureCopy();
+    const file = path.join(dir, 'ai-is-expensive.json');
+    const current = JSON.parse(readFileSync(file, 'utf8')) as { lines: Array<{ text: string }> };
+    const legacy = {
+      slug: 'ai-is-expensive',
+      model: 'google/gemini-2.5-flash',
+      promptVersion: 'jev-select-v1',
+      capturedAt: '2026-10-12T14:14:15.781Z',
+      lines: current.lines.map((l) => ({ text: l.text, reason: 'Old chat-era reason.' })),
+    };
+    writeFileSync(file, JSON.stringify(legacy));
+
+    const result = await seedTldr(getDb(), siteRow.id, admin.user.id, { source: 'fixture', fixtureDir: dir });
+
+    expect(result.seeded).toEqual(ALL_SLUGS);
+    expect(result.warnings).toEqual([]);
+    const deck = (await decksBySlug()).get('ai-is-expensive')!;
+    expect(deck.published!.slides.map((s) => s.text)).toEqual(current.lines.map((l) => l.text));
+    expect(JSON.stringify(deck.published)).not.toContain('"reason"');
   });
 
   it('is idempotent: a second run seeds nothing and changes nothing (also after a fresh connection)', async () => {
@@ -172,7 +194,7 @@ describe('seedTldr — fixture path (no AI call)', () => {
     const dir = fixtureCopy();
     rmSync(path.join(dir, 'ai-is-expensive.json'));
     const file = path.join(dir, 'tech-company-first.json');
-    const fixture = JSON.parse(readFileSync(file, 'utf8')) as { lines: Array<{ text: string; reason: string }> };
+    const fixture = JSON.parse(readFileSync(file, 'utf8')) as { lines: Array<{ text: string; relevance?: number }> };
     fixture.lines = fixture.lines.map((l) => ({ ...l, text: l.text.toUpperCase() }));
     writeFileSync(file, JSON.stringify(fixture));
 
@@ -216,14 +238,15 @@ describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real Jev — ${PENDING_KE
     expect(first.failed).toEqual([]);
     expect(first.calls).toBe(5);
     expect(first.costUsd).toBeGreaterThan(0);
-    expect(first.costUsd).toBeLessThan(0.05);
+    expect(first.costUsd).toBeLessThan(0.002);
     expect(formatSeedTldrSummary(first)).toMatch(/^decks: 5 seeded \(5 calls, \$0\.\d{4}\)$/);
 
     const generations = await getDb().select().from(aiGeneration).where(eq(aiGeneration.siteId, siteRow.id));
     expect(generations).toHaveLength(5);
     for (const g of generations) {
-      expect(g).toMatchObject({ status: 'succeeded', task: 'tldr.select', formatKind: 'tldr', requestedBy: admin.user.id, promptVersion: JEV_PROMPT_VERSION });
+      expect(g).toMatchObject({ status: 'succeeded', task: 'tldr.rank', formatKind: 'tldr', requestedBy: admin.user.id, promptVersion: 'jev-rank-v1', model: 'typesafe/jev-1.13', attempts: 1 });
       expect(Number(g.costUsd)).toBeGreaterThan(0);
+      expect((g.output as { scores: unknown[] }).scores).toHaveLength(g.sentenceCount);
     }
 
     const decks = await decksBySlug();
@@ -233,7 +256,9 @@ describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real Jev — ${PENDING_KE
       const slides = deck.published!.slides;
       expect(slides.length).toBeGreaterThanOrEqual(4);
       expect(slides.length).toBeLessThanOrEqual(8);
-      expect(slides.every((s) => s.source === 'jev' && (s.reason ?? '').length > 0)).toBe(true);
+      expect(slides.every((s) => s.source === 'jev')).toBe(true);
+      const g = generations.find((x) => x.id === deck.published!.generationId)!;
+      expect((g.output as { selected: string[] }).selected).toEqual(slides.map((s) => s.sid));
       expect(generations.map((g) => g.id)).toContain(deck.published!.generationId);
       expect(generations.find((g) => g.id === deck.published!.generationId)!.articleId).toBe(deck.articleId);
       expect(deck.formatPublishedRevisionId).toBe(deck.publishedRevisionId);
@@ -253,8 +278,12 @@ describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real Jev — ${PENDING_KE
     for (const slug of ALL_SLUGS) {
       const captured = loadDeckFixture(slug, tmp)!;
       const deck = decks.get(slug)!.published!;
-      expect(captured.lines).toEqual(deck.slides.map((s) => ({ text: s.text, reason: s.reason })));
+      const g = generations.find((x) => x.id === deck.generationId)!;
+      const scores = new Map((g.output as { scores: Array<{ sid: string; relevance: number }> }).scores.map((x) => [x.sid, x.relevance]));
+      expect(captured.lines).toEqual(deck.slides.map((s) => ({ text: s.text, relevance: scores.get(s.sid) })));
       expect(captured.promptVersion).toBe(JEV_PROMPT_VERSION);
+      expect(captured.model).toBe('typesafe/jev-1.13');
+      expect(readFileSync(path.join(tmp, `${slug}.json`), 'utf8')).not.toContain('"reason"');
     }
   });
 

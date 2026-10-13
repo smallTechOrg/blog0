@@ -2,16 +2,19 @@ import 'server-only';
 
 import type { Secret } from '../config';
 import { log } from '../log';
-import { LlmError, type LlmClient, type LlmErrorCode, type LlmJsonRequest, type LlmJsonResponse, type LlmUsage } from './types';
+import { LlmError, type DecisionsRequest, type DecisionsResponse, type LlmClient, type LlmErrorCode, type LlmUsage } from './types';
 
-// OpenRouter adapter (spec/agent.md §3). One logical call = one HTTP request, plus up to 2
-// transport retries for 429/500/502/503/504/network errors (backoff 1 s then 3 s, +0–250 ms jitter,
-// Retry-After honoured up to 10 s). A timeout is not retried (keeps the worst case < 120 s).
-// One `llm.call` log line per HTTP attempt. The API key is unwrapped only into the header.
+// OpenRouter decisions adapter (spec/agent.md §3). POST {decisionsUrl} with { model, state, questions }.
+// One logical request = one HTTP request, plus up to 2 transport retries for 429/500/502/503/504,
+// network errors and 200s whose body is not JSON / has no `answers` object (backoff 1 s then 3 s,
+// +0–250 ms jitter, Retry-After honoured up to 10 s). A timeout is not retried (keeps the worst
+// case < 120 s). One `llm.call` log line per HTTP attempt. The API key is unwrapped only into the
+// Authorization header; article text is never logged.
 
 export interface OpenRouterClientOptions {
   apiKey: Secret;
-  baseUrl: string;
+  /** Full decisions endpoint URL (BLOG0_OPENROUTER_DECISIONS_URL). */
+  decisionsUrl: string;
   /** Sent as HTTP-Referer (BLOG0_PUBLIC_BASE_URL). */
   referer: string;
   fetch?: typeof fetch;
@@ -24,6 +27,7 @@ export interface OpenRouterClientOptions {
 
 export const TRANSPORT_RETRY_DELAYS_MS = [1000, 3000] as const;
 export const MAX_RETRY_AFTER_MS = 10_000;
+export const DEFAULT_DECISIONS_MODEL = 'typesafe/jev-1.13';
 const MAX_JITTER_MS = 250;
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
@@ -36,7 +40,7 @@ export function writerMessage(code: LlmErrorCode, model: string): string {
     case 'LLM_INSUFFICIENT_CREDITS':
       return 'OpenRouter account is out of credits.';
     case 'LLM_MODEL_NOT_FOUND':
-      return `Model '${model}' isn't available — set BLOG0_JEV_MODEL.`;
+      return `Model '${model}' isn't available as a decisions model — set BLOG0_JEV_MODEL (default ${DEFAULT_DECISIONS_MODEL}).`;
     case 'LLM_INVALID_OUTPUT':
       return 'The model returned an unreadable response.';
     case 'LLM_RATE_LIMITED':
@@ -46,7 +50,11 @@ export function writerMessage(code: LlmErrorCode, model: string): string {
   }
 }
 
-const MODEL_NOT_FOUND_RE = /not a valid model|model[^.]{0,80}(not found|does not exist|doesn't exist)|no endpoints found|unknown model|invalid model/i;
+// Observed (2026-10-13, decisions endpoint): a wrong slug — and a chat-model slug — answer
+// HTTP 400 {"error":{"message":"Model typesafe/does-not-exist does not exist","code":400}}.
+// `[^\n]` (not `[^.]`) because decisions slugs contain dots (typesafe/jev-1.13).
+export const MODEL_NOT_FOUND_RE =
+  /not a valid model|\bmodel\b[^\n]{0,120}?(not found|does not exist|doesn't exist)|no endpoints found|unknown model|invalid model|decisions model|not a decision/i;
 
 /** Maps a non-success HTTP status (+ provider message) to an error code. */
 export function classifyHttpError(status: number, providerMessage: string): LlmErrorCode {
@@ -57,13 +65,6 @@ export function classifyHttpError(status: number, providerMessage: string): LlmE
   if (status === 408) return 'LLM_TIMEOUT';
   if (status === 429) return 'LLM_RATE_LIMITED';
   return 'LLM_UNAVAILABLE';
-}
-
-/** Strips one surrounding ``` / ```json fence (some providers wrap structured output in one). */
-export function stripJsonFence(content: string): string {
-  const trimmed = content.trim();
-  const fence = /^```[a-zA-Z]*\s*\n?([\s\S]*?)\s*```$/.exec(trimmed);
-  return fence ? fence[1].trim() : trimmed;
 }
 
 /** Retry-After (seconds or HTTP date) → ms, capped at MAX_RETRY_AFTER_MS; null when absent/invalid. */
@@ -80,16 +81,18 @@ function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-interface ChatCompletionBody {
+interface DecisionsBody {
   id?: unknown;
-  choices?: Array<{ message?: { content?: unknown } }>;
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown; cost?: unknown };
+  model?: unknown;
+  provider?: unknown;
+  answers?: unknown;
+  usage?: { input_tokens?: unknown; output_tokens?: unknown; cost?: unknown };
   error?: { code?: unknown; message?: unknown };
 }
 
 function providerMessage(body: unknown): string {
-  const err = (body as ChatCompletionBody | null)?.error;
-  if (err && typeof err.message === 'string') return err.message.slice(0, 300);
+  const err = (body as DecisionsBody | null)?.error;
+  if (err && typeof err.message === 'string') return err.message.replace(/\s+/g, ' ').slice(0, 300);
   return '';
 }
 
@@ -97,11 +100,15 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
 }
 
-type AttemptOutcome = 'ok' | 'http_error' | 'timeout' | 'invalid_json';
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-export class OpenRouterClient implements LlmClient {
+type AttemptOutcome = 'ok' | 'http_error' | 'timeout' | 'invalid_body';
+
+export class OpenRouterDecisionsClient implements LlmClient {
   readonly #apiKey: Secret;
-  readonly #baseUrl: string;
+  readonly #url: string;
   readonly #referer: string;
   readonly #fetch: typeof fetch;
   readonly #sleep: (ms: number) => Promise<void>;
@@ -111,7 +118,7 @@ export class OpenRouterClient implements LlmClient {
 
   constructor(options: OpenRouterClientOptions) {
     this.#apiKey = options.apiKey;
-    this.#baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.#url = options.decisionsUrl.replace(/\/+$/, '');
     this.#referer = options.referer;
     this.#fetch = options.fetch ?? ((...args) => fetch(...args));
     this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -120,25 +127,23 @@ export class OpenRouterClient implements LlmClient {
     this.#retryDelays = options.retryDelaysMs ?? TRANSPORT_RETRY_DELAYS_MS;
   }
 
-  async completeJson(req: LlmJsonRequest): Promise<LlmJsonResponse> {
+  async decide(req: DecisionsRequest): Promise<DecisionsResponse> {
     const started = this.#now();
-    const body = JSON.stringify({
-      model: req.model,
-      messages: req.messages,
-      temperature: req.temperature,
-      max_tokens: req.maxTokens,
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: req.schemaName, strict: true, schema: req.schema },
-      },
-      provider: { require_parameters: true },
-      usage: { include: true },
-    });
+    const body = JSON.stringify({ model: req.model, state: req.state, questions: req.questions });
+    const questionCount = Object.keys(req.questions).length;
 
     const maxAttempts = this.#retryDelays.length + 1;
     for (let attempt = 1; ; attempt++) {
       const attemptStart = this.#now();
-      const logBase = { request_id: req.requestId, model: req.model, prompt_version: req.promptVersion, attempt };
+      const logBase = {
+        request_id: req.requestId,
+        model: req.model,
+        prompt_version: req.promptVersion,
+        batch: req.batch.index,
+        batches: req.batch.count,
+        questions: questionCount,
+        attempt,
+      };
       const elapsed = () => Math.max(0, Math.round(this.#now() - attemptStart));
       const canRetry = attempt < maxAttempts;
 
@@ -146,7 +151,7 @@ export class OpenRouterClient implements LlmClient {
       let text: string;
       let retryAfter: string | null;
       try {
-        const response = await this.#fetch(`${this.#baseUrl}/chat/completions`, {
+        const response = await this.#fetch(this.#url, {
           method: 'POST',
           body,
           signal: AbortSignal.timeout(req.timeoutMs),
@@ -174,9 +179,10 @@ export class OpenRouterClient implements LlmClient {
         throw new LlmError('LLM_UNAVAILABLE', writerMessage('LLM_UNAVAILABLE', req.model), null, detail);
       }
 
-      let parsed: ChatCompletionBody | null = null;
+      let parsed: DecisionsBody | null = null;
       try {
-        parsed = JSON.parse(text) as ChatCompletionBody;
+        const json: unknown = JSON.parse(text);
+        parsed = isRecord(json) ? (json as DecisionsBody) : null;
       } catch {
         parsed = null;
       }
@@ -185,43 +191,44 @@ export class OpenRouterClient implements LlmClient {
       const embeddedStatus = status === 200 && parsed?.error ? (num(parsed.error.code) ?? 502) : null;
       const effectiveStatus = embeddedStatus ?? status;
 
-      if (effectiveStatus !== 200 || parsed === null || typeof parsed !== 'object') {
+      if (effectiveStatus !== 200) {
         const providerMsg = providerMessage(parsed);
-        // A 200 whose body is not JSON is a gateway glitch: treat it like a 502.
-        const statusForMapping = effectiveStatus === 200 ? 502 : effectiveStatus;
         this.#logAttempt('http_error', logBase, elapsed(), null, {
           http_status: status,
           ...(embeddedStatus !== null ? { provider_status: embeddedStatus } : {}),
           ...(providerMsg ? { err_message: providerMsg } : {}),
         });
-        if (RETRYABLE_STATUSES.has(statusForMapping) && canRetry) {
+        if (RETRYABLE_STATUSES.has(effectiveStatus) && canRetry) {
           await this.#sleep(this.#backoff(attempt, retryAfter));
           continue;
         }
-        const code = classifyHttpError(statusForMapping, providerMsg);
-        throw new LlmError(code, writerMessage(code, req.model), statusForMapping, providerMsg || `HTTP ${status}`);
+        const code = classifyHttpError(effectiveStatus, providerMsg);
+        throw new LlmError(code, writerMessage(code, req.model), effectiveStatus, providerMsg || `HTTP ${status}`);
       }
 
-      const rawContent = parsed.choices?.[0]?.message?.content;
-      const content = typeof rawContent === 'string' ? stripJsonFence(rawContent) : '';
+      // A 200 whose body is not JSON, or has no `answers` object, is a gateway glitch: retry like a 502.
+      if (parsed === null || !isRecord(parsed.answers)) {
+        const detail = parsed === null ? '200 with a non-JSON body' : '200 without an answers object';
+        this.#logAttempt('invalid_body', logBase, elapsed(), null, { http_status: status, err_message: detail });
+        if (canRetry) {
+          await this.#sleep(this.#backoff(attempt, retryAfter));
+          continue;
+        }
+        throw new LlmError('LLM_UNAVAILABLE', writerMessage('LLM_UNAVAILABLE', req.model), 502, detail);
+      }
+
       const usage: LlmUsage = {
-        promptTokens: num(parsed.usage?.prompt_tokens),
-        completionTokens: num(parsed.usage?.completion_tokens),
-        totalTokens: num(parsed.usage?.total_tokens),
+        inputTokens: num(parsed.usage?.input_tokens),
+        outputTokens: num(parsed.usage?.output_tokens),
         costUsd: num(parsed.usage?.cost),
       };
       const providerGenerationId = typeof parsed.id === 'string' ? parsed.id : null;
+      const provider = typeof parsed.provider === 'string' ? parsed.provider : null;
 
-      let contentIsJson = false;
-      try {
-        JSON.parse(content);
-        contentIsJson = true;
-      } catch {
-        contentIsJson = false;
-      }
-      this.#logAttempt(contentIsJson ? 'ok' : 'invalid_json', logBase, elapsed(), usage, {
+      this.#logAttempt('ok', logBase, elapsed(), usage, {
         http_status: status,
         provider_generation_id: providerGenerationId,
+        provider,
       });
       if (usage.costUsd === null) {
         log.warn('llm.cost_missing', {
@@ -232,7 +239,14 @@ export class OpenRouterClient implements LlmClient {
         });
       }
 
-      return { content, usage, providerGenerationId, latencyMs: Math.max(0, Math.round(this.#now() - started)) };
+      return {
+        answers: parsed.answers,
+        usage,
+        providerGenerationId,
+        provider,
+        latencyMs: Math.max(0, Math.round(this.#now() - started)),
+        rawBody: text,
+      };
     }
   }
 
@@ -253,10 +267,11 @@ export class OpenRouterClient implements LlmClient {
     const fields = {
       ...base,
       latency_ms: latencyMs,
-      prompt_tokens: usage?.promptTokens ?? null,
-      completion_tokens: usage?.completionTokens ?? null,
+      input_tokens: usage?.inputTokens ?? null,
+      output_tokens: usage?.outputTokens ?? null,
       cost_usd: usage?.costUsd ?? null,
       provider_generation_id: null,
+      provider: null,
       outcome,
       ...extra,
     };
