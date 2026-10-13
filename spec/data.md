@@ -10,7 +10,38 @@ status set, `site` newsletter settings columns, the legacy status backfill) and
 p_before timestamptz) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path =
 public, pg_temp`, which nulls `ip` only on that subscriber's events with `created_at < p_before`
 — prune rule in `spec/architecture.md` §13.1); Phase 6 adds its own (Phase 4 needs none). After
-Phase 7, `pnpm db:verify` reports `4 applied (latest 0003_newsletter_prune_fix)`. Conventions:
+Phase 7, `pnpm db:verify` reports `4 applied (latest 0003_newsletter_prune_fix)`.
+> **Assumed (fix pass, post-freeze):** `0004_newsletter_erasure` (hand-written SQL + Drizzle
+> schema for the new columns) makes it `5 applied (latest 0004_newsletter_erasure)`; it:
+> (1) adds `site.privacy_text text not null default '<seeded plain-language draft>'`,
+> `site.newsletter_postal_address text not null default ''` and `site.newsletter_erase_salt text not
+> null default encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text,
+> 'UTF8')), 'hex')` (volatile default → each existing row gets its own random salt; never exposed
+> by any DTO); (2) widens the checks: event `kind` += `erased`, suppression `reason` += `erased`;
+> (3) adds suppression column `email_hash text null` (+ index `(site_id, email_hash)`); (4) creates
+> `newsletter_erase_subscriber(p_subscriber_id uuid) RETURNS boolean LANGUAGE plpgsql SECURITY
+> DEFINER SET search_path = public, pg_temp` — same pattern as `0003`: under `blog0.newsletter_erase
+> = '1'` (set local, so the ledger guard lets it through, only for these columns) it redacts
+> `email`, `ip`, `user_agent` (and `details` of the subscriber's events to `'{}'`) in
+> `newsletter_subscriber_event`; `email` (to the tombstone) and `email_hash` in
+> `newsletter_suppression`; `to_email` → tombstone, `subject`/`html`/`text` → `'[erased]'` in
+> `newsletter_message`; on `newsletter_subscriber`: `email` → tombstone, `name`, `signup_ip`,
+> `signup_user_agent`, `signup_source_url`, `confirmed_ip`, `confirmed_user_agent`,
+> `confirm_token_hash`, `confirm_token_expires_at`, `provider_id` → null, status
+> `unsubscribed`; inserts one suppression row (`reason 'erased'`, `source 'admin'`, `email_hash`)
+> and appends one `erased` event (`email` = tombstone, no ip/UA, `details {}`). Tombstone =
+> `erased+<hash>@erased.invalid`, `hash = encode(sha256(convert_to(salt || ':' || normalizedEmail,
+> 'UTF8')), 'hex')`, `salt = site.newsletter_erase_salt`; the app computes the same hash for
+> signup matching (`normalizedEmail` = trimmed lower-case), so a re-signup is detected without the
+> address ever being stored. Because the tombstone email is a different value, the unique
+> `(site_id, email)` slot of the real address is free: a re-signup creates a **new** subscriber
+> row whose first `signup` event carries `details.erasedBefore = true`, and the erased row and its
+> suppression stay. Returns false when the row is already erased; works on PG 18 and PGlite (plain
+> SQL, no extensions). (5) Redacts the token in existing `newsletter_message` rows of kind
+> `confirmation` (`regexp_replace(html|text, '(/newsletter/confirm\?t=)[^"&\s<]+', '\1[redacted]',
+> 'g')`); new rows are redacted by the app before insert. The salt is per site so rotating any
+> secret never breaks erasure matching; losing it (a restore from before `0004`) would — it is
+> inside every backup. Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
 (except `site` itself) and every query filters by it. Foreign keys `on delete cascade` from child
@@ -46,6 +77,9 @@ One row per tenant; v0.1 has one (`slug = BLOG0_SITE_SLUG`, default `blog0`).
 | newsletter_consent_text | text not null default `One issue a week at most. Unsubscribe in one click; we never share the list.` | Phase 7: the line shown under the footer form and copied onto every signup (≤ 300) |
 | newsletter_consent_version | text not null default `v1` | Phase 7: ≤ 20; bumped when the text changes |
 | newsletter_mode_set_at | timestamptz null | Phase 7: when `newsletter_mode` last changed — the digest window's start when no digest issue exists yet |
+| privacy_text | text not null | fix pass (`0004`): body of `/privacy`, seeded draft — **the owner must review it (draft, not legal advice)**; editable in Admin → Site |
+| newsletter_postal_address | text not null default `''` | fix pass (`0004`): printed in the issue footer and confirmation email when non-empty |
+| newsletter_erase_salt | text not null | fix pass (`0004`): random per-site salt for the erasure tombstone hash; never in a DTO |
 | created_at, updated_at | timestamptz | |
 
 ### app_user

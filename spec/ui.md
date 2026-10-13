@@ -94,6 +94,15 @@ Server components in the site chrome (`src/app/(site)/newsletter/{confirm,unsubs
 The "410" (expired / used) and "429" (rate-limited) outcomes below name the outcome, not the HTTP
 status: a page can only answer 200 or a true 404, so both render at 200 (the JSON routes carry
 410 / 429 — `spec/api.md`).
+> **Assumed (fix pass, scanner-safe):** a plain GET never changes state. For a well-formed token
+> the page first renders the **prompt** state — h1 "Confirm your subscription" / "Unsubscribe from
+> <brand>?" with one `.btn` (**Confirm my subscription** / **Yes, unsubscribe me**, client component
+> `LinkActionButton.tsx`) that POSTs the token to `/api/newsletter/{confirm,unsubscribe}` and then
+> swaps the card to the outcome copy below (success, 410 expired/used, 404 invalid, 429
+> rate-limited with the retry minutes); while posting the button reads "Working…" and is disabled;
+> a network error shows "Something went wrong — try again." with the button re-enabled. The
+> unsubscribe prompt adds "You can sign up again any time." The 404 for a malformed/bad-signature
+> token stays a true 404.
 One `.surface` card centred in `main`: an eyebrow `.tag` ("Newsletter"), a plain `h1` and one
 paragraph, then a `.btn-outline` link **Back to blog0** (`/`). Copy per outcome
 (`spec/api.md` → newsletter): confirm 200 "You’re subscribed." / "Thanks — <brand> issues will
@@ -137,6 +146,14 @@ recording — div. 9).
   restore, deck starts under the measured header).
 - Unknown/unpublished slug → `not-found.tsx` in the site chrome: "That article isn’t here." +
   link home.
+
+### Privacy `/privacy` (fix pass)
+> **Assumed (fix pass):** a static server page in the site chrome (`src/app/(site)/privacy/page.tsx`),
+> laid out like About: h1 "Privacy", body = `site.privacyText` paragraphs (blank-line separated,
+> rendered as text — no raw HTML), plus a line "Questions or an erasure request: <contact_email>".
+> Linked from the newsletter form's consent line ("Privacy" link appended to
+> `.ft-micro`, the stored consent text itself is unchanged) and the footer. The seeded text is a
+> **draft: the site owner must review the wording — it is not legal advice.**
 
 ### Archive `/archive`, About `/about`
 Design `Archive` (month groups, topic pills, empty "Nothing filed under that topic yet.") and
@@ -373,6 +390,11 @@ behaviour: `spec/capabilities/newsletter-issues.md`):
   **Send confirmation to all legacy** (confirm "Send one confirmation email to <n> addresses? Each
   address gets it once.") → "Sent N, skipped N".
 - Save state as the site form ("Saved" / "Couldn’t save — Retry"); errors inline.
+- > **Assumed (fix pass):** the Site form (first card, `PATCH /api/admin/site`) gains **Privacy
+  text** (textarea ≤ 8 000, helper "Shown at /privacy. Review the wording — the default is a draft,
+  not legal advice.") and **Newsletter postal address** (textarea ≤ 300, helper "Printed in every
+  issue footer and confirmation email. Often required by anti-spam law; leave empty only if you are
+  sure.").
 
 ### Subscribers `/admin/subscribers` (Phase 7 rewrite of `SubscribersView.tsx`)
 Behaviour: `spec/capabilities/newsletter-list.md`. Loads `GET /api/admin/subscribers?status=&q=`
@@ -406,6 +428,14 @@ via `useAdminLoad` keyed on the filter + query.
   "Confirmation sent to <email> (<smtp|stub>)" and the timeline refreshes; **Unsubscribe** (not
   for `unsubscribed`/`bounced`) → `.admin-dialog` "Unsubscribe <email>? This writes a permanent
   suppression entry." with an optional note → `POST …/unsubscribe`.
+- > **Assumed (fix pass):** **Erase personal data** (`.admin-btn` danger, any status except an
+  already-erased row) → `.admin-dialog` "Erase <email>? This permanently redacts the address, IP,
+  user agent and source page in the subscriber, event and message records and removes the address
+  from Listmonk. A tombstone and an `erased` entry remain. This cannot be undone." with an input
+  "Type the address to confirm" and **Erase** (disabled until the input equals the address,
+  case-insensitive) → `POST …/erase` → notice "Erased. Listmonk copy removed." / "Erased. Listmonk
+  removal failed — see the log." and the page reloads showing the tombstone address and the
+  `erased` timeline entry ("Personal data erased").
 - **Proof of consent** card (definition list): consent text (verbatim, quoted), consent version,
   consented at, signup IP (or "pruned <date>" / "not recorded — no trusted proxy"), signup user
   agent, source page, confirmation IP + user agent + time, token expiry (pending only, with
@@ -446,7 +476,7 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
 - **Actions bar**: **Send test to me** (any status; → "Test sent to <email> (<smtp|stub>)";
   error inline) · **Send** (`draft`/`failed`, or `sending` with `stuckSending`; primary; opens `SendDialog.tsx`: "Send to
   <n> confirmed subscribers?" with the sender line "via Listmonk · list <name>" or "via the stub
-  sender — recorded, not delivered", buttons **Send now** / Cancel; while sending the button reads
+  sender — recorded, not delivered", buttons **Send now** / Cancel; > **Assumed (fix pass):** when `newsletterPostalAddress` is empty the dialog (and the issue page, above the actions bar) shows a visible `.admin-warn` line "No postal address is set — issues will go out without one. Add it in Site → Newsletter postal address." with a link to `/admin/site`; **Send now** stays enabled (warn, never block); while sending the button reads
   "Sending…" and the page polls; result "Sent to <n> subscribers" or the failure card "Couldn’t
   send: <lastError>" + **Try again**. When `stuckSending` is true (no progress in `sending` for
   10 min) the page stops polling and shows the failure card "Couldn’t send: the send has been

@@ -344,6 +344,9 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `getNewsletterLinkThrottle()`: the confirm and unsubscribe routes (pages and JSON, one shared
   pair of buckets) count 30 per known client IP per hour (`newsletter.link.ip`, skipped for
   `direct`/`unknown` exactly like signup) and 1 000 per site per hour (`newsletter.link.site`).
+  > **Assumed (fix pass):** only the **POST** routes are throttled and count; the GET pages
+  (scanner-safe, no state change) never count and render the rate-limited copy only after a POSTed
+  button press is refused (`spec/api.md`).
   The token is parsed and shape-checked first (a malformed token → 404 without counting); a
   well-formed token counts whether or not it turns out valid. The pages render the rate-limited
   copy in site chrome at HTTP 200 (a page cannot emit 429); the JSON routes answer `RATE_LIMITED`
@@ -634,6 +637,7 @@ so legacy payloads parse).
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | integer 0–10: reverse proxies appending to `X-Forwarded-For`; 0 = ignore forwarding headers (§6) |
 | `BLOG0_SESSION_SECRET` | yes on `postgres://`; no on `pglite://` | — | ≥ 32 chars (`openssl rand -base64 48`). PGlite mode without it: generated once and persisted to `var/pglite-session-secret` (0600) — §11 |
+| `BLOG0_UNSUBSCRIBE_SECRET` | no | session secret | Fix pass. ≥ 24 chars when set; secret field (redacted, `replace-with-` placeholder rejected like the other secrets). Signs **new** unsubscribe tokens; verification tries it first, then `BLOG0_SESSION_SECRET`. Config field `newsletter.unsubscribeSecret: string \| null` (null ⇒ the session secret signs). Rotating the session secret then no longer breaks links signed with this one |
 | `BLOG0_OPENROUTER_API_KEY` | yes on `postgres://`; no on `pglite://` | — | presence + placeholder check at boot (below); liveness by `pnpm check:openrouter`. PGlite mode without a real key: Jev disabled with a visible notice (§11) |
 | `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | only `pnpm check:openrouter`'s `GET {base}/key` (Phase 8: no app code calls it) |
 | `BLOG0_OPENROUTER_DECISIONS_URL` | no | `https://openrouter.ai/api/alpha/decisions` | Phase 8: the Jev endpoint (alpha path, hence its own variable) |
@@ -672,7 +676,7 @@ Rules: `loadConfig(env)` is pure (unit-testable) and `getConfig()` caches it; va
 and, for non-secret fields, a trailing ` # comment` is stripped (dirty `.env` tolerance); missing
 or invalid required values throw one `ConfigError` listing every problem and pointing at `.env`;
 secret fields are wrapped so `JSON.stringify`/`util.inspect` print `[redacted]`. **Placeholder
-rejection at boot:** a secret field (`BLOG0_SESSION_SECRET`, `BLOG0_OPENROUTER_API_KEY`,
+rejection at boot:** a secret field (`BLOG0_SESSION_SECRET`, `BLOG0_UNSUBSCRIBE_SECRET`, `BLOG0_OPENROUTER_API_KEY`,
 `BLOG0_ADMIN_PASSWORD`, `BLOG0_NEW_ADMIN_PASSWORD`) whose value starts with `replace-with-` (the
 `.env.example` placeholder prefix) is reported in the same aggregated error ("… still holds the
 .env.example placeholder"). On `pglite://` the key is instead classified by the broader
@@ -1090,6 +1094,10 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   → `<uuid-as-base64url>.<base64url(HMAC-SHA256(secret, 'blog0.newsletter.unsubscribe:' + id))>`,
   `verifyUnsubscribeToken(token, secret): string | null` (constant-time compare), `isWellFormed*`.
   The secret is `getConfig().sessionSecret` (one secret, domain-separated).
+  > **Assumed (fix pass):** signing uses `unsubscribeSigningSecret()` = `config.newsletter.unsubscribeSecret ?? config.sessionSecret`;
+  `verifyUnsubscribeToken(token, secrets: string | readonly string[])` accepts a list and
+  `unsubscribeVerifySecrets()` = `[unsubscribeSecret, sessionSecret]` (unsubscribe secret first,
+  deduplicated, constant-time compare per candidate).
 - `schemas.ts` (zod): `subscribeBody` gains `sourceUrl` (string, trimmed, must start with `/`, no
   `//`, ≤ 500, default `/`); `settingsPatch`, `issueCreate`, `issueUpdate`, `webhookBody`.
 - `service.ts` — `subscribe(ctx: SignupContext, input)` in **one transaction** (lock the
@@ -1103,7 +1111,9 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   since confirmation clears the hash) → one transaction: status `confirmed`, `confirmed_*`, clear
   token, append `confirmed` or `resubscribed` (when a suppression exists for the row) → after
   commit `afterConfirm(subscriber)` (`sender-hook.ts`, below; failure logged, never surfaced to
-  the reader) → `{ alreadyConfirmed: false }`. `unsubscribeByToken(token, source)`: verify → row
+  the reader) → `{ alreadyConfirmed: false }`. > **Assumed (fix pass):** the pages never call
+  `confirmByToken`/`unsubscribeByToken` on GET — a client component (`LinkActionButton`) POSTs to
+  the JSON routes (§6, `spec/api.md`). `unsubscribeByToken(token, source)`: verify → row
   by id → already `unsubscribed`/`bounced` → `{ alreadyUnsubscribed: true }` (no rows written) →
   else `suppress(row, { reason: 'unsubscribed', source })`. `suppress(row, { reason, source,
   details, actor })` = one transaction that first **re-reads the subscriber row under
@@ -1146,6 +1156,20 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   update of an event row; it touches `ip` only, and only where `created_at < p_before`; returns
   the row count). Migration `0003_newsletter_prune_fix` replaces the one-argument version of
   `0002_newsletter` (drop + create; hand-written SQL, no schema change) — `spec/data.md`.
+- `erase.ts` (fix pass): `eraseSubscriber(id, { confirmEmail, actor })` → check `confirmEmail` equals
+  the row's email (else `VALIDATION_FAILED`) → `select newsletter_erase_subscriber($1)` in one
+  transaction (`0004`, `spec/data.md`) → after commit `sender.removeSubscriber(email)` best-effort
+  (the email is read **before** erasing) and log `newsletter.erase` (`subscriber_id, outcome
+  ('erased'|'already'), provider ('removed'|'skipped'|'failed'), user_id`; never the email).
+  `erasureHash(salt, email)` (pure, in `tokens.ts`) = `sha256hex(salt + ':' + trim(lower(email)))`,
+  the twin of the SQL; `subscribe()` computes it and, on a matching `suppression.email_hash`, appends
+  `details.erasedBefore = true` to the `signup` event (the new row is still `pending` and needs a
+  fresh double opt-in). `mail/` redacts the token before inserting a `confirmation` row:
+  `redactConfirmUrl(body)` replaces the `t` value of `/newsletter/confirm?t=…` with `[redacted]`
+  in the stored `html`/`text` only — the transport sends the real message. Issue and confirmation
+  footers render `newsletterPostalAddress` when non-empty and link `<publicBaseUrl>/privacy`
+  (`renderIssueHtml/Text` input gains `postalAddress: string`, `privacyUrl: string`;
+  `confirmationEmail` gains `postalAddress`).
 - `audit.ts`: `buildAuditBundle(siteId, actor)` → `NewsletterAuditBundle` (streams nothing —
   < 10 k subscribers assumed); `subscribersToCsv` grows the columns of `spec/api.md`.
 - `links.ts`: `confirmUrl(token)` / `unsubscribeUrl(subscriberId)` → absolute under
@@ -1355,6 +1379,14 @@ via `@media (prefers-color-scheme: dark)` in a `<style>` block plus explicit lig
 > **Assumed:** the publish hook runs synchronously after commit (no queue): creating a draft is
 > one insert; an auto-send with Listmonk is 2–4 HTTP calls (< 5 s) inside the publish request —
 > acceptable for a handful of writers; the publish response is not delayed by the stub.
+> **Assumed (fix pass):** `BLOG0_UNSUBSCRIBE_SECRET` (optional) now signs new tokens and the session
+> secret remains a verification fallback, so a rotation of the session secret only breaks links
+> signed with it; rotating the unsubscribe secret itself still breaks its links. `docs/deploy.md`
+> (code-owned) gets: the rotation section naming both secrets, and **"Handling an erasure
+> request"** (verify the requester, Admin → Subscribers → the address → **Erase personal data**,
+> type the address, confirm the `newsletter.erase` log line, reply to the requester; backups made
+> before the erasure still hold the data until they expire — delete or rotate them per the backup
+> policy).
 > **Assumed:** one secret (`BLOG0_SESSION_SECRET`) signs unsubscribe tokens; rotating it (runbook)
 > invalidates unsubscribe links in already-sent issues — the runbook says to re-sync
 > (`pnpm newsletter:sync`) after a rotation so the Listmonk attribute carries fresh links, and
@@ -1516,7 +1548,7 @@ blog0/
 │   │   └── share-links.ts  share-surface.ts                    # share texts/URLs; native-sheet decision
 │   ├── server/                  # server-only (each file starts with `import 'server-only'`)
 │   │   ├── config.ts  log.ts  rate-window.ts  rate-window-store.ts
-│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql + meta/)
+│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql, 0004_newsletter_erasure.sql + meta/)
 │   │   ├── ops/{release,readiness,lifecycle,pg-tools,backup-manifest,backup,restore}.ts   # Phase 5 (§12)
 │   │   ├── designer/{secret,admin,setup}.ts
 │   │   ├── http/api.ts

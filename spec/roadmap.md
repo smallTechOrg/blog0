@@ -620,6 +620,17 @@ then "pending docker", not passed. The CI workflow change is proven by its first
    labelled stubs remain in this phase; the only non-delivering surface is the explicitly
    labelled **Stub** sender/mail in the Site → Newsletter status strip.
 
+**Fix pass (post-freeze):** > **Assumed:** the one approved exception to the freeze — scanner-safe
+link pages (GET renders a button, POST changes state), optional `BLOG0_UNSUBSCRIBE_SECRET`,
+`/privacy` + `privacyText` + `newsletterPostalAddress` + `newsletter_erase_subscriber` /
+`POST /api/admin/subscribers/:id/erase`, and redacted confirmation tokens (migration
+`0004_newsletter_erasure`; `pnpm db:verify` → `5 applied (latest 0004_newsletter_erasure)`) —
+specified in `newsletter-list.md` (Assumed fix pass + criteria). **Tests first:** write the
+fix-pass criteria as failing integration/unit/E2E tests (PG 18 and PGlite for the erasure
+function) before any code; gate = the Phase 7 gate commands above, with the E2E and designer E2E
+pressing the link-page buttons. Wherever the how-to-test steps above say "open the link", read "open
+the link and press the button". Everything else stays frozen.
+
 ---
 
 ### Phase 8 — Jev ranking (typesafe/jev-1.13)
