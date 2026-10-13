@@ -1,8 +1,9 @@
 # Capability: Listen — paragraph timing (estimated by default) + reader follow
 
 Phase 3 (paragraph level). Timing is **estimated** from the recording's length and each
-paragraph's word count (user decision: no manual syncing). Exact timing is the Phase 6 local
-aligner (no paid speech-to-text), which writes marks into the sync storage kept here.
+paragraph's word count (user decision: no manual syncing). Exact timing — a local Whisper
+aligner (was Phase 6; no paid speech-to-text) writing marks into the sync storage kept here — is
+**Frozen — not scheduled**; the storage and `PUT …/listen` stay for it.
 Audio upload/streaming: `listen-audio`. Screens: `spec/ui.md` §3 *Listen* and §4 *Listen tab*.
 Status rules: `spec/architecture.md` §5. Pure helpers: `src/lib/listen/estimate.ts` and
 `src/lib/listen/marks.ts` (`spec/architecture.md` §9.4).

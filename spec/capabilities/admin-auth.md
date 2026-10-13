@@ -1,7 +1,7 @@
 # Capability: Admin auth
 
-Phase 1 (sign-in, sign-out, seeded first admin, CLI to add admins). Phase 4 (on hold) adds the
-Team page and password change (see end). Throttle mechanics: `spec/architecture.md` §6.
+Phase 1 (sign-in, sign-out, seeded first admin, CLI to add admins). The Team page and password
+change (see end; was Phase 4) are **Frozen — not scheduled**. Throttle mechanics: `spec/architecture.md` §6.
 
 ## What It Does
 Lets a handful of named smallTech writers sign in with email + password so every save, revision,
@@ -54,6 +54,6 @@ generation and publish is attributed to a distinct person.
 - [ ] Session use more than 24 h after `last_seen_at` extends `expires_at` (tested with injected clock).
 - [ ] An `auth.login` log line is emitted per attempt with `outcome` and a masked email, never the password.
 
-## Phase 4 additions (Team; on hold)
+## Team additions (was Phase 4; Frozen — not scheduled)
 - Team page lists users; any admin can add an admin (email, name, initial password ≥ 12).
 - A user can change their own password (current password required); their other sessions end.

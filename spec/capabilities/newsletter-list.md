@@ -194,10 +194,10 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 > the transport accepted the message.
 > **Assumed (fix):** a `GET /api/newsletter/unsubscribe` without `t` 303s to the bare page path; every
 > non-JSON POST (urlencoded or multipart, token from `?t=`) is recorded as `one_click`.
-> **Assumed (Phase 7 drift review — deferred, not a rule):** unsubscribe requests should be exempt
+> **Frozen — not scheduled (Phase 7 known gap, not a rule):** unsubscribe requests should be exempt
 > from the site-wide link bucket so a flood of well-formed garbage tokens cannot block real
-> unsubscribes; recorded as a known gap in `spec/roadmap.md` Phase 7, not implemented in v0.1 —
-> until then the rate-limit rule above (both caps, every well-formed token) is what ships.
+> unsubscribes (`spec/roadmap.md` → Frozen — not scheduled); the rate-limit rule above (both caps,
+> every well-formed token) is what ships.
 
 ## Success Criteria
 - [ ] Integration: `POST /api/newsletter { email: ' A@B.com ', sourceUrl: '/p/humans-are-software' }` → `{ subscribed: true }`; the row is `pending`, `email = 'a@b.com'`, `signup_source_url` set, `consent_text`/`consent_version` equal the site settings, `confirm_token_hash` is 64 hex chars and is not the token; one `signup` + one `confirmation_sent` event; one `newsletter_message` row (stub) whose HTML contains `/newsletter/confirm?t=`.

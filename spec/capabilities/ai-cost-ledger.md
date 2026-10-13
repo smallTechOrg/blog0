@@ -1,7 +1,7 @@
 # Capability: AI cost ledger
 
 Recording is live (every generation row + the per-generation line in the TLDR tab); the
-dashboard view is Phase 4 (on hold).
+dashboard view (was Phase 4) is **Frozen — not scheduled**.
 
 ## What It Does
 Shows what every AI call cost — per generation and as a site-wide month-to-date total — so the

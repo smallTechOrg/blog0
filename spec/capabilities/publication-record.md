@@ -1,6 +1,7 @@
 # Capability: Publication record (dates, corrections, sign-off)
 
-Phase 4 (**on hold**). Until then readers see no "Updated" date and no corrections note.
+**Frozen — not scheduled** (was Phase 4). Readers see no "Updated" date and no corrections note;
+the schema columns exist unused (`spec/data.md`).
 
 ## What It Does
 Shows readers when a piece was first published and last substantively updated, carries an

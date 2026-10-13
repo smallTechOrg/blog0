@@ -12,7 +12,8 @@ three formats through one mode capsule:
 - **TLDR** — a full-viewport, auto-advancing slide deck of the article's most important lines,
   selected **verbatim** by **Jev** (the TLDR agent) and reviewed/edited by the writer.
 - **Listen** — a writer-uploaded, word-for-word reading with the text following along (paragraph
-  timing estimated from the recording's length and word counts; exact alignment is Phase 6).
+  timing estimated from the recording's length and word counts; exact alignment is frozen — not
+  scheduled).
 
 Formats are an extensible set (more later), each with its own lifecycle status. The engine is
 built tenant-ready (every record belongs to a site) so it can be open-sourced later; v0.1 runs a
@@ -84,24 +85,28 @@ rotator, sentence builder, in-deck poll).
 > **Assumed:** If Jev fails, the writer hand-picks lines; there is no heuristic fallback (user has not chosen one).
 > **Decided (user):** seeded posts get their decks from the explicit `pnpm seed:tldr` (Jev once per post with a real key; the committed fixture `src/server/seed/decks/*.json` without one); the design's paraphrased TLDR arrays are never seeded.
 > **Assumed:** `pnpm seed:tldr -- --write-fixture` (real key) keeps the committed fixture equal to real Jev output; a unit test validates the fixture against the seed articles.
-> **Assumed:** Login and newsletter throttling are in-memory per process (single instance) through Phase 4; Phase 5 counts them in Postgres (`spec/capabilities/abuse-protection.md`; in-memory remains for designer mode and tests).
+> **Assumed:** Login and newsletter throttling are in-memory per process (single instance) before Phase 5; Phase 5 counts them in Postgres (`spec/capabilities/abuse-protection.md`; in-memory remains for designer mode and tests).
 > **Assumed:** Hand-edited decks allow 1–12 lines and reordering (Jev itself picks 4–8 in document order).
 > **Assumed:** A published deck whose lines vanished from the text blocks publishing of new changes until fixed (the old deck keeps serving meanwhile); publishing without any deck is allowed.
 > **Assumed:** Admins are all equal (no roles); approve-your-own-article is allowed in v0.1.
-> **Decided (user, 2026-10-13):** manual tap-along sync is removed; Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred.
+> **Decided (user, 2026-10-13):** manual tap-along sync is removed; Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred. (Superseded by the freeze: Phase 4, Phase 6 and revision history are Frozen — not scheduled.)
 > **Assumed:** Listen estimate constants — 150 words/minute and a 0.6 s pause per paragraph (1.5 word-equivalents); the first paragraph starts at 0 (`spec/capabilities/listen-sync.md`).
-> **Assumed:** Phases 5–6 are planned at lower fidelity; their capability files are written spec-first at the start of each phase.
+> **Decided (user, 2026-10-13):** Phase 8 (Jev ranking) was the last development; the project is **frozen** — no further phases or feature work (`## Phases of Development` → Frozen — not scheduled).
 > **Decided (user, 2026-10-13):** Phase 7 — Newsletter: blog0 owns the list (double opt-in, proof of consent, append-only suppression); Listmonk sends; it is built before Phase 6. Everything else about it is `Assumed:` in `spec/capabilities/newsletter-{list,issues}.md` and `spec/architecture.md` §12.6/§13.
 > **Decided (user, 2026-10-13):** "Jev" is the OpenRouter decisions model `typesafe/jev-1.13`; Jev ranks all sentences by relevance and the top ones form the TLDR deck (Phase 8); reasons are removed; the reader disclosure copy stays.
 > Further `Assumed:` items: stack (`spec/architecture.md` → `## Stack`), model call shape (`spec/agent.md` §3), timezone and up-front schema (`spec/data.md`), and the open design divergences (`spec/architecture.md` → `## Design divergences (ask user)`).
 
 ## Phases of Development
 
-Scaffold and Phases 1–3 (with the Phase 3 fix), Phase 5 and Phase 7 are **done**; Phase 4 is
-**on hold**; **Phase 8 (Jev ranking) is specified and next — the last development phase before
-the freeze**; Phase 6 stays planned but is not scheduled before the freeze.
+**Status: Frozen — development complete (Scaffold, Phases 1–3, 5, 7, 8 done).** No further
+phases or feature work (user decision). The sections below are the record of what was built and
+the gates that proved it; Phases 4 and 6 and every other unbuilt item are listed under
+**Frozen — not scheduled** at the end. Anywhere else in `spec/` that says "Phase 4", "Phase 6",
+"on hold" or "deferred" for unbuilt work means **Frozen — not scheduled**. The open design
+divergences (`spec/architecture.md` → `## Design divergences (ask user)` → Open) remain open user
+decisions with their defaults in force — they are decisions, not features.
 
-### Planning rules (Phase 4 onward)
+### Planning rules (as used by the built phases)
 
 - All commands run from the repo root `/Users/sai/Workspace/Code/blog0`.
 - `.env` holds real values for every key in `.env.example` for the Postgres gates; designer mode
@@ -331,49 +336,15 @@ card, **Listen** opens the compact player overlay. Back in the editor, change on
 wording and save → the chip shows **text changed** and the tab warns "The recording may no longer
 match the text"; **Publish changes** still works. In the Write tab, **Image** (or drop a PNG on the
 textarea), type alt text → `![alt](/media/…)` is inserted at the cursor and renders in the
-preview; an SVG is refused. Remaining labelled stub: the History tab (revision history deferred).
+preview; an SVG is refused. Remaining labelled stub: the History tab (revision history — Frozen,
+not scheduled).
 
 ---
 
-### Phase 4 — Editorial standards — **ON HOLD**
+### Phase 4 — Editorial standards — **Frozen — not scheduled**
 
-> **On hold (user decision, 2026-10-13).** Do not start Phase 4 until the user re-opens it. It
-> resumes **without revision history** (`spec/capabilities/revision-history.md` is deferred:
-> revisions keep being recorded on every save; the History tab stays a labelled stub).
-
-**Goal (when resumed):** public "Published <date> · Updated <date>" and an optional dated
-corrections note; TLDR stale detection with an explicit **Regenerate** offer (published content
-keeps serving); editor sign-off states (Submit for review / Approve — self-publish still allowed);
-AI cost dashboard (per generation and site-wide month-to-date); a small Team page (add admin,
-change own password). Capabilities: `publication-record`, `format-lifecycle`, `ai-cost-ledger`
-(team accounts are part of `admin-auth`).
-
-| Slice | Owns | Depends on |
-|---|---|---|
-| **S4.1 Publication record + sign-off** | `src/server/articles/workflow.ts`, `src/app/api/admin/articles/[id]/{submit,approve,corrections}/route.ts`, `src/components/admin/editor/PublishBar.tsx` (takes over), `src/components/reader/ReadHead.tsx` + `ArticleFoot.tsx` (take over: dates, corrections), `src/server/public/articles.ts` (takes over: `updatedLabel`, `correctionsHtml`), `tests/integration/workflow.test.ts` | — |
-| **S4.2 Format lifecycle** | `src/server/formats/status.ts` (new), `src/components/admin/FormatChips.tsx` (takes over), `src/components/admin/editor/StaleBanner.tsx`, `src/components/admin/editor/TldrTab.tsx` (takes over: Regenerate offer), `tests/integration/format-lifecycle.test.ts` | — |
-| **S4.3 AI cost ledger** | `src/server/ai-usage/**`, `src/app/api/admin/ai-usage/route.ts`, `src/app/admin/(authed)/ai-usage/page.tsx`, `src/components/admin/ai-usage/**`, `src/components/admin/DeskHeader.tsx` (takes over: month-to-date total), `tests/integration/ai-usage.test.ts` | — |
-| **S4.4 Team accounts** | `src/app/admin/(authed)/team/page.tsx`, `src/components/admin/team/**`, `src/app/api/admin/users/**`, `src/app/api/auth/password/route.ts`, `tests/integration/team.test.ts` | — |
-| **S4.5 Editorial E2E** | `tests/e2e/editorial.spec.ts`, `playwright.config.ts` (takes over: `editorial` project after `smoke`) | S4.1–S4.4 |
-
-> **Assumed:** the editorial walk is a fifth Playwright project depending on `smoke` (so it runs
-> last on the shared `blog0_test`), and S4.5 is the only slice that edits `playwright.config.ts`.
-
-**Gate (exact):**
-```bash
-pnpm db:migrate && pnpm db:verify
-pnpm typecheck && pnpm lint && pnpm test:unit && pnpm test:integration
-pnpm build && pnpm test:e2e              # editorial: edit → stale chip → Regenerate (real call) → publish → "Updated" shows; corrections note visible; cost page total equals the sum of generation rows
-# Boot check (background tool): pnpm start   then:   curl -fsS http://localhost:3410/api/health
-```
-
-**How the user tests it (when resumed):** change a deck sentence → TLDR chip **stale**, banner
-offers **Regenerate** (nothing happens until clicked); the live page still serves the published
-deck. **Publish changes** on another day → the article shows "Published 8 Sep 2026 · Updated
-12 Oct 2026". Add a corrections note → it appears dated at the article foot. **Submit for review**
-/ **Approve** states show on the desk. **AI usage** lists each generation (model, prompt version,
-tokens, $, who, when) and the month-to-date total, also on the desk header. **Team** → add a
-second admin; sign in as them; their saves show their name on the desk.
+Never built (on hold, then frozen). Its items are listed under **Frozen — not scheduled** below;
+the up-front schema columns for them exist unused (`spec/data.md`).
 
 ---
 
@@ -478,29 +449,9 @@ pushed that line is reported `PENDING CI`, never as passed.
 
 ---
 
-### Phase 6 — Automatic alignment (local faster-whisper)
+### Phase 6 — Automatic alignment (local Whisper) — **Frozen — not scheduled**
 
-**Goal:** on an explicit **Auto-sync** click, a local faster-whisper worker (free; no paid STT)
-transcribes the uploaded reading with word timestamps and aligns it to the article's paragraphs
-and sentences — the path to exact timings. The aligner writes paragraph marks through the
-existing aligner-facing `PUT /api/admin/articles/:id/listen` (`ListenPayload.marks`; sentence
-marks as an optional `sentenceMarks` beside them), so `resolveMarks` serves them as `synced` with
-no reader change; then the highlight goes sentence-level; the writer reviews. Stored marks are
-all-or-nothing (PUT requires a complete set), so a run that misses paragraphs must fill the gaps
-(e.g. interpolate between aligned neighbours) or leave the estimate — decided in Phase 6's
-capability spec. Capabilities: `alignment-worker`, `alignment-jobs`, `sentence-level-listen`.
-Introduces a second toolchain (Python 3.12 via `uv`) in `workers/align/`.
-
-Slices (planned): S6.1 `workers/align/` (uv project, faster-whisper `small.en`, CLI that reads a
-job and writes word timings); S6.2 `align_job` table (migration owned here) + job runner +
-`POST /api/admin/articles/:id/listen/auto-sync`; S6.3 sequence alignment of transcript words to
-`Paragraph[]` / `Sentence[]` (`src/server/listen/align.ts`, writing through `saveMarks`) + review
-UI; S6.4 reader sentence-level highlight; S6.5 E2E with the committed audio fixture.
-
-**Gate (exact):** `uv --directory workers/align run pytest -q && pnpm test:integration && pnpm build && pnpm test:e2e`.
-
-**How the user tests it:** upload audio, click **Auto-sync**, wait for "Aligned 42/44 sentences",
-review, publish; the reader's Listen view now highlights sentence by sentence.
+Never built. Listed under **Frozen — not scheduled** below.
 
 ---
 
@@ -593,14 +544,10 @@ legacy send (§13.1); webhook opt-out-wins timestamp rule (§13.3); provider err
 emails (§13.3, §7 `newsletter.provider`). Unit tests: `tests/unit/newsletter/opt-out.test.ts`;
 the integration criteria live in the two capability files.
 
-**Known gaps (deferred hardening — decided, not built in v0.1):**
-- *Unsubscribe exempt from the site-wide link bucket.* Today every well-formed token (valid or not)
-  counts toward both link caps (`spec/architecture.md` §6), so ~1 000 garbage-but-well-formed
-  unsubscribe requests in an hour from many IPs can 429 real readers' unsubscribes until the window
-  rolls. Decision: unsubscribe requests (page + one-click POST) will skip `newsletter.link.site` and
-  keep only the per-IP cap; confirm keeps both. > **Assumed:** acceptable to defer — the attack
-  needs many source IPs, blocks for ≤ 1 h, and the provider's own unsubscribe (Listmonk header /
-  page) keeps working and is pulled by the tick.
+**Known gap:** unsubscribe exemption from the site-wide link bucket — Frozen, not scheduled (see
+**Frozen — not scheduled** below; detail in `spec/architecture.md` §6).
+
+**Done** (commits `161fd00`, `a6a3edf`, `459613a`).
 
 **Gate (exact)** — `.env` as in the planning rules; `BLOG0_NEWSLETTER_SENDER` unset or `stub` and
 no `BLOG0_SMTP_HOST` in `.env` (the stub paths are what the gate proves; the Listmonk adapter is
@@ -677,6 +624,8 @@ then "pending docker", not passed. The CI workflow change is proven by its first
 
 ### Phase 8 — Jev ranking (typesafe/jev-1.13)
 
+**Done** (commit `75f6a2e`) — the last development phase; the project is frozen after it.
+
 **Goal:** the last development phase before the freeze. "Jev" becomes what the user means by it —
 the OpenRouter **decisions** model `typesafe/jev-1.13` — and the TLDR deck is chosen by ranking:
 one Generate click sends the article (state) and one relevance question per eligible sentence in
@@ -729,10 +678,9 @@ Slice notes (rules live in `spec/agent.md` and the capability; these are hand-of
 > two layers; the DTO is the only shared surface, so the orchestrator writes it first).
 > **Assumed:** k = the existing `target` bound (4–8); `min`/`max` survive only as the hand-edit
 > hint, so no bounds change.
-> **Assumed / deferred (user: keep pure ranking):** pure top-k can cluster at the end of an article
-> (observed on real output); a "one line per third" coverage guard is a deferred option, not built
-> (`spec/agent.md` §6). `eval:jev` prints coverage and per-third counts so the decision can be
-> revisited with data.
+> **Decided (user: keep pure ranking):** pure top-k can cluster at the end of an article
+> (observed on real output); the "one line per third" coverage guard is Frozen — not scheduled
+> (below; `spec/agent.md` §6). `eval:jev` prints coverage and per-third counts.
 
 **Gate (exact)** — `.env` as in the planning rules, with a real `BLOG0_OPENROUTER_API_KEY` and
 `BLOG0_JEV_MODEL` unset or `typesafe/jev-1.13`. Real-key commands carry `BLOG0_REQUIRE_REAL_KEY=1`
@@ -778,9 +726,39 @@ The `ci.yml` change is proven by its first run on push (`gh run watch`); until t
    high-scoring line from another part of the article → it joins the deck as "Added by you ·
    relevance 0.xx" in document position; move it, remove another, **Save deck**, reload → same
    deck.
-5. Edit one sentence in **Write**, **Save**, back to **TLDR**: the chip is **stale**, that
-   sentence shows no score, the others keep theirs; nothing regenerated.
+5. Edit one sentence in **Write**, **Save**, back to **TLDR**: the chip is **stale**;
+   sentences in unchanged paragraphs keep their scores; editing a sentence clears the scores of
+   its paragraph (every sentence of that paragraph shows no score); nothing regenerated.
 6. **Publish** → **View live** → **TLDR**: intro slide "Lines selected by Jev (AI), verbatim from
    the article." (or the editors' variant if you added lines) and the deck plays as before.
 7. An article whose deck was made before this phase still opens: its lines show "Jev" without a
    score until you regenerate. No labelled stubs are introduced by this phase.
+
+**Known gap (R1):** in-flight decisions requests and their retries are not aborted at the run
+deadline — Frozen, not scheduled (below).
+
+---
+
+## Frozen — not scheduled
+
+Nothing below is planned, specified for building, or assigned to a phase. Each item is recorded
+so the gap is known; reopening any of them is a new user decision.
+
+| Item | Was | One line |
+|---|---|---|
+| Publication record | Phase 4 | Public "Published · Updated" date, optional dated corrections note (`spec/capabilities/publication-record.md`; columns exist unused). |
+| Editor sign-off | Phase 4 | Submit for review / Approve states on the desk (self-publish allowed; columns exist unused). |
+| AI cost dashboard | Phase 4 | Per-generation list and site-wide month-to-date total (`spec/capabilities/ai-cost-ledger.md`; recording is live). |
+| TLDR stale banner | Phase 4 | Editor banner offering **Regenerate** when the text changed (`spec/capabilities/format-lifecycle.md`; the stale chip and the Regenerate button are live). |
+| Team accounts | Phase 4 | Team page to add admins and change one's own password (`spec/capabilities/admin-auth.md` → Team additions; the CLI `admin:create` is live). |
+| Revision history | deferred | Browse, view and restore revisions (`spec/capabilities/revision-history.md`; revisions are recorded on every save; History tab stays a labelled stub). |
+| Whisper alignment | Phase 6 | Exact Listen timing from a local Whisper aligner, then sentence-level highlight; the sync storage and aligner-facing `PUT /api/admin/articles/:id/listen` are kept for it (`spec/capabilities/listen-sync.md`). |
+| Jev coverage guard | Phase 8 option | "One line per third": swap an over-represented third's lowest pick for an empty third's best line (`spec/agent.md` §6; `eval:jev` prints per-third counts). |
+| Newsletter SMTP relay | deploy choice | Google Workspace relay (`smtp-relay.gmail.com:587`) vs Brevo (`smtp-relay.brevo.com:587`) — the user chooses at deploy time (`docs/deploy.md`); until `BLOG0_SMTP_HOST` is set, transactional mail uses the stub transport (nothing delivered; `spec/architecture.md` §10). |
+| Unsubscribe link-bucket exemption | Phase 7 known gap | Unsubscribe requests skip the site-wide `newsletter.link.site` cap and keep only the per-IP cap (`spec/architecture.md` §6). |
+| Abort at Jev run deadline (R1) | Phase 8 known gap | Abort in-flight decisions requests and their transport retries when the 110 s run deadline passes (`spec/agent.md` §3). |
+
+Not frozen, already settled: provider suppressions reach blog0 by **both** the hourly
+`newsletter:tick` poll and the secret-gated webhook (`spec/architecture.md` §13.3) — no open
+webhook-vs-poll decision. Open user decisions (not features) stay in `spec/architecture.md` →
+`## Design divergences (ask user)` → Open, each with its default in force.

@@ -48,7 +48,9 @@ then reviews (sentences sorted by relevance), edits and publishes.
 - There are no per-line reasons; the relevance score is shown instead, everywhere a reason used to
   be. Lines added by the writer show "Added by you" plus their score when they have one.
 - Scores shown in the editor come from the article's latest successful generation, matched by
-  sentence id; a sentence that changed or was added since then shows no score.
+  sentence id. Scores survive per paragraph (a sentence id is its paragraph's content hash + its
+  position): sentences in unchanged paragraphs keep their scores; editing a sentence clears the
+  scores of its paragraph; a sentence in a new paragraph shows no score.
 - The sentence picker lists sentences by relevance (highest first, unscored last in article
   order) by default when scores exist, with a switch back to article order.
 - One generation per article at a time; double clicks are refused while one is running.
@@ -69,7 +71,7 @@ then reviews (sentences sorted by relevance), edits and publishes.
 - [ ] Real-key integration with the request budget forced small: the run sends ≥ 2 requests and still scores every sentence.
 - [ ] The generation row records `model` = `typesafe/jev-1.13`, `prompt_version` = `jev-rank-v1`, `task` = `tldr.rank`, `attempts` (requests sent) ≥ 1, `prompt_tokens` > 0, `total_tokens` = prompt + completion tokens, `latency_ms` > 0, `requested_by` = the caller, `status` = succeeded, `output.scores` with N entries and `output.selected` with k sids; `cost_usd` is a non-negative number or null with an `llm.cost_missing` warning logged.
 - [ ] `GET …/tldr` after a Generate: every `sentences[i].relevance` equals the stored score for that sid; every draft slide's `relevance` equals its sentence's score; `latestGeneration.picks` lists the k selected sids with their scores; no DTO carries a `reason` field.
-- [ ] After editing one sentence and saving: that sentence's `relevance` is null, all unchanged sentences keep their scores, and no new `ai_generation` row exists.
+- [ ] After editing one sentence and saving: every sentence of that sentence's paragraph has `relevance` null, every sentence in an unchanged paragraph keeps its score, and no new `ai_generation` row exists.
 - [ ] Unit (stub client): a response missing one answer, or with `noul` outside [0,1], fails with `LLM_INVALID_OUTPUT` after exactly one request per batch (no retry) and the row stores the raw response; extra answer ids are ignored; ties rank the earlier sentence first.
 - [ ] A second Generate while the first is running returns 409 `GENERATION_IN_PROGRESS` and creates no row.
 - [ ] With an invalid model slug (real call) the API returns `LLM_MODEL_NOT_FOUND`, the row is `failed`, and the existing draft deck is unchanged.

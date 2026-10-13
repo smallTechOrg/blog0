@@ -348,10 +348,10 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   well-formed token counts whether or not it turns out valid. The pages render the rate-limited
   copy in site chrome at HTTP 200 (a page cannot emit 429); the JSON routes answer `RATE_LIMITED`
   (429) + `Retry-After`. `GET /api/newsletter/unsubscribe` (the 303 to the page) does not count —
-  the page it redirects to does. Known gap (deferred hardening, `spec/roadmap.md` Phase 7): a flood
+  the page it redirects to does. Known gap (Frozen — not scheduled, `spec/roadmap.md`): a flood
   of well-formed garbage unsubscribe tokens can exhaust the shared site bucket and block real
   unsubscribes for up to an hour; the decided fix is to exempt unsubscribe requests from
-  `newsletter.link.site` (keeping the per-IP cap) — not implemented in v0.1. The webhook route is not
+  `newsletter.link.site` (keeping the per-IP cap) — not implemented. The webhook route is not
   throttled (secret-gated). The admin routes are session-gated and not throttled.
 - **Security headers (Phase 5).** Static, env-independent headers come from `next.config.ts`
   `headers()` for `source: '/:path*'` (every response: pages, API, `/media`, `/_next/static`):
@@ -397,7 +397,7 @@ tests (`captureLogs()`).
 | Event | Emitted by | Fields |
 |---|---|---|
 | `api.request` | `withApi` (one line per API request, at completion; `withApi({ logLevel: 'debug' })` — used only by `/api/health/live` and `/api/health/ready` — logs 2xx at `debug`, anything else at the normal level) | `request_id, method, path, status, latency_ms, user_id?, input_summary, output_summary, err_code?` |
-| `llm.call` | OpenRouter decisions adapter (one line per HTTP attempt) | `request_id, model, prompt_version, batch, batches, questions, attempt, latency_ms, input_tokens, output_tokens, cost_usd, provider_generation_id, provider, outcome ('ok'\|'http_error'\|'timeout'\|'invalid_body'), http_status?, err_message?` — `batch` 1-based of `batches`; `questions` = count in this request; `attempt` = transport attempt 1–3; `provider_generation_id` = response `id`; `err_message` = provider message ≤ 300 chars, never article text |
+| `llm.call` | OpenRouter decisions adapter (one line per HTTP attempt) | `request_id, model, prompt_version, batch, batches, questions, attempt, latency_ms, input_tokens, output_tokens, cost_usd, provider_generation_id, provider, outcome ('ok'\|'http_error'\|'timeout'\|'invalid_body'), http_status?, provider_status?, err_message?` — `batch` 1-based of `batches`; `provider_status` = the code of an error embedded in a 200 body (`{ error: { code, message } }`; 502 when the code is not a number), present only then — `http_status` stays 200 and `provider_status` drives retry and classification; `questions` = count in this request; `attempt` = transport attempt 1–3; `provider_generation_id` = response `id`; `err_message` = provider message ≤ 300 chars, never article text |
 | `llm.cost_missing` | decisions adapter (`warn`) | `request_id, model, provider_generation_id` |
 | `jev.run` | `runJev` | `request_id, article_id, revision_id, sentence_count, k, batches, model, prompt_version, latency_ms, outcome ('ok'\|'error'), err_code?, missing_answers?, invalid_answers?, extra_answers?, top_relevance?, kth_relevance?` — `batches` = requests sent; counts and numbers only |
 | `jev.deadline` | `runJev` (`warn`) | `request_id, article_id, batches, deadline_ms` |

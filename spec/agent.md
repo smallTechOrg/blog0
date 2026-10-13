@@ -15,7 +15,7 @@ a chat model).
 | Rewrite/summarise into new TLDR prose | Rejected | Editorial rule: the deck is verbatim; generated prose would need fact-checking and breaks trust. |
 | Sentence splitting / paragraph ids | Deterministic code | Must be stable and reproducible; an LLM would be nondeterministic and costly. |
 | Excerpt (dek), title, topic suggestions | Not now | Writers set these; adds cost for little value at < 100 articles. |
-| Audio-to-text alignment | Deterministic local model (Phase 6, faster-whisper) | Free, local; not an OpenRouter call. No reasoning needed, only timestamps. |
+| Audio-to-text alignment | Deterministic local model (faster-whisper; was Phase 6 — Frozen, not scheduled) | Free, local; not an OpenRouter call. No reasoning needed, only timestamps. |
 | Reader Q&A / chat over articles | Rejected for v0.1 | Out of scope; would put LLM cost on reader paths. |
 | Search / recommendations | Rejected | Search dropped by user; < 100 articles. |
 | Proofreading / style checks | Not now | Not requested. |
@@ -140,7 +140,7 @@ computeBounds ──► buildState ──► guardInput ──► planBatches �
 **Error handler.** Adapter errors map 1:1 to `JevErrorCode`: 401/403 → `LLM_AUTH`; 402 →
 `LLM_INSUFFICIENT_CREDITS`; 404, or 400 whose message matches `MODEL_NOT_FOUND_RE` (extended with
 `/decisions model|not a decision/i`) → `LLM_MODEL_NOT_FOUND`; 429 after retries →
-`LLM_RATE_LIMITED`; timeout or deadline → `LLM_TIMEOUT`; 5xx/network after retries →
+`LLM_RATE_LIMITED`; 408, timeout or deadline → `LLM_TIMEOUT`; 5xx/network after retries →
 `LLM_UNAVAILABLE`; incomplete/invalid answers → `LLM_INVALID_OUTPUT`. No error is swallowed; the
 route returns it in the envelope with a writer-facing message and the generation row records it.
 
@@ -207,7 +207,8 @@ lives in `src/server/articles/tldr.ts` (see `spec/architecture.md` §3).
 - Timeouts/retries (adapter): per-request timeout `BLOG0_JEV_TIMEOUT_MS` (45 000); transport
   retries for 429, 500, 502, 503, 504 and network errors: 2 retries with backoff 1 s then 3 s
   (+0–250 ms jitter), honouring `Retry-After` up to 10 s; a timeout is not retried. Run deadline
-  110 s (route `maxDuration = 120`).
+  110 s (route `maxDuration = 120`). Known gap (R1, Frozen — not scheduled, `spec/roadmap.md`):
+  in-flight requests and their transport retries are not aborted at the run deadline.
 
 > **Verified (S8.1, 2026-10-13, real call):** question ids are the sentence `sid`s
 > (`p-<8 hex>[-n]-s<k>`, ASCII `[a-z0-9-]`) — a request with ids `p-3f2c9a1b-s0` and
@@ -257,7 +258,7 @@ lives in `src/server/articles/tldr.ts` (see `spec/architecture.md` §3).
 - Double-click / concurrent protection (`GENERATION_IN_PROGRESS`).
 - Every generation records model, prompt version, input/output tokens, $ cost (`usage.cost`
   summed over batches), requests sent, who, when; the TLDR panel shows the per-generation cost;
-  the ledger view is `ai-cost-ledger` (Phase 4, on hold).
+  the ledger view is `ai-cost-ledger` (dashboard: Frozen — not scheduled).
 
 ## 6. Failure modes and the hand-pick fallback
 
@@ -272,7 +273,7 @@ lives in `src/server/articles/tldr.ts` (see `spec/architecture.md` §3).
 | Incomplete or invalid answers | `validateAnswers` | "Jev didn't score every sentence (m of N missing or invalid) — try again, or pick lines yourself." | Row `failed`, `LLM_INVALID_OUTPUT`, raw bodies stored. |
 | One batch fails in a multi-batch run | `callBatches` | that batch's error message | Row `failed`; usage of the completed batches recorded. |
 | Process dies mid-call | row `running` > 3 min | Status chip falls back; Generate re-enabled. | Shown as failed (`GENERATION_ABANDONED`). |
-| Article edited after deck | sentences fingerprint differs | TLDR chip **stale**; vanished lines flagged; Publish refuses them. Never auto-regenerates. | Published deck keeps serving. Scores of unchanged sentences (same sid) still show. |
+| Article edited after deck | sentences fingerprint differs | TLDR chip **stale**; vanished lines flagged; Publish refuses them. Never auto-regenerates. | Published deck keeps serving. Scores survive per paragraph (a sid is the paragraph's content hash + the sentence's position): sentences in unchanged paragraphs keep their scores; editing a sentence clears the scores of its paragraph. |
 
 **Hand-pick fallback (no heuristic):** whenever Jev fails (or the writer prefers), the TLDR tab's
 sentence picker builds the deck manually (toggle, add, remove, reorder); a deck with zero Jev lines
@@ -282,9 +283,9 @@ is valid and its disclosure reads "Lines selected by the editors, verbatim from 
 **Clustering (observed, accepted).** Pure top-k can cluster — e.g. several picks from an article's
 closing paragraphs. > **Assumed (user):** keep pure ranking; the writer adjusts in the editor (the
 picker is sorted by relevance, so the next-best lines from other parts are one click away).
-> **Deferred option:** a "one line per third" coverage guard (swap the lowest-scored pick in an
-> over-represented third for the best-scored line of an empty third) — not built; revisit only if
-> `eval:jev` coverage numbers or writers ask for it.
+> **Frozen — not scheduled:** a "one line per third" coverage guard (swap the lowest-scored pick in
+> an over-represented third for the best-scored line of an empty third) — not built
+> (`spec/roadmap.md` → Frozen — not scheduled).
 
 ## 7. Evaluation and monitoring
 
