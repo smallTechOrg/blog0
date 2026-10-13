@@ -52,14 +52,19 @@ export const POST = withApi({ auth: 'none', csrf: false }, async ({ request, req
   if (body.reason !== undefined) details.reason = body.reason;
   if (body.occurredAt !== undefined) details.occurredAt = body.occurredAt;
   if (body.providerRef !== undefined) details.providerRef = body.providerRef;
-  const { accepted, subscriber } = await suppressByEmail(site.id, body.email, { reason: REASON[body.event], source: 'webhook', details });
+  // A parseable `occurredAt` dates the opt-out: older than the subscriber's latest consent /
+  // confirmation (a stale retry after a fresh re-subscription) → ignored. No / unparseable date → applied (an opt-out anywhere wins).
+  const occurred = body.occurredAt !== undefined ? new Date(body.occurredAt) : null;
+  const optOutAt = occurred !== null && !Number.isNaN(occurred.getTime()) ? occurred : undefined;
+  const { accepted, stale, subscriber } = await suppressByEmail(site.id, body.email, { reason: REASON[body.event], source: 'webhook', details, optOutAt });
   log.info('newsletter.sync', {
     trigger: 'webhook',
     request_id: requestId,
-    event: body.event,
+    webhook_event: body.event, // not `event`: that key is the log line's own name (it was clobbering `newsletter.sync`)
     email_masked: maskEmail(body.email),
     subscriber_id: subscriber?.id,
     accepted,
+    ...(stale ? { outcome: 'stale', msg: 'Webhook opt-out older than the latest consent — ignored' } : {}),
   });
   return { accepted };
 });

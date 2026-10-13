@@ -7,6 +7,7 @@ import {
   resetNewsletterSenderForTests,
   SenderError,
   StubNewsletterSender,
+  escapeGoTemplate,
   toListmonkExpressions,
   type SenderSubscriber,
 } from '@/server/newsletter/sender';
@@ -134,5 +135,17 @@ describe('stub newsletter sender', () => {
       '<a href="{{ .Subscriber.Attribs.blog0_unsubscribe_url }}">x</a> {{ .Subscriber.Attribs.blog0_consent_line }} / {{ .Subscriber.Attribs.blog0_unsubscribe_url }} %%OTHER%%',
     );
     expect(toListmonkExpressions('plain')).toBe('plain');
+  });
+
+  it('toListmonkExpressions escapes literal Go-template delimiters first (one pass), then inserts the placeholders', () => {
+    expect(toListmonkExpressions(`<h2>Templating with {{ x }}</h2><a href="${UNSUBSCRIBE_PLACEHOLDER}">u</a>`)).toBe(
+      '<h2>Templating with {{ "{{" }} x {{ "}}" }}</h2><a href="{{ .Subscriber.Attribs.blog0_unsubscribe_url }}">u</a>',
+    );
+    // edge cases: unbalanced, adjacent and triple braces; the inserted text is never re-scanned
+    expect(escapeGoTemplate('a }} b {{')).toBe('a {{ "}}" }} b {{ "{{" }}');
+    expect(escapeGoTemplate('{{{{')).toBe('{{ "{{" }}{{ "{{" }}');
+    expect(escapeGoTemplate('{{{')).toBe('{{ "{{" }}{');
+    expect(escapeGoTemplate('{ single } braces')).toBe('{ single } braces');
+    expect(escapeGoTemplate('')).toBe('');
   });
 });

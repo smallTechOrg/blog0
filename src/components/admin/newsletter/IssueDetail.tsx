@@ -51,6 +51,18 @@ import { SendLog } from './SendLog';
 type Stamped = IssueDetailResponse & { now: Date };
 type Notice = { kind: 'ok'; text: string } | { kind: 'error'; text: string; signedOut: boolean } | null;
 
+export const STUCK_SENDING_TEXT = 'the send has been stuck in Sending for over 10 minutes (the request was interrupted)';
+
+/** Whether Send / Try again is offered, and the failure line shown above Try again (`failed` = this session's own failure). */
+export function sendAffordance(
+  issue: Pick<IssueDetailDto, 'status' | 'lastError' | 'stuckSending'>,
+  failed: string | null,
+): { canSend: boolean; shownFailure: string | null; polling: boolean } {
+  const canSend = issue.status === 'draft' || issue.status === 'failed' || issue.stuckSending;
+  const shownFailure = failed ?? (issue.status === 'failed' ? (issue.lastError ?? 'unknown error') : issue.stuckSending ? STUCK_SENDING_TEXT : null);
+  return { canSend, shownFailure, polling: issue.status === 'sending' && !issue.stuckSending };
+}
+
 function postsKey(issue: IssueDetailDto): string {
   return JSON.stringify(issue.posts);
 }
@@ -134,8 +146,9 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [issue.id, previewTick]);
 
-  // Poll while the provider is sending (status `sending`, or our own send request is in flight).
-  const polling = issue.status === 'sending' || busy === 'send';
+  // Poll while the provider is sending (status `sending`, or our own send request is in flight) — but not
+  // once the send is stuck (no progress for 10 min): then Try again is offered instead.
+  const polling = sendAffordance(issue, null).polling || busy === 'send';
   useEffect(() => {
     if (!polling) return;
     let live = true;
@@ -231,8 +244,7 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
     });
   }
 
-  const canSend = issue.status === 'draft' || issue.status === 'failed';
-  const shownFailure = failed ?? (issue.status === 'failed' ? (issue.lastError ?? 'unknown error') : null);
+  const { canSend, shownFailure } = sendAffordance(issue, failed);
 
   return (
     <>

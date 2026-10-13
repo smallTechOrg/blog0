@@ -3,7 +3,8 @@
 // the site BLOG0_SITE_SLUG is upserted at the sender with its consent attributes; every
 // `unsubscribed` / `bounced` one is blocklisted; pending / legacy rows are skipped. Never creates,
 // enables or deletes anything in blog0. Idempotent — a second run prints "… 0 changed".
-// Prints "synced N, blocklisted N, skipped N, N changed"; exits 1 on any error (each one listed, email masked).
+// Prints "synced N, blocklisted N, skipped N, N changed" (+ "; N suppressed from provider …" when a
+// newer provider-side opt-out was recorded in blog0 instead of re-adding); exits 1 on any error (each one listed, email masked).
 // --create-list: create (or find) the Listmonk list named `blog0` from BLOG0_LISTMONK_URL / _API_USER /
 // _API_TOKEN and print its id for BLOG0_LISTMONK_LIST_ID (nothing is synced).
 import { runCli } from './lib/cli';
@@ -61,7 +62,7 @@ runCli('newsletter:sync', async () => {
     await requireHealthySender(sender);
     const r = await syncAll('script', { sender, siteId: site.id });
     console.log(`sender ${sender.kind}${sender.kind === 'listmonk' ? ` (list ${config.newsletter.listmonk?.listId})` : ' — nothing is mirrored'}, site ${config.siteSlug}`);
-    console.log(`synced ${r.synced}, blocklisted ${r.blocklisted}, skipped ${r.skipped}, ${r.changed} changed`);
+    console.log(`synced ${r.synced}, blocklisted ${r.blocklisted}, skipped ${r.skipped}, ${r.changed} changed${r.suppressedFromProvider > 0 ? `; ${r.suppressedFromProvider} suppressed from provider (opted out there, not re-added)` : ''}`);
     if (r.errors.length > 0) {
       for (const e of r.errors) console.error(`error: ${maskEmail(e.email)}: ${e.message}`);
       throw new Error(`${r.errors.length} subscriber(s) failed to sync`);

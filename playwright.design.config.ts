@@ -66,6 +66,9 @@ export default defineConfig({
       BLOG0_ADMIN_PASSWORD: '',
       BLOG0_ADMIN_NAME: '',
       BLOG0_LOG_FILE: '',
+      // Newsletter: stub mail transport + stub sender (the confirm link is read from the console).
+      BLOG0_SMTP_HOST: '',
+      BLOG0_NEWSLETTER_SENDER: 'stub',
     },
     reuseExistingServer: false,
     timeout: 240_000,

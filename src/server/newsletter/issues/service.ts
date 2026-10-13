@@ -21,6 +21,7 @@ import { getDb, type Executor } from '../../db/client';
 import { site, type NewsletterIssueRow, type SiteRow } from '../../db/schema';
 import { ApiError } from '../../http/api';
 import { log, maskEmail } from '../../log';
+import { SENDING_STALE_MS } from '../constants';
 import { consentLine, unsubscribeUrl, UNSUBSCRIBE_PATH } from '../links';
 import { getMailTransport, MailError } from '../mail';
 import * as listRepo from '../repo';
@@ -45,6 +46,12 @@ export interface IssueActor {
 
 export function issueNotFound(): ApiError {
   return new ApiError('NOT_FOUND', 404, 'That issue isn’t here.');
+}
+
+/** `sending` with no progress for SENDING_STALE_MS: Try again is allowed (it resumes from the frozen bodies
+ *  and reuses a campaign that already exists; starting a running campaign is a no-op at the provider). */
+export function isStuckSending(row: Pick<NewsletterIssueRow, 'status' | 'updatedAt'>, now = new Date()): boolean {
+  return row.status === 'sending' && row.updatedAt.getTime() < now.getTime() - SENDING_STALE_MS;
 }
 
 export function issueNotDraft(status: IssueStatus, action: string): ApiError {
@@ -94,6 +101,7 @@ export async function issueDetail(db: Executor, row: NewsletterIssueRow): Promis
     sentBy: name(row.sentBy),
     events: events.map((e) => ({ id: e.id, kind: e.kind, actor: name(e.actorUserId), details: e.details, createdAt: e.createdAt.toISOString() })),
     editable: row.status === 'draft',
+    stuckSending: isStuckSending(row),
   };
 }
 

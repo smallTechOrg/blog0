@@ -3,14 +3,19 @@ import { clientIpFromRequest } from '@/server/auth/login';
 import { ApiError, withApi } from '@/server/http/api';
 import { log } from '@/server/log';
 import { throttleLink } from '@/server/newsletter/link-guard';
+import { unsubscribePageUrl, UNSUBSCRIBE_PATH } from '@/server/newsletter/links';
 import { requestContextFrom, unsubscribeByToken } from '@/server/newsletter/service';
 import { isWellFormedUnsubscribeToken } from '@/server/newsletter/tokens';
 import { getCurrentSite } from '@/server/site/current';
 
 // POST /api/newsletter/unsubscribe (spec/api.md): JSON { token } OR the RFC 8058 one-click form
-// (`List-Unsubscribe=One-Click` form-encoded, token in `?t=`) → { unsubscribed: true,
-// alreadyUnsubscribed }. No CSRF check (mail providers post here with no Origin). TOKEN_INVALID (404)
-// on a bad signature, RATE_LIMITED (429) past the link cap; idempotent for an already-suppressed address.
+// (`List-Unsubscribe=One-Click` as application/x-www-form-urlencoded or multipart/form-data, token in
+// `?t=` — this URL is the `List-Unsubscribe` header target, `oneClickUnsubscribeUrl`) → { unsubscribed:
+// true, alreadyUnsubscribed }; every non-JSON POST is recorded with source `one_click`. No CSRF check
+// (mail providers post here with no Origin). TOKEN_INVALID (404) on a bad signature, RATE_LIMITED (429)
+// past the link cap; idempotent for an already-suppressed address.
+// GET (a client that opens the header URL instead of POSTing) → 303 to the page, which unsubscribes and
+// shows the result; nothing is written by the GET itself.
 
 export const dynamic = 'force-dynamic';
 
@@ -63,3 +68,9 @@ export const POST = withApi(
     }
   },
 );
+
+export function GET(request: Request): Response {
+  const t = new URL(request.url).searchParams.get('t');
+  const location = t && t.trim() ? unsubscribePageUrl(t.trim()) : UNSUBSCRIBE_PATH;
+  return new Response(null, { status: 303, headers: { location, 'cache-control': 'no-store', ...NOINDEX } });
+}

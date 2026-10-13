@@ -58,10 +58,11 @@ async function hook(body: unknown, auth: string | null = `Bearer ${SECRET}`, raw
   return { status: res.status, env: (await res.json()) as Envelope<NewsletterWebhookResponse> };
 }
 
-async function addConfirmed(email: string) {
+/** Confirmed on `at` (default: 2026-01-01, before every dated event below). */
+async function addConfirmed(email: string, at = new Date('2026-01-01T00:00:00Z')) {
   const [row] = await getDb()
     .insert(newsletterSubscriber)
-    .values({ siteId: currentSite.id, email, status: 'confirmed', consentedAt: new Date(), confirmedAt: new Date(), consentVersion: 'v1' })
+    .values({ siteId: currentSite.id, email, status: 'confirmed', consentedAt: at, confirmedAt: at, consentVersion: 'v1' })
     .returning();
   return row;
 }
@@ -125,6 +126,39 @@ describe('POST /api/newsletter/webhook', () => {
       ['a@example.test', 'unsubscribed'],
       ['b@example.test', 'complaint'],
     ]);
+  });
+
+  it('R8: occurredAt older than the latest consent / confirmation (a stale retry after a fresh re-subscription) → { accepted: true } but nothing written (logged stale); newer or a tie → applied; unparseable → applied (fail safe)', async () => {
+    const sender = new RecordingSender();
+    resetNewsletterSenderForTests(sender);
+    const logs = captureLogs();
+    const reconfirmed = new Date('2026-10-10T12:00:00Z');
+    const fresh = await addConfirmed('back@example.test', reconfirmed);
+
+    const stale = await hook({ event: 'unsubscribe', email: 'back@example.test', occurredAt: '2026-10-01T09:00:00Z', providerRef: 'retry-3' });
+    expect(stale.status).toBe(200);
+    expect(stale.env).toMatchObject({ ok: true, data: { accepted: true } });
+    expect((await getDb().select().from(newsletterSubscriber).where(eq(newsletterSubscriber.id, fresh.id)))[0].status).toBe('confirmed');
+    expect(await suppressions()).toHaveLength(0);
+    expect(await eventsOf(fresh.id)).toHaveLength(0);
+    expect(sender.removed).toEqual([]);
+    expect(logs.find('newsletter.sync').at(-1)).toMatchObject({ trigger: 'webhook', accepted: true, outcome: 'stale', webhook_event: 'unsubscribe' });
+    logs.stop();
+
+    // a tie goes to the opt-out (an opt-out anywhere wins)
+    const tie = await hook({ event: 'bounce', email: 'back@example.test', occurredAt: reconfirmed.toISOString() });
+    expect(tie.env).toMatchObject({ ok: true, data: { accepted: true } });
+    expect((await getDb().select().from(newsletterSubscriber).where(eq(newsletterSubscriber.id, fresh.id)))[0].status).toBe('bounced');
+
+    // newer than the confirmation → applied; an unparseable date never blocks the opt-out
+    const c = await addConfirmed('c@example.test', reconfirmed);
+    expect((await hook({ event: 'unsubscribe', email: 'c@example.test', occurredAt: '2026-10-11T00:00:00Z' })).env).toMatchObject({ data: { accepted: true } });
+    const d = await addConfirmed('d@example.test', reconfirmed);
+    expect((await hook({ event: 'unsubscribe', email: 'd@example.test', occurredAt: 'yesterday-ish' })).env).toMatchObject({ data: { accepted: true } });
+    const rows = await getDb().select().from(newsletterSubscriber);
+    expect(rows.find((r) => r.id === c.id)?.status).toBe('unsubscribed');
+    expect(rows.find((r) => r.id === d.id)?.status).toBe('unsubscribed');
+    expect(await suppressions()).toHaveLength(3);
   });
 
   it('an unknown address → 200 { accepted: false } and no rows', async () => {

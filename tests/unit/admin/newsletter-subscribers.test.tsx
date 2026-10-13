@@ -82,7 +82,7 @@ describe('subscriber list helpers', () => {
     expect(eventLabel(ev('bounced', 'provider'))).toBe('Bounced (provider)');
     expect(eventLabel(ev('legacy_confirmation_sent', 'admin', { transport: 'stub' }))).toBe('One-time legacy confirmation sent (stub)');
     expect(eventLabel(ev('provider_synced', 'system'))).toBe('Synced to Listmonk');
-    expect(eventLabel(ev('provider_synced', 'system', { provider: 'stub' }))).toBe('Synced (stub)');
+    expect(eventLabel(ev('provider_synced', 'system', { provider: 'stub' }))).toBe('Synced to Listmonk');
     expect(eventLabel(ev('provider_removed', 'system'))).toBe('Removed from Listmonk');
     expect(eventLabel(ev('ip_pruned', 'system'))).toBe('IP pruned');
   });

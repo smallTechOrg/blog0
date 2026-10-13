@@ -506,7 +506,7 @@ the admin, and sent with one click through a sender adapter — Listmonk over RE
 (its own database in the same Postgres instance, `docker-compose.yml`), a recording stub in
 designer mode and tests. Capabilities: `newsletter-list`, `newsletter-issues` (supersede
 `newsletter-signup`). HOW: `spec/architecture.md` §6 (link caps), §7 (events), §10 (env), §12.6
-(compose), §13 (list, mail, sender, issues); tables `spec/data.md` (`0002_newsletter`); HTTP
+(compose), §13 (list, mail, sender, issues); tables `spec/data.md` (`0002_newsletter`, `0003_newsletter_prune_fix`); HTTP
 `spec/api.md` → newsletter; screens `spec/ui.md` §3 (form, link pages) and §4 (Site → Newsletter,
 Subscribers, Subscriber, Newsletter issues). `spec/agent.md` §1: no AI in this phase (two
 opportunities considered and rejected). Built **before Phase 6** (user decision).
@@ -539,10 +539,10 @@ are owned **only** by S7.1 (all Phase 7 tables and columns, including the issue 
 |---|---|---|---|
 | 1 | **S7.1 Owned list** (`newsletter-list`) | `src/server/db/schema.ts` (takes over: widened `newsletterSubscriber`, new `newsletterSubscriberEvent`, `newsletterSuppression`, `newsletterMessage`, `newsletterIssue`, `newsletterIssueEvent`, `site` newsletter columns, `ALL_TABLE_NAMES`), `src/server/db/migrations/0002_newsletter.sql` + `meta/_journal.json` + `meta/0002_snapshot.json` (generated with `pnpm db:generate --name newsletter`, then hand-appended: the ledger-guard trigger, `newsletter_prune_event_ips`, the legacy backfill — Drizzle generates DDL only), `src/lib/api/dto.ts` (takes over: the whole `newsletter` section incl. `SiteSettingsDto.newsletter`), `src/server/newsletter/{constants,tokens,schemas,repo,service,links,legacy,prune,audit,settings}.ts` (`service.ts`, `rate-limit.ts` take over), `src/server/newsletter/mail/{transport,templates,index}.ts`, `src/server/newsletter/sender-hook.ts` (new: the no-op `afterConfirm`/`afterSuppress` hook that S7.3 wires to `sync.ts` in wave 2 — S7.1 never imports from `sender/`, which is S7.2's), `src/app/api/newsletter/route.ts` (takes over), `src/app/api/newsletter/{confirm,unsubscribe}/route.ts`, `src/app/(site)/newsletter/{confirm,unsubscribe}/page.tsx`, `src/app/api/admin/subscribers/route.ts` (takes over), `src/app/api/admin/subscribers/[id]/{route.ts, send-confirmation/route.ts, unsubscribe/route.ts}`, `src/app/api/admin/subscribers/send-legacy-confirmations/route.ts`, `src/server/site/service.ts` + `src/server/site/defaults.ts` + `src/server/seed/site.ts` (take over: newsletter columns in the site DTO/seed), `src/lib/view-models.ts` + `src/server/public/page-data.ts` (take over: `newsletterConsentText`), `src/components/site/NewsletterForm.tsx` (takes over: consent line, `sourceUrl`, new success copy), `src/components/site/Footer.tsx` (takes over: passes the consent text), `src/styles/additions.css` (takes over: `.nl-page`), `src/server/rate-window.ts` (takes over: `RateScope`), `tests/setup/integration-env.ts` (takes over: `BLOG0_NEWSLETTER_SENDER=stub`, empty `BLOG0_SMTP_HOST`), `tests/integration/newsletter.test.ts` (takes over), `tests/integration/{newsletter-links,newsletter-admin,site-settings}.test.ts` (site-settings takes over), `tests/unit/newsletter/{tokens,templates,schemas}.test.ts`, `tests/unit/db/*` (takes over: `ALL_TABLE_NAMES` expectations), `tests/e2e/reader.spec.ts` + `tests/e2e/smoke.spec.ts` (take over: the footer success copy assertion only) | — |
 | 1 | **S7.2 Sender adapter + Listmonk infra** (`newsletter-issues`, adapter half) | `src/server/newsletter/sender/{types,listmonk,stub,index}.ts`, `docker-compose.yml`, `scripts/listmonk-dev.sh`, `scripts/compose/init-db.sh`, `.gitignore` (takes over: `var/listmonk-dev.env` is under `var/` already — verify, else add), `tests/integration/newsletter-listmonk.test.ts` (real container; `PENDING DOCKER` skip rule — adapter-only: no blog0 tables), `tests/unit/newsletter/sender-stub.test.ts` (the stub's in-memory half; its DB writes are covered in wave 2), `tests/helpers/listmonk.ts` (reads `var/listmonk-dev.env`, `docker info` probe) | — (interface from `spec/architecture.md` §13.3; no blog0 schema access in wave 1 — the stub's `sendIssue` DB write lands in wave 2 via S7.3's call signature) |
-| 2 | **S7.3 Issues + sync + triggers** (`newsletter-issues`, issues half) | `src/server/newsletter/issues/{repo,service,snapshot,render,triggers,digest,send}.ts`, `src/server/newsletter/sender/sync.ts`, `src/server/newsletter/sender/stub.ts` (takes over: `sendIssue` writes `newsletter_message` rows per confirmed subscriber), `src/server/newsletter/sender-hook.ts` (takes over → delegates to `sync.ts`; or deleted if S7.1 called `sync.ts` directly through a lazy import — S7.3 decides and leaves no dead file), `src/app/api/newsletter/webhook/route.ts`, `src/app/api/admin/newsletter/{settings,sync,issues}/route.ts`, `src/app/api/admin/newsletter/issues/[id]/{route.ts, preview/, test/, send/, stats/}`, `src/app/admin/(authed)/newsletter/[id]/preview/route.ts` (admin-gated HTML preview), `src/server/articles/service.ts` (takes over: the after-commit publish hook), `scripts/newsletter-sync.ts`, `scripts/newsletter-tick.ts`, `tests/integration/{newsletter-issues,newsletter-sync,newsletter-webhook}.test.ts`, `tests/unit/newsletter/{render,digest}.test.ts`, `tests/fixtures/newsletter/issue-2-posts.{html,txt}` | S7.1 (schema, DTOs, list service), S7.2 (adapter) |
+| 2 | **S7.3 Issues + sync + triggers** (`newsletter-issues`, issues half) | `src/server/newsletter/issues/{repo,service,snapshot,render,triggers,digest,send}.ts`, `src/server/newsletter/sender/sync.ts`, `src/server/newsletter/sender/stub.ts` (takes over: `sendIssue` writes `newsletter_message` rows per confirmed subscriber), `src/server/newsletter/sender-hook.ts` (takes over → delegates to `sync.ts`; or deleted if S7.1 called `sync.ts` directly through a lazy import — S7.3 decides and leaves no dead file), `src/app/api/newsletter/webhook/route.ts`, `src/app/api/admin/newsletter/{settings,sync,issues}/route.ts`, `src/app/api/admin/newsletter/issues/[id]/{route.ts, preview/, test/, send/, stats/}` (`preview/` answers the JSON `IssuePreviewDto` that S7.4 renders into a sandboxed iframe `srcdoc` + Text tab — no HTML preview page route), `src/server/articles/service.ts` (takes over: the after-commit publish hook), `scripts/newsletter-sync.ts`, `scripts/newsletter-tick.ts`, `tests/integration/{newsletter-issues,newsletter-sync,newsletter-webhook}.test.ts`, `tests/unit/newsletter/{render,triggers,excerpt,opt-out}.test.ts` (the pure digest rule `dueDigest` is covered in `triggers.test.ts`; there is no `digest.test.ts`), `tests/fixtures/newsletter/issue-2-posts.{html,txt}` | S7.1 (schema, DTOs, list service), S7.2 (adapter) |
 | 2 | **S7.4 Admin UI** | `src/components/admin/DeskHeader.tsx` (takes over: **Newsletter** link), `src/components/admin/subscribers/**` (`SubscribersView.tsx` takes over; new `StatusFilter`, `SubscriberDetail`, `SubscriberTimeline`, `subscribers-api.ts`), `src/app/admin/(authed)/subscribers/page.tsx` (takes over) + `subscribers/[id]/page.tsx`, `src/components/admin/site/NewsletterSettings.tsx` + the site page/components that mount it (take over), `src/components/admin/newsletter/**`, `src/app/admin/(authed)/newsletter/{page.tsx, new/page.tsx, [id]/page.tsx}`, `src/styles/admin.css` (takes over), `tests/unit/admin/newsletter-*.test.tsx` (pure component tests with mocked `apiRequest`) | S7.1 (DTOs — builds against the contract); S7.3's routes are only needed at runtime (verified by S7.5) |
-| 3 | **S7.5 Newsletter E2E + designer** | `tests/e2e/newsletter.spec.ts`, `tests/e2e/helpers/newsletter.ts` (confirm URL from `BLOG0_E2E_LOG_FILE` or `newsletter_message` via `helpers/db.ts`), `playwright.config.ts` (takes over: project `newsletter` after `smoke`; `webServer.env` adds `BLOG0_NEWSLETTER_SENDER: 'stub'`, `BLOG0_SMTP_HOST: ''`), `tests/e2e/designer-mode.spec.ts` (takes over: signup → confirm via the logged URL → admin shows Confirmed), `tests/e2e/global-setup.ts` (takes over only if the newsletter walk needs seeded subscribers — prefer creating them in the spec) | S7.1–S7.4 |
-| 3 | **S7.6 CI, runbook, README** | `.github/workflows/ci.yml` (takes over: `integration` job runs `pnpm listmonk:up` before `pnpm test:integration` — Docker is available on `ubuntu-latest` — and `pnpm listmonk:down` after; `e2e` unchanged), `docs/deploy.md` (takes over: **Newsletter** section — SMTP with the two documented options as placeholders, Google Workspace relay `smtp-relay.gmail.com:587` and Brevo `smtp-relay.brevo.com:587`, never picking one; Listmonk beside blog0 via `docker-compose.yml`, its SMTP in its own UI, API user + list id; the hourly `pnpm newsletter:tick` cron line; webhook secret; `pnpm newsletter:sync` after a `BLOG0_SESSION_SECRET` rotation; new env rows in the Environment table), `README.md` (takes over: scripts, env vars, the designer-mode note that confirmation links are printed in the server log), `scripts/lib/container-env.mjs` (takes over only if `BLOG0_SMTP_*`/`BLOG0_LISTMONK_*` need excluding from the container env — they do not; verify and leave), `tests/integration/release.test.ts` + `backup-restore.test.ts` (take over: expectations for `3 applied (latest 0002_newsletter)` and the new tables in the manifest) | S7.1–S7.4 |
+| 3 | **S7.5 Newsletter E2E + designer** | `tests/e2e/newsletter.spec.ts`, `tests/e2e/helpers/newsletter.ts` (main walk: confirm / unsubscribe links read from `newsletter_message` via `helpers/db.ts`; designer walk: `confirm_url` read from the stub's `newsletter.mail` line in `test-results/design-e2e-server.log`), `playwright.config.ts` (takes over: project `newsletter` with `dependencies: ['smoke']`; `webServer.env` forces `BLOG0_NEWSLETTER_SENDER: 'stub'`, `BLOG0_SMTP_HOST: ''`), `playwright.design.config.ts` (takes over: `env` forces the same two values), `tests/e2e/designer-mode.spec.ts` (takes over: signup → confirm via the logged URL → admin shows Confirmed), `tests/e2e/global-setup.ts` (takes over only if the newsletter walk needs seeded subscribers — prefer creating them in the spec) | S7.1–S7.4 |
+| 3 | **S7.6 CI, runbook, README** | `.github/workflows/ci.yml` (takes over: `integration` job runs `pnpm listmonk:up` before `pnpm test:integration` — Docker is available on `ubuntu-latest` — and `pnpm listmonk:down` after; `e2e` unchanged), `docs/deploy.md` (takes over: **Newsletter** section — SMTP with the two documented options as placeholders, Google Workspace relay `smtp-relay.gmail.com:587` and Brevo `smtp-relay.brevo.com:587`, never picking one; Listmonk beside blog0 via `docker-compose.yml`, its SMTP in its own UI, API user + list id; the hourly `pnpm newsletter:tick` cron line; webhook secret; `pnpm newsletter:sync` after a `BLOG0_SESSION_SECRET` rotation; new env rows in the Environment table), `README.md` (takes over: scripts, env vars, the designer-mode note that confirmation links are printed in the server log), `scripts/lib/container-env.mjs` (takes over only if `BLOG0_SMTP_*`/`BLOG0_LISTMONK_*` need excluding from the container env — they do not; verify and leave), `tests/integration/release.test.ts` + `backup-restore.test.ts` (take over: expectations for `4 applied (latest 0003_newsletter_prune_fix)` and the new tables in the manifest) | S7.1–S7.4 |
 
 Slice notes (rules live in the capability files and architecture; these are only the hand-offs):
 - S7.1 and S7.2 are disjoint by construction: S7.1 never imports from `sender/` (it calls
@@ -562,7 +562,9 @@ Slice notes (rules live in the capability files and architecture; these are only
 - S7.5's E2E spec is the brief's walk in one Playwright project: signup → confirm → confirmed →
   export audit → Site → Newsletter per_post → publish → draft issue → preview HTML + text → send
   test → send (stub) → send log + stats → unsubscribe link from the stub message → suppression in
-  the subscriber view; the designer spec adds only signup → confirm → Confirmed.
+  the subscriber view; the designer spec adds only signup → confirm → Confirmed. Both run with the
+  stub mail transport and stub sender (forced in each Playwright config), so neither walk expects a
+  `provider_synced` / `provider_removed` event or a sync timeline entry.
 
 > **Assumed:** three waves of two (S7.1‖S7.2, S7.3‖S7.4, S7.5‖S7.6); the only shared files
 > (`schema.ts`, `dto.ts`, `stub.ts`, `sender-hook.ts`, `articles/service.ts`, `playwright.config.ts`,
@@ -571,14 +573,33 @@ Slice notes (rules live in the capability files and architecture; these are only
 > if the runner cannot pull the image the adapter test reports `PENDING DOCKER` and the job
 > prints a `::warning::`, mirroring the real-key rule — never a silent pass.
 
+**Phase 7 fixes (post-review, recorded as rules — no new slice; one code-generator pass owns them):**
+RFC 8058 one-click (`List-Unsubscribe` → `POST /api/newsletter/unsubscribe?t=…`, GET → 303 to the
+page; `spec/api.md`, `spec/architecture.md` §13.2); IP prune bar + per-event cutoff and migration
+`0003_newsletter_prune_fix` (§13.1, `spec/data.md`); Listmonk body template-escaping (§13.3);
+retry of an issue stuck in `sending` > 10 min (§13.5; `IssueDetailDto.stuckSending` drives the
+Issue screen's failure card + **Try again**, `spec/ui.md`); row-locked re-check in `suppress` and the
+legacy send (§13.1); webhook opt-out-wins timestamp rule (§13.3); provider errors without subscriber
+emails (§13.3, §7 `newsletter.provider`). Unit tests: `tests/unit/newsletter/opt-out.test.ts`;
+the integration criteria live in the two capability files.
+
+**Known gaps (deferred hardening — decided, not built in v0.1):**
+- *Unsubscribe exempt from the site-wide link bucket.* Today every well-formed token (valid or not)
+  counts toward both link caps (`spec/architecture.md` §6), so ~1 000 garbage-but-well-formed
+  unsubscribe requests in an hour from many IPs can 429 real readers' unsubscribes until the window
+  rolls. Decision: unsubscribe requests (page + one-click POST) will skip `newsletter.link.site` and
+  keep only the per-IP cap; confirm keeps both. > **Assumed:** acceptable to defer — the attack
+  needs many source IPs, blocks for ≤ 1 h, and the provider's own unsubscribe (Listmonk header /
+  page) keeps working and is pulled by the tick.
+
 **Gate (exact)** — `.env` as in the planning rules; `BLOG0_NEWSLETTER_SENDER` unset or `stub` and
 no `BLOG0_SMTP_HOST` in `.env` (the stub paths are what the gate proves; the Listmonk adapter is
 proven by its own test against the compose container):
 ```bash
 pnpm install --frozen-lockfile
-pnpm db:migrate && pnpm db:verify            # "blog0_dev @ PostgreSQL 18.x — 3 applied (latest 0002_newsletter), 0 pending: OK"
-pnpm release                                 # "… 3 applied (latest 0002_newsletter), 0 pending: OK" then "site blog0 ok, admin <masked> ok"
-pnpm typecheck && pnpm lint && pnpm test:unit            # + newsletter/{tokens,templates,render,digest,schemas,sender-stub}, admin/newsletter-*
+pnpm db:migrate && pnpm db:verify            # "blog0_dev @ PostgreSQL 18.x — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK"
+pnpm release                                 # "… 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK" then "site blog0 ok, admin <masked> ok"
+pnpm typecheck && pnpm lint && pnpm test:unit            # + newsletter/{tokens,templates,render,triggers,excerpt,opt-out,schemas,sender-stub}, admin/newsletter-*
 pnpm listmonk:up                             # exit 0 → var/listmonk-dev.env; exit 3 → report "PENDING DOCKER" for the two Listmonk lines below (never a pass)
 set -a && . var/listmonk-dev.env && set +a    # only when listmonk:up exited 0
 pnpm test:integration                        # + newsletter, newsletter-links, newsletter-admin, newsletter-issues, newsletter-sync, newsletter-webhook, newsletter-listmonk (real container) — real blog0_test; real OpenRouter where already required (PENDING KEY rule)
@@ -605,7 +626,8 @@ then "pending docker", not passed. The CI workflow change is proven by its first
    `confirm_url` — open it → "You’re subscribed." Sign in at `/admin`, **Subscribers** → the
    address is **Confirmed**; open it → proof of consent (source `/`, consent v1, your browser's
    user agent, IP "not recorded — no trusted proxy") and the timeline (Signed up, Confirmation
-   email sent (stub), Confirmed, Synced). **Export audit (JSON)** → a file naming the address with
+   email sent (stub), Confirmed — no sync entry: the stub sender skips sync; "Synced to Listmonk"
+   appears only on the Listmonk path, step 4). **Export audit (JSON)** → a file naming the address with
    its events. **Site → Newsletter** shows "Sender: Stub".
 2. *Issues* (designer or full path): **Site → Newsletter** → mode **Per post**, auto-send off,
    **Save**. Publish any article → **Newsletter** lists one **Draft** issue titled like it; open it:
@@ -631,7 +653,10 @@ then "pending docker", not passed. The CI workflow change is proven by its first
    shows "blog0 #N — <title>" running/finished (no SMTP configured in Listmonk, so nothing leaves
    the machine); **Refresh stats** fills the tiles. Blocklist an address in Listmonk's UI, run
    `pnpm newsletter:tick` → the subscriber is **Unsubscribed** in blog0 with a provider-sourced
-   suppression.
+   suppression. Same for a list-level opt-out: in Listmonk remove another confirmed subscriber's
+   `blog0` subscription (status **Unsubscribed**, not blocklisted), click **Sync to Listmonk** first
+   → the membership stays unsubscribed; `pnpm newsletter:tick` → **Unsubscribed** in blog0
+   (provider). Signing that address up again and confirming → **Sync** re-adds it to the list.
 5. *Real mail* (optional, needs an SMTP relay): set `BLOG0_SMTP_*` per `docs/deploy.md` (Google
    Workspace relay or Brevo — placeholders, your choice), restart, subscribe with a real address
    → the confirmation arrives; **Send test to me** arrives with `[Test]` in the subject. No

@@ -5,6 +5,7 @@ import { log, maskEmail } from '../../log';
 import { pruneIps } from '../prune';
 import * as listRepo from '../repo';
 import { getNewsletterSender } from '../sender';
+import { providerOptOutWins } from '../sender/opt-out';
 import type { NewsletterSender } from '../sender/types';
 import { SUPPRESSED_STATUSES, suppressByEmail } from '../service';
 
@@ -36,9 +37,10 @@ function errorText(err: unknown): string {
 }
 
 /**
- * Provider → blog0, suppressions only. An address is suppressed when blog0 knows it, it is not
- * suppressed already, and the provider event is newer than the subscriber's latest consent /
- * confirmation (a re-subscription after an old provider blocklist is never undone).
+ * Provider → blog0, suppressions only (blocklists, list-level unsubscribes, hard bounces,
+ * complaints). An address is suppressed when blog0 knows it, it is not suppressed already, and the
+ * provider event is newer than the subscriber's latest consent / confirmation (sender/opt-out.ts —
+ * a re-subscription after an old provider opt-out is never undone).
  */
 export async function pullSuppressions(siteId: string, sender: NewsletterSender, now: Date): Promise<number> {
   const found = await sender.fetchSuppressions(new Date(now.getTime() - SUPPRESSION_LOOKBACK_MS));
@@ -46,10 +48,9 @@ export async function pullSuppressions(siteId: string, sender: NewsletterSender,
   for (const s of found) {
     const row = await listRepo.findByEmail(getDb(), siteId, s.email.trim().toLowerCase());
     if (!row || SUPPRESSED_STATUSES.includes(row.status)) continue;
-    const consentAt = Math.max(row.consentedAt?.getTime() ?? 0, row.confirmedAt?.getTime() ?? 0);
-    if (s.at.getTime() <= consentAt) continue;
-    const { accepted } = await suppressByEmail(siteId, row.email, { reason: s.reason, source: 'provider', details: { ...s.details, at: s.at.toISOString() }, now });
-    if (accepted) {
+    if (!providerOptOutWins(s.at, row)) continue;
+    const { applied } = await suppressByEmail(siteId, row.email, { reason: s.reason, source: 'provider', details: { ...s.details, at: s.at.toISOString() }, now, optOutAt: s.at });
+    if (applied) {
       pulled += 1;
       log.info('newsletter.sync', { trigger: 'tick', msg: `Provider suppression applied (${s.reason})`, email_masked: maskEmail(row.email), subscriber_id: row.id });
     }

@@ -18,7 +18,7 @@ export const POST = withApi(
     body: confirmTrueBody,
     summarizeOutput: (d) => {
       const r = d as NewsletterSyncResponse;
-      return { synced: r.synced, blocklisted: r.blocklisted, skipped: r.skipped, changed: r.changed, errors: r.errors.length };
+      return { synced: r.synced, blocklisted: r.blocklisted, skipped: r.skipped, suppressedFromProvider: r.suppressedFromProvider, changed: r.changed, errors: r.errors.length };
     },
   },
   async ({ auth }): Promise<NewsletterSyncResponse> => {

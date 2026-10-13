@@ -70,7 +70,9 @@ blog0 keeps the issue, its send log and its stats.
   created with the frozen HTML/text (`provider_created`) → started (`provider_started`) → `sent`
   with `sent_at`, `sent_by`, `recipient_count` (event `sent`). Any step failing → `failed` with
   `last_error` (event `failed`); **Try again** repeats from the failed step (a campaign already
-  created is reused, never duplicated). A `sent` issue cannot be sent again (409 `ISSUE_NOT_DRAFT`);
+  created is reused, never duplicated). An issue left in `sending` for more than 10 minutes (the
+  process died mid-send) can be sent again the same way; a `sending` issue younger than that cannot
+  (409 `ISSUE_NOT_DRAFT` — no double send from a double click). A `sent` issue cannot be sent again (409 `ISSUE_NOT_DRAFT`);
   0 confirmed subscribers → 409 `NO_RECIPIENTS`; sender not configured → 503 `SENDER_UNAVAILABLE`.
 - **Recipients** are exactly the subscribers with status `confirmed` at send time — never
   pending, legacy, unsubscribed or bounced. With Listmonk the list it sends to is kept equal to
@@ -88,6 +90,11 @@ blog0 keeps the issue, its send log and its stats.
   exist; upserts every `confirmed` subscriber (consent metadata as attributes, pre-confirmed,
   enabled); blocklists every `unsubscribed`/`bounced` one; never creates, enables or deletes
   anything in blog0; idempotent — a second run reports `0 changed`.
+- **Author text is never a template.** Before an issue body goes to Listmonk, every literal `{{` /
+  `}}` in it (e.g. a code sample in an intro or excerpt) is escaped so Listmonk prints it verbatim;
+  only blog0's own unsubscribe / consent expressions are live (`spec/architecture.md` §13.3).
+- **Provider errors are email-free.** Every error blog0 stores or shows from the provider
+  (`last_error`, sync `errors[].message`, logs) omits subscriber addresses and credentials.
 - **Provider → blog0** happens only as suppressions: `fetchSuppressions` (in `newsletter:tick`)
   and the webhook `POST /api/newsletter/webhook` (shared secret) turn provider blocklists/bounces
   into blog0 suppressions + events (`newsletter-list.md`). Nothing else flows back.
@@ -168,6 +175,41 @@ blog0 keeps the issue, its send log and its stats.
 > (idempotent — already-suppressed addresses are skipped) and applies one only when it is newer than
 > the subscriber's latest consent / confirmation, so an old provider blocklist never undoes a
 > re-subscription.
+> **Assumed (fix — provider-side opt-out wins):** an unsubscribe on Listmonk's side that does not
+> blocklist (List-Unsubscribe header / Listmonk's unsubscribe page → the list subscription turns
+> `unsubscribed`, the subscriber stays `enabled`) is an opt-out too. `fetchSuppressions` also returns
+> those for the configured list (`GET /api/subscribers?list_id=…&subscription_status=unsubscribed`,
+> dated by `subscription_updated_at`; verified on v5.1.0), and `newsletter:tick` applies them under the
+> rule above (`suppressByEmail`, source `provider`, reason `unsubscribed`). `syncSubscriber` never
+> re-enables or re-adds over a provider opt-out (blocklist or list-level unsubscribe) newer than blog0's
+> latest consent / confirmation: it writes nothing and hands the opt-out back; the sync records it in
+> blog0 the same way and counts the row as `suppressedFromProvider` (new field of the sync response /
+> `pnpm newsletter:sync` line, `suppressed_from_provider` in the `newsletter.sync` log; not part of
+> `changed`). A blog0 confirmation newer than the opt-out (fresh double opt-in) re-adds as before.
+> Equal timestamps → the opt-out wins (an opt-out anywhere wins); an unparseable provider timestamp → the opt-out wins.
+> Blocklists blog0 makes itself (suppressed rows, `removeSubscriber`) are one `PUT /api/subscribers/:id`
+> with `status: 'blocklisted'` and the attribute `blog0_blocklisted_at`; memberships are passed through
+> untouched (a new blocklisted copy gets no membership at all). Such a blocklist mirrors blog0's own
+> suppression, so it is neither pulled back by `fetchSuppressions` nor treated as a provider opt-out —
+> blog0's later re-confirmation re-enables it without comparing the two hosts' clocks.
+> **Assumed (Phase 7 drift review):** the stuck-send threshold is 10 min (`SENDING_STALE_MS`),
+> measured from the issue's `updated_at` — far above a normal send (< 2 min, the route's
+> `maxDuration`), so a live send is never doubled; Listmonk's `sendIssue` is idempotent for a running
+> campaign, so a retry of a send that actually reached the provider only re-reads it. Template
+> escaping uses Go template string literals (`{{ "{{" }}`), which Listmonk v5 renders verbatim.
+> **Assumed (fix):** the campaign `subject` is escaped the same way as body / altbody (Listmonk
+> compiles it as a template too); the campaign `name` is not templated and stays raw.
+> `IssueDetailDto` gains `stuckSending: boolean` (`sending` and `updated_at` older than
+> `SENDING_STALE_MS`) so the issue page can stop polling and show the failure card "Couldn’t send:
+> the send has been stuck in Sending for over 10 minutes (the request was interrupted)" + **Try
+> again**; the retry's `send_requested` event carries `retry: true, stuckSince`.
+> **Assumed (fix):** every Listmonk adapter error message and `newsletter.provider` line names the
+> request path without its query string, and address-shaped text in a provider message (plain or
+> `%40`-encoded) is replaced by `[email]` — those messages reach logs, `last_error` and stderr.
+> **Assumed (fix):** a stale webhook (parseable `occurredAt` older than the latest consent /
+> confirmation) answers `{ accepted: true }`, writes nothing and logs `newsletter.sync` with
+> `outcome: 'stale'`; the decision is re-made under the row lock. The webhook's log line carries the
+> provider event as `webhook_event` (an `event` field overwrote the log line's own name).
 
 ## Success Criteria
 - [ ] Integration: with settings `per_post` + `autoSend false`, publishing a new article creates one `draft` issue whose single post snapshot has the article's title, dek, an excerpt, `readUrl` = `<BLOG0_PUBLIC_BASE_URL>/p/<slug>`, `tldrUrl` null; publishing a change to the same article creates no second issue; unpublishing creates nothing.
@@ -180,5 +222,9 @@ blog0 keeps the issue, its send log and its stats.
 - [ ] Integration (real Listmonk container, `tests/integration/newsletter-listmonk.test.ts`; skips `PENDING DOCKER` when `docker info` fails): `healthcheck` ok; `syncSubscriber` twice for one address → one Listmonk subscriber with `attribs.blog0_subscriber_id`, `consent_version`, `blog0_unsubscribe_url`, status `enabled`, in the list, and the second call reports `changed: false`; `removeSubscriber` → Listmonk status `blocklisted`; a re-sync after re-confirmation → `enabled` again; `createIssue` + `sendIssue` → a campaign in status `running` or `finished` within 60 s whose body contains the issue title; `fetchStats` returns numbers; `fetchSuppressions(since)` lists the blocklisted address with `reason: 'unsubscribed'`.
 - [ ] Integration: `pnpm newsletter:sync` against the Listmonk container with 2 confirmed, 1 pending, 1 unsubscribed → prints `synced 2, blocklisted 1, skipped 1`; second run prints `synced 0, blocklisted 0, skipped 1, 0 changed`; no blog0 row changed (checksum of the table before/after equal).
 - [ ] Integration: `POST /api/newsletter/webhook` with the right secret and `{ event: 'bounce', email, reason }` → subscriber `bounced` + suppression (`source: 'webhook'`); wrong secret → 401; unknown email → 200 `{ accepted: false }` and no rows.
-- [ ] Unit: the digest rule (`dueDigest(settings, lastDigestAt, newPostCount, now)`) over the four cases (posts reached, days reached, neither, no new posts); the text renderer output for a 2-post issue equals the committed fixture; `settingsSchema` rejects `digestDays 0`, `digestPosts 21`, mode `weekly`.
+- [ ] Integration (stuck send): an issue forced to `sending` with `updated_at` = now − 5 min → `POST …/send` → 409 `ISSUE_NOT_DRAFT`, unchanged; with `updated_at` = now − 11 min → `sent`, an existing `provider_campaign_id` reused (no second `createIssue`).
+- [ ] Unit (Listmonk body escaping): the body handed to `POST /api/campaigns` for an issue whose intro contains `{{ .Subscriber.Email }}` and `a }} b` carries them as `{{ "{{" }} .Subscriber.Email {{ "}}" }}` and `a {{ "}}" }} b`, while the two blog0 placeholders become exactly `{{ .Subscriber.Attribs.blog0_unsubscribe_url }}` / `{{ .Subscriber.Attribs.blog0_consent_line }}` (unescaped); against the real container (same `PENDING DOCKER` rule) the campaign preview shows the literal `{{ .Subscriber.Email }}` text.
+- [ ] Unit (provider error hygiene): a Listmonk adapter fed a 409/500 response whose body echoes `reader@example.test`, and a lookup URL with `?query=subscribers.email='reader@example.test'`, throws a `SenderError` whose message — and every captured `newsletter.provider` line (`path` without query string) — contains no `@`-address and no API token.
+- [ ] Unit (`tests/unit/newsletter/opt-out.test.ts`): `providerOptOutWins` — opt-out newer than, equal to, and older than `greatest(consentedAt, confirmedAt)` → true, true, false; unparseable opt-out date → true; neither consent timestamp → true.
+- [ ] Unit: the digest rule (`dueDigest(settings, lastDigestAt, newPostCount, now)`, in `tests/unit/newsletter/triggers.test.ts`) over the four cases (posts reached, days reached, neither, no new posts); the text renderer output for a 2-post issue equals the committed fixture; `settingsSchema` rejects `digestDays 0`, `digestPosts 21`, mode `weekly`.
 - [ ] E2E (continuation of the `newsletter-list.md` walk): Site → Newsletter: mode **Per post**, auto-send off, Save → publish a new article → Admin → Newsletter lists one **Draft** issue titled like the article → open it → **Preview** shows the HTML with the title and a Read link, **Text** tab shows the URL → **Send test to me** → "Test sent to <email>" → **Send** → confirm "Send to 1 confirmed subscriber?" → status **Sent · 1 recipient**, the send log shows four entries, **Stats** shows `sent 1`; the server log has `newsletter.issue … outcome: 'sent'`; the stub message for the subscriber contains the unsubscribe link used by the list walk.

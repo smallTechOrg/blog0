@@ -4,8 +4,13 @@ PostgreSQL 18 in production and in every gate; the identical schema also runs on
 (PG 17 WASM) in designer mode (`spec/architecture.md` §11). All v0.1 tables are created by
 migration `0000_init`; Phase 5 adds `0001_rate_limit_bucket` (slice S5.3); Phase 7 adds
 `0002_newsletter` (slice S7.1: new `newsletter_*` tables, new `newsletter_subscriber` columns and
-status set, `site` newsletter settings columns, the legacy status backfill); Phase 6 adds its own
-(Phase 4 needs none). Conventions:
+status set, `site` newsletter settings columns, the legacy status backfill) and
+`0003_newsletter_prune_fix` (Phase 7 fix, hand-written SQL, no table change: drops
+`newsletter_prune_event_ips(uuid)` and creates `newsletter_prune_event_ips(p_subscriber_id uuid,
+p_before timestamptz) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path =
+public, pg_temp`, which nulls `ip` only on that subscriber's events with `created_at < p_before`
+— prune rule in `spec/architecture.md` §13.1); Phase 6 adds its own (Phase 4 needs none). After
+Phase 7, `pnpm db:verify` reports `4 applied (latest 0003_newsletter_prune_fix)`. Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
 (except `site` itself) and every query filters by it. Foreign keys `on delete cascade` from child
@@ -225,7 +230,7 @@ The owned list (`spec/capabilities/newsletter-list.md`). Phase 2 created it with
 | status | text not null default `pending` | check in (`pending`,`confirmed`,`unsubscribed`,`bounced`,`legacy_unconfirmed`) — the **current** state; history is in the event table |
 | source | text not null default `footer` | `footer` \| `legacy` \| `admin` |
 | signup_source_url | text null | relative path the form was on (≤ 500) |
-| signup_ip | text null | real client address only (§6 derivation), else null; nulled by the 12-month prune |
+| signup_ip | text null | real client address only (§6 derivation), else null; nulled by the 12-month prune (bar = `coalesce(greatest(confirmed_at, consented_at), created_at)`, `spec/architecture.md` §13.1) |
 | signup_user_agent | text null | ≤ 300 chars |
 | consent_text | text null | the consent line exactly as shown at (re)signup; null for legacy rows until they confirm via a new signup |
 | consent_version | text null | |
@@ -235,7 +240,7 @@ The owned list (`spec/capabilities/newsletter-list.md`). Phase 2 created it with
 | confirmation_sent_count | integer not null default 0 | all-time; the 3-per-24 h cap is computed from `confirmation_sent` events |
 | legacy_confirmation_sent_at | timestamptz null | the one admin-triggered email for a legacy row (spent once set) |
 | confirmed_at | timestamptz null | latest confirmation |
-| confirmed_ip, confirmed_user_agent | text null | at confirmation; IP pruned at 12 months |
+| confirmed_ip, confirmed_user_agent | text null | at confirmation; IP pruned with `signup_ip` (same bar) |
 | unsubscribed_at | timestamptz null | latest suppression that set the status |
 | provider_id | text null | Listmonk subscriber id (string) once synced; null for the stub |
 | provider_synced_at | timestamptz null | last successful `syncSubscriber`/`removeSubscriber` |
@@ -259,7 +264,7 @@ created by `0002_newsletter`) raises on `UPDATE`/`DELETE` of this table and of
 | kind | text not null | check in (`signup`,`confirmation_sent`,`confirmed`,`resubscribed`,`unsubscribed`,`bounced`,`legacy_confirmation_sent`,`provider_synced`,`provider_removed`,`ip_pruned`) |
 | source | text not null | check in (`footer`,`email_link`,`one_click`,`admin`,`provider`,`webhook`,`migration`,`system`) |
 | actor_user_id | uuid null fk → app_user | admin actions |
-| ip, user_agent | text null | of the request that caused it (IP only when real; pruned with the subscriber's) |
+| ip, user_agent | text null | of the request that caused it (IP only when real; nulled by the subscriber's prune only once the event itself is older than 12 months) |
 | details | jsonb not null default `'{}'` | e.g. `{ resignup: true }`, `{ outcome: 'sent' \| 'failed' \| 'stubbed', transport, error? }`, `{ providerId }`, `{ reason }` |
 | created_at | timestamptz | |
 

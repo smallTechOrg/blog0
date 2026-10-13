@@ -333,8 +333,13 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   pair of buckets) count 30 per known client IP per hour (`newsletter.link.ip`, skipped for
   `direct`/`unknown` exactly like signup) and 1 000 per site per hour (`newsletter.link.site`).
   The token is parsed and shape-checked first (a malformed token → 404 without counting); a
-  well-formed token counts whether or not it turns out valid. The pages render the 429 copy in
-  site chrome; the JSON routes answer `RATE_LIMITED` + `Retry-After`. The webhook route is not
+  well-formed token counts whether or not it turns out valid. The pages render the rate-limited
+  copy in site chrome at HTTP 200 (a page cannot emit 429); the JSON routes answer `RATE_LIMITED`
+  (429) + `Retry-After`. `GET /api/newsletter/unsubscribe` (the 303 to the page) does not count —
+  the page it redirects to does. Known gap (deferred hardening, `spec/roadmap.md` Phase 7): a flood
+  of well-formed garbage unsubscribe tokens can exhaust the shared site bucket and block real
+  unsubscribes for up to an hour; the decided fix is to exempt unsubscribe requests from
+  `newsletter.link.site` (keeping the per-IP cap) — not implemented in v0.1. The webhook route is not
   throttled (secret-gated). The admin routes are session-gated and not throttled.
 - **Security headers (Phase 5).** Static, env-independent headers come from `next.config.ts`
   `headers()` for `source: '/:path*'` (every response: pages, API, `/media`, `/_next/static`):
@@ -391,9 +396,9 @@ tests (`captureLogs()`).
 | `rate_limit.prune_failed` | `DbRateLimitStore` (`warn`) | `err_code` |
 | `newsletter.signup` | signup service (Phase 7) | `request_id, email_masked, outcome ('pending_created'\|'pending_renewed'\|'noop_confirmed'\|'noop_capped'\|'resignup'), source_url, consent_version` |
 | `newsletter.mail` | transactional transport (`mail/transport.ts`) | `request_id?, kind ('confirmation'\|'test_issue'), to_masked, transport ('smtp'\|'stub'), outcome ('sent'\|'failed'\|'stubbed'), latency_ms, message_id?, err_code?` — **stub only** adds `confirm_url` (the full link) so designer mode and E2E can follow it; the SMTP transport never logs a token |
-| `newsletter.link` | confirm/unsubscribe routes | `request_id, kind ('confirm'\|'unsubscribe'\|'one_click'), outcome ('ok'\|'already'\|'expired'\|'invalid'\|'rate_limited'), subscriber_id?` |
-| `newsletter.provider` | listmonk adapter (one line per HTTP call) | `op ('ensureList'\|'ensureTemplate'\|'upsertSubscriber'\|'blocklist'\|'createCampaign'\|'startCampaign'\|'campaignStats'\|'listBlocklisted'\|'listBounces'\|'health'), http_status, latency_ms, outcome ('ok'\|'http_error'\|'timeout'\|'invalid_json'), campaign_id?` — never the token, never subscriber emails in clear |
-| `newsletter.sync` | `pnpm newsletter:sync` / admin sync / live sync after confirm-unsubscribe | `trigger ('script'\|'admin'\|'confirm'\|'unsubscribe'\|'webhook'\|'tick'), synced, blocklisted, skipped, changed, errors, latency_ms` (`warn` when `errors > 0`) |
+| `newsletter.link` | confirm/unsubscribe pages and JSON routes | `request_id?` (**API routes only** — the pages are not `withApi` and have no request id), `kind ('confirm'\|'unsubscribe'\|'one_click'), outcome ('ok'\|'already'\|'expired'\|'invalid'\|'rate_limited'), subscriber_id?` |
+| `newsletter.provider` | listmonk adapter (one line per HTTP attempt) | `provider ('listmonk'), method, path` (**query string stripped** — Listmonk lookups carry the email in `?query=`), `status` (HTTP status, absent on network error/timeout), `attempt` (1-based), `ms`, `outcome ('ok'\|'retry'\|'failed'\|'invalid')` (`retry` = this attempt failed and another follows; `invalid` = 2xx with an unparseable/unexpected body), `error?` (message; never contains a subscriber email, a token or the API token) |
+| `newsletter.sync` | `pnpm newsletter:sync` / admin sync / live sync after confirm-unsubscribe / before a listmonk send | `trigger ('script'\|'admin'\|'confirm'\|'unsubscribe'\|'webhook'\|'tick'\|'send'), synced, blocklisted, skipped, suppressed_from_provider, changed, errors, latency_ms` (`warn` when `errors > 0`); per-row opt-out-wins lines add `email_masked, subscriber_id`; the webhook line (`trigger 'webhook'`) carries `request_id, webhook_event ('unsubscribe'\|'bounce'\|'complaint'), email_masked, subscriber_id?, accepted` (`webhook_event`, never `event` — that key is the line's own name) plus `outcome: 'stale'` + `msg` when the event's `occurredAt` is older than the subscriber's latest consent/confirmation (ignored, §13.3) |
 | `newsletter.issue` | issues service | `issue_id, number, origin, action ('created'\|'updated'\|'deleted'\|'test_sent'\|'send'\|'stats'), outcome ('ok'\|'sent'\|'failed'\|'skipped'), recipient_count?, campaign_id?, user_id?, err_code?` |
 | `newsletter.tick` | `pnpm newsletter:tick` | `digest_created (bool), suppressions_pulled, stats_refreshed, ips_pruned, latency_ms` |
 | `newsletter.mail_not_configured` | first transactional send in a production process without `BLOG0_SMTP_HOST` (`warn`, once per process) | `hint` |
@@ -1062,7 +1067,10 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   the reader) → `{ alreadyConfirmed: false }`. `unsubscribeByToken(token, source)`: verify → row
   by id → already `unsubscribed`/`bounced` → `{ alreadyUnsubscribed: true }` (no rows written) →
   else `suppress(row, { reason: 'unsubscribed', source })`. `suppress(row, { reason, source,
-  details, actor })` = one transaction: status (`bounced` for reason `bounced`, else
+  details, actor })` = one transaction that first **re-reads the subscriber row under
+  `SELECT … FOR UPDATE`** and decides from that locked copy (already `unsubscribed`/`bounced` →
+  no rows written, `already: true`) — so two concurrent unsubscribes (link + one-click, webhook +
+  tick) write exactly one suppression row; then status (`bounced` for reason `bounced`, else
   `unsubscribed`), `unsubscribed_at`, append suppression + event → after commit
   `afterSuppress(subscriber)`. Every write path appends its event in the same transaction as the
   row change.
@@ -1071,33 +1079,63 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   wires them to `sender/sync.ts` (`syncOne` / `removeOne`, 13.3). Both swallow and log
   (`newsletter.sync` at `warn`) — a provider outage never fails a reader's click.
 - `legacy.ts`: `sendLegacyConfirmation(id)` (one-time rule), `sendAllLegacyConfirmations()`
-  (batches of 20, 200 ms pause, continues on mail failure). A legacy row that gets its email
+  (batches of 20, 200 ms pause, continues on mail failure). The one-time check is re-done on the
+  row read under `SELECT … FOR UPDATE` (status still `legacy_unconfirmed`,
+  `legacy_confirmation_sent_at` still null); the lock is held until the send result is recorded
+  (success → `legacy_confirmation_sent_at` + token + event in that transaction; mail failure →
+  rollback, nothing changes, `MAIL_FAILED`), so a double click or the bulk button racing a per-row
+  click sends one email and the loser gets `CONFIRMATION_ALREADY_SENT` (bulk: counts the row as skipped). A legacy row that gets its email
   receives a **token** like a pending row but keeps status `legacy_unconfirmed` (so the admin list
   still shows it as legacy) until the click flips it to `confirmed`.
-- `prune.ts`: `pruneIps(now)` — rows with `confirmed_at < now − 365 d` (or never confirmed and
-  `created_at < now − 365 d`) and a non-null IP → null both IPs on the row and on their events
-  (events' `ip` column is updated by a `SECURITY DEFINER` function `newsletter_prune_event_ips`
-  that bypasses the ledger guard — the only sanctioned update of an event row; it touches `ip`
-  only), append `ip_pruned`, set `ip_pruned_at`.
+- `prune.ts`: `pruneIps(now)` with `before = now − 365 d` (`IP_RETENTION_MS`). A subscriber's
+  **prune bar** (`retentionAnchor`) is `coalesce(greatest(confirmed_at, consented_at), created_at)`
+  (`greatest` ignores nulls) — the latest act of consent, so a re-signup or re-confirmation
+  restarts the 12 months. Per row (`rowIpsDue`): `signup_ip` is nulled when the bar `< before`;
+  `confirmed_ip` is nulled when `coalesce(confirmed_at, bar) < before` — it also expires 12 months
+  after **its own** `confirmed_at`, so an old confirmation's IP never outlives it through a newer
+  pending re-signup. Candidates (`repo.pruneCandidates`, the SQL twin) are rows with either row IP
+  due **or** any event with a non-null `ip` and `created_at < before`; each is re-read under its
+  row lock in its own transaction. Event IPs older than `before` are nulled **even when the
+  subscriber row itself is too recent** for its own IPs to go (newer events keep theirs until they
+  too are 12 months old). When anything was nulled: set `ip_pruned_at` (only if a row IP was
+  nulled) and append `ip_pruned` with details
+  `{ retentionDays, hadSignupIp, hadConfirmedIp, eventRows, before }` (`had*` = that row IP was
+  nulled by this run; `eventRows` = event rows nulled; `before` = the ISO cutoff). Event IPs are
+  nulled by the `SECURITY DEFINER` function
+  `newsletter_prune_event_ips(p_subscriber_id uuid, p_before timestamptz) RETURNS integer`
+  (`SET search_path = public, pg_temp`; it bypasses the ledger guard — the only sanctioned
+  update of an event row; it touches `ip` only, and only where `created_at < p_before`; returns
+  the row count). Migration `0003_newsletter_prune_fix` replaces the one-argument version of
+  `0002_newsletter` (drop + create; hand-written SQL, no schema change) — `spec/data.md`.
 - `audit.ts`: `buildAuditBundle(siteId, actor)` → `NewsletterAuditBundle` (streams nothing —
   < 10 k subscribers assumed); `subscribersToCsv` grows the columns of `spec/api.md`.
 - `links.ts`: `confirmUrl(token)` / `unsubscribeUrl(subscriberId)` → absolute under
   `getConfig().publicBaseUrl`; `consentLine(subscriber, site)` → "You’re getting this because
   you subscribed at <brand> on <date> and confirmed on <date>." (site timezone; legacy-confirmed
-  rows read "…subscribed at <brand> and confirmed on <date>").
+  rows read "…subscribed at <brand> and confirmed on <date>"). `oneClickUnsubscribeUrl(subscriberId)`
+  → `<publicBaseUrl>/api/newsletter/unsubscribe?t=<same signed token>` — used **only** in the
+  `List-Unsubscribe` header (13.2), never as a visible link. `unsubscribePageUrl(token)` →
+  `<publicBaseUrl>/newsletter/unsubscribe?t=<token>` for a token already in hand — the 303 target
+  of a GET on the one-click route. `unsubscribeToken(subscriberId)` signs with the session secret.
 
 ### 13.2 Transactional mail (`src/server/newsletter/mail/{transport,templates,index}.ts`)
 
 ```ts
-export interface MailMessage { to: string; subject: string; html: string; text: string; kind: 'confirmation' | 'test_issue'; subscriberId?: string; issueId?: string; confirmUrl?: string }
+export interface MailMessage { to: string; subject: string; html: string; text: string; kind: 'confirmation' | 'test_issue'; subscriberId?: string; issueId?: string; confirmUrl?: string; listUnsubscribeUrl?: string; requestId?: string }
+// listUnsubscribeUrl (renamed from unsubscribeUrl): the List-Unsubscribe header target = links.oneClickUnsubscribeUrl(id), never the page
 export interface MailResult { outcome: 'sent' | 'stubbed'; transport: 'smtp' | 'stub'; messageId: string; messageRowId: string }
 export interface MailTransport { readonly kind: 'smtp' | 'stub'; send(msg: MailMessage): Promise<MailResult> }   // throws MailError on failure
 export function getMailTransport(): MailTransport;          // globalThis singleton from getConfig().newsletter.smtp; resetMailTransportForTests(t?)
 ```
 
 `SmtpTransport` wraps `nodemailer.createTransport({ host, port, secure: port === 465, requireTLS: port !== 465, auth?, connectionTimeout: 10_000, socketTimeout: 20_000 })`,
-`from = BLOG0_SMTP_FROM`, `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
-headers on confirmation messages (pointing at the subscriber's unsubscribe link), and inserts the
+`from = BLOG0_SMTP_FROM`, `List-Unsubscribe: <origin/api/newsletter/unsubscribe?t=<token>>` +
+`List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers on every message whose
+`listUnsubscribeUrl` is set (`listUnsubscribeHeaders(url)` — none without one; the confirmation
+mail sets it) (RFC 8058: the header URL is the **POST-able JSON route**, not the page —
+`links.ts` `oneClickUnsubscribeUrl(subscriberId)`; a client that GETs it is 303'd to the page via
+`unsubscribePageUrl`).
+The **visible** unsubscribe link in every body stays the page (`unsubscribeUrl`). It inserts the
 `newsletter_message` row (`transport 'smtp'`, `status 'sent' | 'failed'`, provider message id /
 error) **after** the SMTP result. `StubTransport` inserts the row with `transport 'stub'`,
 `status 'stubbed'` and logs `newsletter.mail` with `confirm_url` (when present). Both log
@@ -1137,18 +1175,22 @@ export function getNewsletterSender(): NewsletterSender;   // from getConfig().n
 ```
 
 **Listmonk adapter** (`listmonk.ts`, plain `fetch`, 15 s timeout per call, one retry on
-network error/5xx with 500 ms backoff, every call logged `newsletter.provider`):
-`Authorization: token <apiUser>:<apiToken>`, JSON. Mapping:
+network error/5xx with 500 ms backoff, every attempt logged `newsletter.provider` — §7 fields):
+`Authorization: token <apiUser>:<apiToken>`, JSON. **Error hygiene:** a `SenderError` message (and
+therefore `last_error`, `newsletter.provider.error`, `newsletter.sync` and the sync response's
+`errors[].message`) never contains a subscriber email — Listmonk error bodies and request paths
+that may echo one (`?query=subscribers.email='…'`, 409 "E-mail already exists" texts) are reduced
+to method, query-stripped path, HTTP status and a fixed description; nor the API token. Mapping:
 
 | Method | Listmonk REST |
 |---|---|
 | `healthcheck` | `GET /api/health`, then `GET /api/lists/<listId>` → `listName` (404 → `ok: false`, "list <id> not found") |
 | `syncSubscriber` | `POST /api/subscribers { email, name, status: 'enabled', lists: [listId], attribs, preconfirm_subscriptions: true }`; on 409 (exists) → `GET /api/subscribers?query=subscribers.email='<escaped>'` → `PUT /api/subscribers/<id>` with the same body (status `enabled` lifts a blocklist) → `changed` = any field differed (compare `name`, `status`, `attribs`, list membership); for `status: 'blocklisted'` input → the blocklist call below |
 | `removeSubscriber` | lookup by email → `PUT /api/subscribers/blocklist { ids: [id] }` (unknown email → `changed: false`) |
-| `createIssue` | ensure template `blog0-issue` exists (`GET /api/templates` by name, else `POST /api/templates { name, type: 'campaign', body: '{{ template "content" . }}' }`) → `POST /api/campaigns { name: 'blog0 #<number> — <subject>', subject, lists: [listId], type: 'regular', content_type: 'html', body: html, altbody: text, template_id, tags: ['blog0', 'issue:<issueId>'] }` → `campaignId = String(data.id)`; the blog0 placeholders in `html`/`text` are replaced **before** the POST with Listmonk expressions (13.4) |
+| `createIssue` | ensure template `blog0-issue` exists (`GET /api/templates` by name, else `POST /api/templates { name, type: 'campaign', body: '{{ template "content" . }}' }`) → `POST /api/campaigns { name: 'blog0 #<number> — <subject>', subject, lists: [listId], type: 'regular', content_type: 'html', body: html, altbody: text, template_id, tags: ['blog0', 'issue:<issueId>'] }` → `campaignId = String(data.id)`; before the POST, `html`/`text` are first **template-escaped** (in **one pass** over `/\{\{|\}\}/g` — sequential replaces would re-escape their own output — every literal `{{` → `{{ "{{" }}` and `}}` → `{{ "}}" }}`, so author text such as a code sample can never execute as a Listmonk/Go template expression) and **only then** have the blog0 placeholders replaced with Listmonk expressions (13.4) — that order keeps the two expressions live |
 | `sendIssue` | `PUT /api/campaigns/<id>/status { status: 'running' }` (a campaign already `running`/`finished` → no-op) |
 | `fetchStats` | `GET /api/campaigns/<id>` → `{ recipients: to_send, sent, delivered: null, opens: views, clicks, bounces, unsubscribes: null }` |
-| `fetchSuppressions` | `GET /api/subscribers?query=subscribers.status='blocklisted' AND subscribers.updated_at > '<since ISO>'&per_page=all` → `unsubscribed`; `GET /api/bounces?...` (rows with `created_at > since`, `type = 'hard'`) → `bounced`; `complaint` type → `complaint` |
+| `fetchSuppressions` | `GET /api/subscribers?query=subscribers.status='blocklisted' AND subscribers.updated_at > '<since ISO>'&per_page=all` → `unsubscribed`; **list-level unsubscribes**: `GET /api/subscribers?list_id=<listId>&subscription_status=unsubscribed&per_page=all`, keeping rows whose `lists[]` entry for `listId` has `subscription_updated_at > since` → `unsubscribed` with `at = subscription_updated_at`, `details.scope = 'list'`; `GET /api/bounces?...` (rows with `created_at > since`, `type = 'hard'`) → `bounced`; `complaint` type → `complaint` |
 
 **Stub adapter** (`stub.ts`): keeps subscribers in a `Map` (`providerId = 'stub-' + subscriberId`),
 `createIssue` returns `'stub-' + issueId`, `sendIssue` inserts one `newsletter_message` row per
@@ -1162,18 +1204,55 @@ what designer mode, integration tests and E2E use; `resetNewsletterSenderForTest
 listmonk send): for every `confirmed` row → `syncSubscriber` (sets `provider_id`,
 `provider_synced_at`, appends `provider_synced` only when `changed`); every
 `unsubscribed`/`bounced` row → `removeSubscriber` (appends `provider_removed` when `changed`);
-`pending`/`legacy_unconfirmed` → skipped; stub → everything skipped. blog0 → provider only: the
-sync never reads provider state into blog0 rows except `provider_id`. `scripts/newsletter-sync.ts`
+`pending`/`legacy_unconfirmed` → skipped; stub → everything skipped (the stub sender has no
+provider to copy to, so it never appends `provider_synced` / `provider_removed` and the "Synced to
+Listmonk" timeline entry appears only with `listmonk`). blog0 → provider only, with one
+exception: a confirmed row whose provider copy holds an opt-out newer than (or equal to) its latest
+consent / confirmation is not re-added and is suppressed in blog0 (`source 'provider'`), counted
+`suppressedFromProvider` (opt-out-wins rule 2 below); otherwise the sync reads nothing back except
+`provider_id`. `syncAll` triggers: `script`, `admin`, `send` (before a listmonk campaign);
+`syncOne`/`removeOne`: `confirm`, `unsubscribe`, `webhook`, `tick`. `scripts/newsletter-sync.ts`
 (`pnpm newsletter:sync [--create-list]`) prints `synced N, blocklisted N, skipped N, N changed`
-and exits 1 on any error. `scripts/newsletter-tick.ts` (`pnpm newsletter:tick`): digest-due
-check (13.5) → `fetchSuppressions(lastTickAt)` → `suppress()` each unknown-to-blog0 suppression
-(`source 'provider'`) → `fetchStats` for issues sent in the last 30 days → `pruneIps(now)` → one
-`newsletter.tick` line. Scheduling is external (runbook: hourly cron / platform scheduler); the
-app has no timer.
+(+ `, N suppressed from provider` when > 0) and exits 1 on any error. `scripts/newsletter-tick.ts` (`pnpm newsletter:tick`): digest-due
+check (13.5) → `fetchSuppressions(lastTickAt)` (blocklist, **list-level unsubscribes** and hard
+bounces) → `suppress()` each suppression blog0 does not already hold, applied only when it is newer
+than the subscriber's latest consent / confirmation (`source 'provider'`) → `fetchStats` for issues
+sent in the last 30 days → `pruneIps(now)` → one `newsletter.tick` line. Scheduling is external
+(runbook: hourly cron / platform scheduler); the app has no timer.
+
+**An opt-out anywhere wins** (Listmonk list-level unsubscribe). A reader can leave the `blog0` list
+inside Listmonk (its own unsubscribe page / `{{ UnsubscribeURL }}` in the `List-Unsubscribe` header)
+without being blocklisted; the subscriber stays `enabled` there with the list membership
+`unsubscribed`. Rules:
+1. `newsletter:tick` pulls those list-level unsubscribes exactly like blocklists and bounces → blog0
+   `unsubscribed` + suppression (`source 'provider'`, `details.scope 'list'`).
+2. `syncSubscriber` / `syncAll` **never re-add** a list membership whose provider unsubscribe
+   (`subscription_updated_at` of the `unsubscribed` membership) is newer than (or equal to) blog0's
+   latest consent / confirmation (`greatest(consented_at, confirmed_at)` — `sender/opt-out.ts`
+   `providerOptOutWins`, shared by sync, tick and webhook): the membership is left `unsubscribed` (no `provider_synced`
+   event), so a sync run between the reader's opt-out and the next tick cannot undo it; the sync
+   itself records the opt-out in blog0 (`suppressedFromProvider`), else the next tick does.
+3. A fresh double opt-in **after** that unsubscribe (new `confirmed_at` newer than it) may re-add
+   the membership (`PUT /api/subscribers/lists { action: 'add', status: 'confirmed' }`), exactly as
+   a re-confirmation re-enables a blocklisted address.
+
+> **Assumed:** the comparison uses Listmonk's `subscription_updated_at` for the `blog0` list against
+> blog0's `greatest(consented_at, confirmed_at)` (both UTC); equal timestamps count as "unsubscribe
+> newer" — the opt-out wins a tie; an unparseable provider timestamp also lets the opt-out win.
 
 **Webhook** (`src/app/api/newsletter/webhook/route.ts`): bearer secret (constant-time compare),
 `csrf: false`, body `NewsletterWebhookRequest` → `suppress(row, { reason, source: 'webhook',
-details: { providerRef, reason, occurredAt } })`.
+details: { providerRef, reason, occurredAt } })`. When `occurredAt` parses as a date, the
+**opt-out-wins timestamp rule** applies exactly as in the tick: the event is applied only if
+`occurredAt >= greatest(confirmed_at, consented_at)` of the row (`providerOptOutWins`; an opt-out older than a fresh
+re-confirmation is stale → `accepted: true`, nothing written, logged); a tie counts as the opt-out
+(rule 2's tie-break). Absent or unparseable `occurredAt` → applied unconditionally (receipt time
+is the opt-out time).
+
+> **Assumed:** the `List-Unsubscribe` header of a **Listmonk-sent** campaign is Listmonk's own (it
+> sets the header per message; blog0 does not override campaign headers); that opt-out reaches
+> blog0 through the tick's list-level pull (rule 1). blog0's one-click route is the header of
+> every message blog0 itself sends through its transactional transport (13.2).
 
 ### 13.4 Issue rendering (`src/server/newsletter/issues/render.ts`, pure)
 
@@ -1206,7 +1285,11 @@ via `@media (prefers-color-scheme: dark)` in a `<style>` block plus explicit lig
   `deleteIssue` (draft only), `previewIssue` (draft → re-snapshot + persist; render + fill sample
   values), `sendTest(ctx, id)` (render, fill the admin's sample values, `getMailTransport().send`,
   event `test_sent`).
-- `send.ts`: `sendIssue(ctx, id)` — one transaction: lock the issue, require `draft` or `failed`,
+- `send.ts`: `sendIssue(ctx, id)` — one transaction: lock the issue, require `draft`, `failed`, or
+  **`sending` for more than 10 min** (`SENDING_STALE_MS = 10 * 60_000` in `constants.ts`, measured
+  from `updated_at`, which the flip to `sending` sets; covers a process that died mid-send — the reused
+  `provider_campaign_id` and the idempotent `sendIssue` keep the retry from duplicating a campaign;
+  a `sending` issue younger than that → `ISSUE_NOT_DRAFT`, so a double click cannot start two sends),
   count confirmed subscribers (0 → `NO_RECIPIENTS`), freeze `rendered_html/text` (re-snapshot
   first when draft), status `sending`, event `send_requested` → commit → outside the transaction:
   listmonk only: `syncAll('send')`; `provider_campaign_id ?? createIssue()` (persist at once, event
@@ -1371,6 +1454,7 @@ blog0/
 │   │       │   admin/articles/route.ts  admin/articles/[id]/{route.ts, publish/, unpublish/, tldr/, tldr/generate/, audio/, listen/}
 │   │       └── admin/subscribers/[id]/{route.ts, send-confirmation/, unsubscribe/}  admin/subscribers/send-legacy-confirmations/route.ts   # Phase 7
 │   │           admin/newsletter/{settings,sync,issues}/route.ts  admin/newsletter/issues/[id]/{route.ts, preview/, test/, send/, stats/}
+│   │                                # preview/ answers JSON IssuePreviewDto; the admin renders it in a sandboxed iframe srcdoc (no HTML preview page route)
 │   ├── components/
 │   │   ├── StubNotice.tsx
 │   │   ├── design/              # Icon, Typewriter, Wordmark, SplitHeadline, Dek, motion.ts, overlay.ts
@@ -1393,7 +1477,7 @@ blog0/
 │   │   └── share-links.ts  share-surface.ts                    # share texts/URLs; native-sheet decision
 │   ├── server/                  # server-only (each file starts with `import 'server-only'`)
 │   │   ├── config.ts  log.ts  rate-window.ts  rate-window-store.ts
-│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql + meta/)
+│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql + meta/)
 │   │   ├── ops/{release,readiness,lifecycle,pg-tools,backup-manifest,backup,restore}.ts   # Phase 5 (§12)
 │   │   ├── designer/{secret,admin,setup}.ts
 │   │   ├── http/api.ts
@@ -1401,8 +1485,8 @@ blog0/
 │   │   ├── users/repo.ts  site/{current,defaults,service}.ts
 │   │   ├── newsletter/{constants,tokens,schemas,repo,service,links,legacy,prune,audit,rate-limit,settings,sender-hook}.ts   # Phase 7 list (§13.1)
 │   │   │   newsletter/mail/{transport,templates,index}.ts                          # §13.2 (nodemailer SMTP | stub)
-│   │   │   newsletter/sender/{types,listmonk,stub,sync,index}.ts                   # §13.3
-│   │   │   newsletter/issues/{repo,service,snapshot,render,triggers,digest,send}.ts   # §13.4–13.5
+│   │   │   newsletter/sender/{types,listmonk,stub,sync,opt-out,index}.ts           # §13.3
+│   │   │   newsletter/issues/{repo,service,snapshot,render,excerpt,intro,triggers,digest,send,status,http,tick}.ts   # §13.4–13.5
 │   │   ├── content/{index,ast,markdown,render,sentences,paragraph-ids,fingerprint,stats,highlight,cache}.ts
 │   │   │   content/plugins/{figure-markers,heading-shift,raw-html,code-langs,external-links,images,tables,safe-urls}.ts
 │   │   ├── formats/{types,payload,index,read,tldr,listen}.ts      # formats/status.ts: Phase 4 (on hold), future
@@ -1445,13 +1529,19 @@ Test wiring:
   `var/storage-e2e`, reset + migrate `blog0_test`, seed site + admin — `BLOG0_ADMIN_*` when set,
   else a generated test-only admin, handed to workers as `BLOG0_E2E_ADMIN_*` — then `seedPosts` +
   `seedTldr(…, { source: 'fixture' })`, asserting 5 decks and 0 calls); `workers: 1`, `fullyParallel: false`, `forbidOnly` when `CI=true`.
-  **Four projects run in a fixed order via `dependencies`: `tldr` → `reader` → `listen` → `smoke`**
-  (they share one database and each needs the state the previous leaves); a new walk is added as a
-  project at the end of that chain. `webServer` (skipped when `BLOG0_E2E_BASE_URL` is set):
+  **Five projects run in a fixed order via `dependencies`: `tldr` → `reader` → `listen` → `smoke`
+  → `newsletter`** (Phase 7, `newsletter.spec.ts`, depends on `smoke`; they share one database and
+  each needs the state the previous leaves); a new walk is added as a project at the end of that
+  chain. `webServer` (skipped when `BLOG0_E2E_BASE_URL` is set):
   `pnpm start` on 3411 with `env: { BLOG0_PORT: '3411', BLOG0_DATABASE_URL: <BLOG0_TEST_DATABASE_URL>,
   BLOG0_PUBLIC_BASE_URL: 'http://localhost:3411', BLOG0_LOG_FILE: 'test-results/e2e-server.log',
-  BLOG0_STORAGE_DIR: 'var/storage-e2e' }` merged over the inherited environment (so
-  `BLOG0_DIST_DIR` reaches it), `reuseExistingServer: false`, 120 s. E2E runs the **same**
+  BLOG0_STORAGE_DIR: 'var/storage-e2e', BLOG0_SMTP_HOST: '', BLOG0_NEWSLETTER_SENDER: 'stub' }`
+  merged over the inherited environment (so `BLOG0_DIST_DIR` reaches it; the two newsletter values
+  force the recording stubs even when `.env` configures an SMTP relay or Listmonk — an already-set,
+  even empty, variable is never overridden by `.env`), `reuseExistingServer: false`, 120 s. The
+  newsletter walk reads its confirm / unsubscribe links from the `newsletter_message` rows the stub
+  transport and stub sender write (`tests/e2e/helpers/newsletter.ts` over `helpers/db.ts`) — exact per
+  address, independent of log timing, and it works against the external container too. E2E runs the **same**
   `pnpm start` as production (test path = run path); `pnpm build` (same `BLOG0_DIST_DIR`) must have
   run first. **Against the container** (Phase 5, §12.5): `BLOG0_E2E_BASE_URL=http://localhost:3412`
   + `BLOG0_E2E_LOG_FILE=test-results/e2e-server.log`; global setup still resets `blog0_test` (the
@@ -1470,7 +1560,11 @@ Test wiring:
   `BLOG0_PUBLIC_BASE_URL: 'http://localhost:3413'`, and **empty** `BLOG0_SESSION_SECRET`,
   `BLOG0_OPENROUTER_API_KEY`, `BLOG0_ADMIN_EMAIL/PASSWORD/NAME`, `BLOG0_LOG_FILE` (an already-set
   variable is never overridden by `.env`, and the app treats empty as absent — this proves the
-  generated-secret and no-key paths). `tests/e2e/designer.global-setup.ts` never deletes anything:
+  generated-secret and no-key paths), plus Phase 7's `BLOG0_SMTP_HOST: ''` and
+  `BLOG0_NEWSLETTER_SENDER: 'stub'`. The designer newsletter walk (signup → confirm → **Confirmed**)
+  reads the confirm link from the stub's `newsletter.mail` line (`kind 'confirmation'`,
+  `confirm_url`) in `test-results/design-e2e-server.log`, after a line-count cursor taken before the
+  signup — PGlite is single-process, so the test cannot open a second database client. `tests/e2e/designer.global-setup.ts` never deletes anything:
   it asserts the server console shows a first boot (`database: … (new — first boot runs initdb)`)
   and exactly one `designer admin: … (shown once …)` line, that
   `var/pglite-e2e.designer-admin.txt` exists with mode 0600, names `designer@blog0.local` and

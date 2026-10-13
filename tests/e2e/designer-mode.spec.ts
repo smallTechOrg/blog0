@@ -4,6 +4,7 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 import { e2eAdmin, originOf, signIn } from './helpers/admin';
+import { confirmUrlFromLog, lineCount, NL_CONFIRMED, NL_DONE, pathOf } from './helpers/newsletter';
 import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
 import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGN_E2E_STORAGE_DIR, DESIGNER_ENV } from './designer.global-setup';
 
@@ -214,5 +215,34 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect(((await removed.json()) as { data: { listen: { status: string } } }).data.listen.status).toBe('missing');
     expect(existsSync(stored)).toBe(false);
     expect((await page.request.get(uploaded.audio.url)).status()).toBe(404);
+  });
+
+  test('newsletter: footer signup → the stub logs the confirm link → "You’re subscribed." → the admin lists Confirmed (no SMTP, no Listmonk)', async ({ page }) => {
+    const email = `designer-nl-${Date.now()}@example.test`;
+    const cursor = lineCount(DESIGN_E2E_SERVER_LOG);
+
+    await page.goto('/');
+    const form = page.locator('#newsletter');
+    await form.scrollIntoViewIfNeeded();
+    await form.getByLabel('Email').fill(email);
+    await form.getByRole('button', { name: 'Subscribe' }).click();
+    await expect(form.getByRole('status')).toHaveText(NL_DONE);
+
+    // The stub mail transport prints the link a designer follows (BLOG0_SMTP_HOST unset).
+    let url: string | null = null;
+    await expect
+      .poll(() => (url = confirmUrlFromLog(DESIGN_E2E_SERVER_LOG, cursor)), { message: `newsletter.mail confirm_url in ${DESIGN_E2E_SERVER_LOG}` })
+      .not.toBeNull();
+    expect(url!).toMatch(new RegExp(`^http://localhost:${DESIGN_E2E_PORT}/newsletter/confirm\\?t=`));
+
+    await page.goto(pathOf(url!));
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
+
+    await signIn(page, designer());
+    await page.goto('/admin/subscribers');
+    const row = page.locator('.admin-table tbody tr', { hasText: email });
+    await expect(row.locator('.tag')).toHaveText('Confirmed');
+    await row.getByRole('link', { name: email }).click();
+    await expect(page.locator('.timeline__label')).toHaveText(['Signed up from /', /^Confirmation email sent/, 'Confirmed']);
   });
 });

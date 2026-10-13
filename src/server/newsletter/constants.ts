@@ -23,3 +23,5 @@ export const LINK_WINDOW_MS = 60 * 60 * 1000;
 /** `sendAllLegacyConfirmations`: rows per batch and the pause between batches. */
 export const LEGACY_BATCH_SIZE = 20;
 export const LEGACY_BATCH_PAUSE_MS = 200;
+/** An issue left in `sending` this long without progress (crashed process / killed request) may be retried. */
+export const SENDING_STALE_MS = 10 * 60 * 1000;

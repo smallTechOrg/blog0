@@ -17,6 +17,7 @@ import { isKnownClientIp } from './rate-limit';
 import * as repo from './repo';
 import type { SubscribeInput } from './schemas';
 import { afterConfirm, afterSuppress } from './sender-hook';
+import { providerOptOutWins } from './sender/opt-out';
 import { hashConfirmToken, isWellFormedConfirmToken, newConfirmToken, verifyUnsubscribeToken } from './tokens';
 
 // The owned list (capability newsletter-list.md; HOW spec/architecture.md §13.1). blog0 is the
@@ -293,15 +294,37 @@ export interface SuppressInput {
   ip?: string | null;
   userAgent?: string | null;
   now?: Date;
+  /**
+   * When the provider says the opt-out happened. Set (and parseable) ⇒ the suppression applies only if
+   * that opt-out is not older than the subscriber's latest consent / confirmation (sender/opt-out.ts),
+   * decided under the row lock — a stale webhook retry can't undo a fresh re-subscription.
+   */
+  optOutAt?: Date;
 }
 
 /** One transaction: status (`bounced` for reason `bounced`, else `unsubscribed`), suppression row, event. Then the sender hook. */
 export async function suppress(row: NewsletterSubscriberRow, input: SuppressInput): Promise<NewsletterSubscriberRow> {
+  return (await suppressOnce(row, input)).subscriber;
+}
+
+/**
+ * The suppression write, decided under the row lock: a row that is already suppressed when the lock
+ * is taken (a concurrent unsubscribe / webhook / tick got there first) writes nothing and runs no hook
+ * — `applied: false` — so two racing requests never produce two suppressions.
+ */
+export async function suppressOnce(
+  row: NewsletterSubscriberRow,
+  input: SuppressInput,
+): Promise<{ subscriber: NewsletterSubscriberRow; applied: boolean; stale?: boolean }> {
   const now = input.now ?? new Date();
   const status = input.reason === 'bounced' ? 'bounced' : 'unsubscribed';
-  const updated = await getDb().transaction(async (tx) => {
+  const outcome = await getDb().transaction(async (tx) => {
     const locked = await repo.findById(tx, row.siteId, row.id, true);
     if (!locked) throw new ApiError('NOT_FOUND', 404, 'That subscriber no longer exists.');
+    if (SUPPRESSED_STATUSES.includes(locked.status)) return { subscriber: locked, applied: false };
+    if (input.optOutAt !== undefined && !Number.isNaN(input.optOutAt.getTime()) && !providerOptOutWins(input.optOutAt, locked)) {
+      return { subscriber: locked, applied: false, stale: true };
+    }
     const next = await repo.updateSubscriber(tx, locked.id, {
       status,
       unsubscribedAt: now,
@@ -330,10 +353,10 @@ export async function suppress(row: NewsletterSubscriberRow, input: SuppressInpu
       details: { reason: input.reason, previousStatus: locked.status, ...(input.details ?? {}) },
       createdAt: now,
     });
-    return next;
+    return { subscriber: next, applied: true };
   });
-  await runHook(() => afterSuppress(updated), 'unsubscribe', updated.id);
-  return updated;
+  if (outcome.applied) await runHook(() => afterSuppress(outcome.subscriber), 'unsubscribe', outcome.subscriber.id);
+  return outcome;
 }
 
 export interface UnsubscribeResult {
@@ -354,14 +377,14 @@ export async function unsubscribeByToken(
   const row = await repo.findById(getDb(), current.id, id);
   if (!row) throw tokenInvalid();
   if (SUPPRESSED_STATUSES.includes(row.status)) return { alreadyUnsubscribed: true, subscriber: row };
-  const subscriber = await suppress(row, {
+  const { subscriber, applied } = await suppressOnce(row, {
     reason: 'unsubscribed',
     source,
     ip: storedIp(ctx.ip),
     userAgent: storedUa(ctx.userAgent),
     now: ctx.now,
   });
-  return { alreadyUnsubscribed: false, subscriber };
+  return { alreadyUnsubscribed: !applied, subscriber };
 }
 
 /** Admin → Unsubscribe: suppression `reason: 'admin'`, `source: 'admin'`; already suppressed → 409. */
@@ -371,20 +394,27 @@ export async function adminUnsubscribe(siteId: string, id: string, actor: { user
   if (SUPPRESSED_STATUSES.includes(row.status)) {
     throw new ApiError('SUBSCRIBER_NOT_ELIGIBLE', 409, 'This address is already unsubscribed.');
   }
-  return suppress(row, { reason: 'admin', source: 'admin', actorUserId: actor.userId, details: note ? { note } : {} });
+  const { subscriber, applied } = await suppressOnce(row, { reason: 'admin', source: 'admin', actorUserId: actor.userId, details: note ? { note } : {} });
+  if (!applied) throw new ApiError('SUBSCRIBER_NOT_ELIGIBLE', 409, 'This address is already unsubscribed.');
+  return subscriber;
 }
 
-/** A provider-side suppression (poll or webhook): known email → status + suppression + event; idempotent. */
+/**
+ * A provider-side suppression (poll or webhook): known email → status + suppression + event; idempotent
+ * (`applied: false` when it was already suppressed). With `optOutAt`, an opt-out older than the
+ * subscriber's latest consent / confirmation is ignored: `{ accepted: true, applied: false, stale: true }`,
+ * nothing written (spec/architecture.md §13.3 Webhook — acknowledged so the provider stops retrying).
+ */
 export async function suppressByEmail(
   siteId: string,
   email: string,
-  input: { reason: 'unsubscribed' | 'bounced' | 'complaint'; source: 'provider' | 'webhook'; details?: Record<string, unknown>; now?: Date },
-): Promise<{ accepted: boolean; subscriber: NewsletterSubscriberRow | null }> {
+  input: { reason: 'unsubscribed' | 'bounced' | 'complaint'; source: 'provider' | 'webhook'; details?: Record<string, unknown>; now?: Date; optOutAt?: Date },
+): Promise<{ accepted: boolean; applied: boolean; stale: boolean; subscriber: NewsletterSubscriberRow | null }> {
   const row = await repo.findByEmail(getDb(), siteId, email);
-  if (!row) return { accepted: false, subscriber: null };
-  if (SUPPRESSED_STATUSES.includes(row.status)) return { accepted: true, subscriber: row };
-  const subscriber = await suppress(row, input);
-  return { accepted: true, subscriber };
+  if (!row) return { accepted: false, applied: false, stale: false, subscriber: null };
+  if (SUPPRESSED_STATUSES.includes(row.status)) return { accepted: true, applied: false, stale: false, subscriber: row };
+  const { subscriber, applied, stale = false } = await suppressOnce(row, input);
+  return { accepted: true, applied, stale, subscriber };
 }
 
 async function runHook(fn: () => Promise<void>, trigger: 'confirm' | 'unsubscribe', subscriberId: string): Promise<void> {

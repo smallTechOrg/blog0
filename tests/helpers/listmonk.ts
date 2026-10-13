@@ -73,6 +73,13 @@ export function listmonkRaw(env: ListmonkDevEnv) {
     async campaign(id: string): Promise<{ id: number; status: string; body: string; altbody: string; name: string; subject: string; tags: string[]; template_id: number }> {
       return call('GET', `/api/campaigns/${id}`);
     },
+    /** GET /api/campaigns/:id/preview — the campaign rendered by Listmonk (HTML, not a JSON envelope). */
+    async previewCampaign(id: string): Promise<string> {
+      const res = await fetch(`${env.url}/api/campaigns/${id}/preview`, { headers });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`listmonk raw GET /api/campaigns/${id}/preview → ${res.status}: ${text}`);
+      return text;
+    },
     async deleteCampaign(id: string): Promise<void> {
       try {
         await call('DELETE', `/api/campaigns/${id}`);

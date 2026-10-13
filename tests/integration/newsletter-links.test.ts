@@ -8,17 +8,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { POST as confirmRoute } from '@/app/api/newsletter/confirm/route';
 import { POST as newsletterRoute } from '@/app/api/newsletter/route';
-import { POST as unsubscribeRoute } from '@/app/api/newsletter/unsubscribe/route';
+import { GET as unsubscribeGetRoute, POST as unsubscribeRoute } from '@/app/api/newsletter/unsubscribe/route';
 import type { NewsletterConfirmResponse, NewsletterUnsubscribeResponse } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import { resetConfigForTests } from '@/server/config';
 import { getDb } from '@/server/db/client';
 import { newsletterIssue, newsletterIssueEvent, newsletterSubscriber, newsletterSubscriberEvent, newsletterSuppression, type SiteRow } from '@/server/db/schema';
 import { LINK_CAP_PER_IP } from '@/server/newsletter/constants';
-import { unsubscribeToken, unsubscribeUrl } from '@/server/newsletter/links';
-import { resetMailTransportForTests } from '@/server/newsletter/mail';
+import { oneClickUnsubscribeUrl, unsubscribeToken, unsubscribeUrl } from '@/server/newsletter/links';
+import { listUnsubscribeHeaders, resetMailTransportForTests, StubTransport, type MailMessage } from '@/server/newsletter/mail';
 import { resetNewsletterLinkRateLimiterForTests, resetNewsletterRateLimiterForTests } from '@/server/newsletter/rate-limit';
-import { confirmByToken } from '@/server/newsletter/service';
+import { confirmByToken, suppressOnce, unsubscribeByToken } from '@/server/newsletter/service';
 
 import { resetDb } from '../helpers/db';
 import { captureLogs } from '../helpers/logs';
@@ -241,6 +241,94 @@ describe('unsubscribe link, one-click and suppression', () => {
     expect(json.env).toEqual({ ok: true, data: { unsubscribed: true, alreadyUnsubscribed: false } });
     expect((await suppressions('pending-bye@example.com'))[0]).toMatchObject({ source: 'email_link' });
     expect((await row('pending-bye@example.com')).confirmTokenHash).toBeNull();
+  });
+
+  it('RFC 8058: the confirmation mail\'s List-Unsubscribe header targets the POST endpoint (body links stay the page); urlencoded and multipart one-click POSTs to it → 200 + source one_click; GET → 303 to the page', async () => {
+    const sent: MailMessage[] = [];
+    const stub = new StubTransport();
+    resetMailTransportForTests({ kind: 'stub', send: async (m) => (sent.push(m), stub.send(m)) });
+
+    const tokA = await signup('oc-form@example.com');
+    const tokB = await signup('oc-multi@example.com');
+    const a = await row('oc-form@example.com');
+    const b = await row('oc-multi@example.com');
+    expect(sent).toHaveLength(2);
+    const header = sent[0].listUnsubscribeUrl as string;
+    expect(header).toBe(oneClickUnsubscribeUrl(a.id));
+    expect(header).toMatch(/^http:\/\/localhost:3410\/api\/newsletter\/unsubscribe\?t=/);
+    expect(listUnsubscribeHeaders(header)).toEqual({ 'List-Unsubscribe': `<${header}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' });
+    // the visible links in the body are the page, never the API route
+    expect(sent[0].html).toContain(`href="${unsubscribeUrl(a.id)}"`);
+    expect(sent[0].text).toContain(`Unsubscribe: ${unsubscribeUrl(a.id)}`);
+    expect(sent[0].html).not.toContain('/api/newsletter/unsubscribe');
+    await confirmByToken(tokA, { ip: 'direct', userAgent: null });
+    await confirmByToken(tokB, { ip: 'direct', userAgent: null });
+
+    // urlencoded, exactly as a mailbox provider sends it: no Origin, token only in the header URL
+    const form = await unsubscribeRoute(
+      new Request(header, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', host: 'localhost:3410' }, body: 'List-Unsubscribe=One-Click' }),
+      ctx,
+    );
+    expect(form.status).toBe(200);
+    expect(await form.json()).toEqual({ ok: true, data: { unsubscribed: true, alreadyUnsubscribed: false } });
+    expect(await row('oc-form@example.com')).toMatchObject({ status: 'unsubscribed' });
+    expect((await events('oc-form@example.com')).at(-1)).toMatchObject({ kind: 'unsubscribed', source: 'one_click' });
+    expect(await suppressions('oc-form@example.com')).toEqual([expect.objectContaining({ source: 'one_click', reason: 'unsubscribed' })]);
+
+    // multipart/form-data (RFC 8058 allows it; the runtime sets the boundary)
+    const multipartBody = new FormData();
+    multipartBody.set('List-Unsubscribe', 'One-Click');
+    const multi = await unsubscribeRoute(new Request(oneClickUnsubscribeUrl(b.id), { method: 'POST', headers: { host: 'localhost:3410' }, body: multipartBody }), ctx);
+    expect(multi.status).toBe(200);
+    expect((await events('oc-multi@example.com')).at(-1)).toMatchObject({ kind: 'unsubscribed', source: 'one_click' });
+    expect(await suppressions('oc-multi@example.com')).toEqual([expect.objectContaining({ source: 'one_click' })]);
+
+    // a repeat (provider retry) is idempotent
+    const again = await unsubscribeRoute(new Request(header, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click' }), ctx);
+    expect(await again.json()).toEqual({ ok: true, data: { unsubscribed: true, alreadyUnsubscribed: true } });
+    expect(await suppressions('oc-form@example.com')).toHaveLength(1);
+
+    // GET on the header URL → 303 to the page with the same token; writes nothing by itself
+    const t = new URL(header).searchParams.get('t') as string;
+    const get = unsubscribeGetRoute(new Request(header));
+    expect(get.status).toBe(303);
+    expect(get.headers.get('location')).toBe(unsubscribeUrl(a.id));
+    expect(new URL(get.headers.get('location') as string).searchParams.get('t')).toBe(t);
+    expect(get.headers.get('x-robots-tag')).toBe('noindex');
+    const bare = unsubscribeGetRoute(new Request(`${ORIGIN}/api/newsletter/unsubscribe`));
+    expect(bare.status).toBe(303);
+    expect(bare.headers.get('location')).toBe('/newsletter/unsubscribe');
+    expect(await suppressions('oc-form@example.com')).toHaveLength(1);
+
+    // error path: a tampered token in the header URL → 404, nothing written
+    const tampered = await unsubscribeRoute(
+      new Request(`${ORIGIN}/api/newsletter/unsubscribe?t=${encodeURIComponent(t.slice(0, -2) + 'xx')}`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'List-Unsubscribe=One-Click' }),
+      ctx,
+    );
+    expect(tampered.status).toBe(404);
+  });
+
+  it('R3: racing unsubscribes (link + one-click + a stale in-memory row) write exactly one suppression and one event', async () => {
+    const token = await signup('race@example.com');
+    await confirmByToken(token, { ip: 'direct', userAgent: null });
+    const confirmed = await row('race@example.com');
+    const t = unsubscribeToken(confirmed.id);
+
+    const results = await Promise.all([
+      unsubscribeByToken(t, 'email_link', { ip: 'direct', userAgent: null }),
+      unsubscribeByToken(t, 'one_click', { ip: 'direct', userAgent: null }),
+      unsubscribeByToken(t, 'one_click', { ip: 'direct', userAgent: null }),
+    ]);
+    expect(results.filter((r) => !r.alreadyUnsubscribed)).toHaveLength(1);
+    expect(await suppressions('race@example.com')).toHaveLength(1);
+    expect((await events('race@example.com')).filter((e) => e.kind === 'unsubscribed')).toHaveLength(1);
+
+    // a caller holding the pre-unsubscribe row (status still `confirmed` in memory) writes nothing
+    const again = await suppressOnce(confirmed, { reason: 'bounced', source: 'webhook' });
+    expect(again.applied).toBe(false);
+    expect(again.subscriber.status).toBe('unsubscribed');
+    expect(await suppressions('race@example.com')).toHaveLength(1);
+    expect((await events('race@example.com')).filter((e) => e.kind === 'bounced')).toHaveLength(0);
   });
 
   it('a suppressed address re-signs up via a fresh double opt-in: pending + resignup, confirming appends resubscribed, suppressions accumulate', async () => {

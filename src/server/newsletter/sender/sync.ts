@@ -8,7 +8,7 @@ import { log, maskEmail } from '../../log';
 import { getCurrentSite } from '../../site/current';
 import { consentLine, unsubscribeUrl } from '../links';
 import * as listRepo from '../repo';
-import { markProviderSynced } from '../service';
+import { markProviderSynced, suppressByEmail } from '../service';
 
 import { getNewsletterSender } from './index';
 import type { NewsletterSender, SenderSubscriber } from './types';
@@ -19,6 +19,10 @@ import type { NewsletterSender, SenderSubscriber } from './types';
 // into blog0 except the provider id. Idempotent: a row whose provider copy is already equal writes
 // nothing (no event, no timestamp), so a second run reports `0 changed` and leaves blog0 untouched.
 // With the stub sender every row is skipped (the stub keeps no list worth mirroring).
+// One exception to "nothing is read back": an opt-out at the provider (blocklist / list-level
+// unsubscribe) newer than a confirmed row's latest consent / confirmation is never overwritten — the
+// adapter writes nothing and the row is suppressed in blog0 (`suppressByEmail`, source `provider`),
+// counted as `suppressedFromProvider` (sender/opt-out.ts). An opt-out anywhere wins.
 
 export type SyncTrigger = 'script' | 'admin' | 'confirm' | 'unsubscribe' | 'webhook' | 'tick' | 'send';
 
@@ -51,7 +55,14 @@ function errorText(err: unknown): string {
 }
 
 /** `unchanged` = the provider copy was already equal (counted nowhere — a second run prints `0 changed`). */
-type Outcome = 'synced' | 'blocklisted' | 'skipped' | 'unchanged';
+type Outcome = 'synced' | 'blocklisted' | 'skipped' | 'unchanged' | 'suppressed_from_provider';
+
+const RESULT_KEY = {
+  synced: 'synced',
+  blocklisted: 'blocklisted',
+  skipped: 'skipped',
+  suppressed_from_provider: 'suppressedFromProvider',
+} as const satisfies Record<Exclude<Outcome, 'unchanged'>, keyof SyncResult>;
 
 async function syncRow(
   sender: NewsletterSender,
@@ -62,7 +73,19 @@ async function syncRow(
   mode: 'all' | 'one',
 ): Promise<{ outcome: Outcome; changed: boolean }> {
   if (row.status === 'confirmed') {
-    const { providerId, changed } = await sender.syncSubscriber(senderSubscriberFrom(row, site));
+    const { providerId, changed, optOut } = await sender.syncSubscriber(senderSubscriberFrom(row, site));
+    if (optOut !== undefined) {
+      // The provider holds a newer opt-out: record it in blog0 (the suppression hook then blocklists
+      // the address at the provider); the membership is never re-added.
+      const { accepted } = await suppressByEmail(row.siteId, row.email, {
+        reason: optOut.reason,
+        source: 'provider',
+        details: { ...optOut.details, at: optOut.at.toISOString(), trigger },
+      });
+      log.info('newsletter.sync', { trigger, msg: 'Provider opt-out is newer than the confirmation; suppressed in blog0, not re-added', email_masked: maskEmail(row.email), subscriber_id: row.id, accepted });
+      if (row.providerId !== providerId) await listRepo.updateSubscriber(getDb(), row.id, { providerId });
+      return { outcome: 'suppressed_from_provider', changed: false };
+    }
     if (changed) {
       await markProviderSynced(row, { providerId, kind: 'provider_synced', source, details: { sender: sender.kind, trigger } });
     } else if (row.providerId !== providerId) {
@@ -87,7 +110,8 @@ async function syncRow(
 /**
  * Every subscriber of the site. Counts: `synced` = confirmed rows the provider changed for, `blocklisted`
  * = suppressed rows newly blocklisted, `skipped` = pending / legacy rows (with the stub sender: every
- * row); rows already equal at the provider count nowhere; `changed = synced + blocklisted`. Per-row
+ * row), `suppressedFromProvider` = confirmed rows suppressed because the provider holds a newer
+ * opt-out; rows already equal at the provider count nowhere; `changed = synced + blocklisted`. Per-row
  * errors are collected, not thrown.
  */
 export async function syncAll(trigger: SyncTrigger, options: { sender?: NewsletterSender; siteId?: string; source?: 'system' | 'admin' } = {}): Promise<SyncResult> {
@@ -96,7 +120,7 @@ export async function syncAll(trigger: SyncTrigger, options: { sender?: Newslett
   const site = await getCurrentSite();
   const siteId = options.siteId ?? site.id;
   const rows = await listRepo.listRows(getDb(), siteId);
-  const result: SyncResult = { synced: 0, blocklisted: 0, skipped: 0, changed: 0, errors: [] };
+  const result: SyncResult = { synced: 0, blocklisted: 0, skipped: 0, suppressedFromProvider: 0, changed: 0, errors: [] };
 
   for (const row of rows) {
     if (sender.kind === 'stub') {
@@ -105,7 +129,7 @@ export async function syncAll(trigger: SyncTrigger, options: { sender?: Newslett
     }
     try {
       const { outcome, changed } = await syncRow(sender, row, site, options.source ?? 'system', trigger, 'all');
-      if (outcome !== 'unchanged') result[outcome] += 1;
+      if (outcome !== 'unchanged') result[RESULT_KEY[outcome]] += 1;
       if (changed) result.changed += 1;
     } catch (err) {
       result.errors.push({ email: row.email, message: errorText(err) });
@@ -118,6 +142,7 @@ export async function syncAll(trigger: SyncTrigger, options: { sender?: Newslett
     synced: result.synced,
     blocklisted: result.blocklisted,
     skipped: result.skipped,
+    suppressed_from_provider: result.suppressedFromProvider,
     changed: result.changed,
     errors: result.errors.length,
     latency_ms: Math.round(performance.now() - started),
@@ -142,6 +167,7 @@ async function one(row: NewsletterSubscriberRow, trigger: SyncTrigger, sender: N
     synced: outcome === 'synced' ? 1 : 0,
     blocklisted: outcome === 'blocklisted' ? 1 : 0,
     skipped: outcome === 'skipped' ? 1 : 0,
+    suppressed_from_provider: outcome === 'suppressed_from_provider' ? 1 : 0,
     changed: changed ? 1 : 0,
     errors: 0,
     latency_ms: Math.round(performance.now() - started),

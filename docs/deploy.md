@@ -43,12 +43,21 @@ makes the server log one aggregated error and exit 1 before serving.
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | optional | — | no | upload limits, default `50` / `30` / `8` |
 | `BLOG0_LOG_LEVEL` | optional | — | no | `debug` \| `info` (default) \| `warn` \| `error` |
 | `BLOG0_LOG_FILE` | optional | — | no | also append JSON log lines to this path (stdout always gets them) |
+| `BLOG0_SMTP_HOST` | for real confirmation mail | — | no | the SMTP relay for confirmation + test emails (see [Newsletter](#newsletter)); unset → the recording stub (nothing is delivered; one `newsletter.mail_not_configured` warning) |
+| `BLOG0_SMTP_PORT` | optional | — | no | default `587` (STARTTLS required); `465` → implicit TLS |
+| `BLOG0_SMTP_USER` / `BLOG0_SMTP_PASS` | with an authenticating relay | — | `PASS`: **yes** | set both, or both empty for an IP-allowlisted relay |
+| `BLOG0_SMTP_FROM` | with `BLOG0_SMTP_HOST` | — | no | `Name <address>` on the domain the DNS records cover, e.g. `blog0 <newsletter@example.com>` |
+| `BLOG0_NEWSLETTER_SENDER` | for real issues: `listmonk` | — | no | `listmonk` \| `stub` (default; issues recorded, never delivered) |
+| `BLOG0_LISTMONK_URL` / `BLOG0_LISTMONK_API_USER` / `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | no | Listmonk base URL as the container reaches it (e.g. `http://listmonk:9000`), the API user, the list id |
+| `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | **yes** | the API user's token |
+| `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | optional | — | **yes** | ≥ 24 chars (`openssl rand -base64 32`); unset → `POST /api/newsletter/webhook` answers 404 |
 | `BLOG0_STORAGE_DIR` | baked in: `/data/storage` | — | no | do not change; mount the volume there |
 | `PORT` / `HOSTNAME` / `NODE_ENV` | baked in: `3410` / `0.0.0.0` / `production` | — | no | map a host/ingress port to 3410 instead of changing `PORT` |
 
 Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_DIR`,
 `BLOG0_STANDALONE`, `BLOG0_NEW_ADMIN_PASSWORD`, `BLOG0_E2E_*`, `BLOG0_REQUIRE_REAL_KEY`,
-`BLOG0_CONTAINER_BUILD` (local scripts and tests only).
+`BLOG0_CONTAINER_BUILD`, `BLOG0_LISTMONK_PORT`, `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD`
+(local scripts and tests only; the last two are read by Listmonk's own first install).
 
 ## First deploy
 
@@ -70,7 +79,9 @@ Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_
      blog0:<version> node release.mjs
    # <db>: applied 0000_init
    # <db>: applied 0001_rate_limit_bucket
-   # release: blog0 @ PostgreSQL 18.x — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK
+   # <db>: applied 0002_newsletter
+   # <db>: applied 0003_newsletter_prune_fix
+   # release: blog0 @ PostgreSQL 18.x — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
    # site blog0 ok (created), admin <masked email> ok (created)
    ```
 
@@ -97,7 +108,7 @@ Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_
 
    ```bash
    curl -fsS http://127.0.0.1:3410/api/health/ready
-   # {"ok":true,"data":{"status":"ready","db":"ok",…,"migrations":{"applied":2,"pending":0,…}}}
+   # {"ok":true,"data":{"status":"ready","db":"ok",…,"migrations":{"applied":3,"pending":0,…}}}
    ```
 
    Then open `https://<your host>/admin/login` and sign in as the first admin.
@@ -147,8 +158,12 @@ BLOG0_DATABASE_URL='postgres://…/blog0' pnpm backup -- --out /srv/backups --st
 
 One backup = `db.dump` (custom format, from one exported snapshot so rows and counts agree),
 `storage.tar.gz` (the uploads) and `manifest.json` (row counts per table, file counts, sha256 of
-both files; written last — a directory without it is not a backup). Throttle windows
-(`rate_limit_bucket`) are not backed up. A named Docker volume is readable at
+both files; written last — a directory without it is not a backup). Every table is in it —
+including the six newsletter tables (`newsletter_subscriber`, `newsletter_subscriber_event`,
+`newsletter_suppression`, `newsletter_issue`, `newsletter_issue_event`, `newsletter_message`):
+the list, its proof of consent and the suppression ledger. Throttle windows
+(`rate_limit_bucket`) are not backed up (schema only). The **Listmonk database is not** — see
+[Newsletter → Backups](#newsletter-backups). A named Docker volume is readable at
 `docker volume inspect -f '{{.Mountpoint}}' blog0-storage` (root) — or use a bind mount.
 
 Nightly at 02:00, keeping 14 days (crontab of the backup user; `.env` in the checkout holds the
@@ -201,6 +216,239 @@ Rotate on a schedule or at once if the secret may have leaked:
    reject each other's sessions — do not run a mixed fleet longer than the rollout).
 3. Optional cleanup of the now-dead rows: `psql "$BLOG0_DATABASE_URL" -c 'delete from session'`.
 4. Sign in again at `/admin/login`.
+5. **Newsletter:** the same secret signs every subscriber's unsubscribe link, so links in emails
+   already delivered stop working (they open a "not found" page). With Listmonk, re-sync at once so
+   future issues carry fresh links: `pnpm newsletter:sync` from the ops checkout (expect
+   `… N changed` with N = the confirmed subscribers) or **Site → Newsletter → Sync to Listmonk**.
+   Confirmation links are unaffected (they are random tokens, stored hashed).
+
+## Newsletter
+
+Product rules: `spec/capabilities/newsletter-list.md`, `spec/capabilities/newsletter-issues.md`;
+mechanics: `spec/architecture.md` §12.6, §13.
+
+**blog0 is the source of truth.** Subscribers, their proof of consent (consent text + version,
+timestamps, IP, user agent, source page) and the append-only suppression ledger live in blog0's
+database. Listmonk is only the sender: blog0 pushes confirmed subscribers into **one** Listmonk
+list, blocklists the suppressed ones, and starts each issue there as a campaign. Nothing flows
+from Listmonk into blog0 except unsubscribes/bounces (hourly poll) and campaign stats.
+
+Two mail paths, both through the SMTP relay you choose below:
+
+| Path | Who sends | Configured in |
+|---|---|---|
+| **Transactional** — the double opt-in confirmation email, the admin's test issue | blog0 (nodemailer) | `BLOG0_SMTP_*` env vars of the web container |
+| **Issues** — bulk campaigns to confirmed subscribers | Listmonk | Listmonk admin → Settings → SMTP |
+
+Double opt-in: a footer signup stores a `pending` row and emails a confirmation link (valid 72 h,
+at most 3 sends per address per day); only the click makes it `confirmed`, and only `confirmed`
+subscribers are synced to Listmonk. Listmonk never sends its own opt-in (the list is single
+opt-in on purpose — blog0 already did it). Without `BLOG0_SMTP_HOST` the web server keeps working
+but **no confirmation email leaves the server** (the stub records it and logs one
+`newsletter.mail_not_configured` warning) — configure SMTP before announcing the form.
+
+### SMTP relay — two documented options (pick one; this runbook does not)
+
+Both use port **587 with STARTTLS** and must be allowed to send as the `BLOG0_SMTP_FROM` domain.
+Use the **same relay and From domain** for blog0 and for Listmonk so one set of DNS records covers
+both.
+
+**Option A — Google Workspace SMTP relay** (`smtp-relay.gmail.com:587`, TLS). In the Workspace
+Admin console → Apps → Google Workspace → Gmail → Routing → **SMTP relay service** → Add: allowed
+senders "Only addresses in my domains"; authentication **either** "Only accept mail from the
+specified IP addresses" (add the egress IPs of the blog0 and Listmonk hosts) **or** "Require SMTP
+Authentication" (a Workspace account in your domain; with 2-Step Verification use an app
+password); tick "Require TLS encryption". Check Google's relay sending limits against the list
+size.
+
+```bash
+# blog0.env — IP-allowlisted relay (no credentials)
+BLOG0_SMTP_HOST=smtp-relay.gmail.com
+BLOG0_SMTP_PORT=587
+BLOG0_SMTP_USER=
+BLOG0_SMTP_PASS=
+BLOG0_SMTP_FROM=blog0 <newsletter@example.com>
+# … or with SMTP authentication instead:
+# BLOG0_SMTP_USER=<workspace-user@example.com>
+# BLOG0_SMTP_PASS=<app-password>
+```
+
+**Option B — Brevo SMTP** (`smtp-relay.brevo.com:587`, STARTTLS). In Brevo: add and
+**authenticate the sending domain** (Senders, Domains & Dedicated IPs → Domains — it shows the DNS
+records), then SMTP & API → SMTP → **Generate a new SMTP key**. The login is the SMTP login shown
+on that page (not your account email); the password is the SMTP key.
+
+```bash
+# blog0.env
+BLOG0_SMTP_HOST=smtp-relay.brevo.com
+BLOG0_SMTP_PORT=587
+BLOG0_SMTP_USER=<brevo-smtp-login>
+BLOG0_SMTP_PASS=<brevo-smtp-key>
+BLOG0_SMTP_FROM=blog0 <newsletter@example.com>
+```
+
+Prove it: sign up with your own address on the public site → the email arrives → the link opens
+"You’re subscribed". The web log has `"event":"newsletter.mail"` with `"transport":"smtp"` and
+`"outcome":"sent"` (an `"outcome":"failed"` line carries the relay's error; the signup itself still
+succeeds and the admin can resend from the subscriber page).
+
+### DNS for the From domain (SPF, DKIM, DMARC)
+
+Without these, Gmail/Yahoo/Outlook junk or reject the mail. All records are on the domain of
+`BLOG0_SMTP_FROM` (and of Listmonk's From address — keep them the same):
+
+| Record | Google Workspace relay | Brevo |
+|---|---|---|
+| **SPF** (TXT on `example.com`; one SPF record per name — merge `include:`s if one exists) | `v=spf1 include:_spf.google.com ~all` | `v=spf1 include:spf.brevo.com ~all` |
+| **DKIM** | Admin console → Apps → Gmail → **Authenticate email** → generate → publish the `google._domainkey` TXT it shows → **Start authentication** | the DKIM records Brevo shows when you authenticate the domain (publish exactly what it lists) |
+| **DMARC** (TXT on `_dmarc.example.com`) | `v=DMARC1; p=none; rua=mailto:dmarc-reports@example.com` | same |
+
+Start DMARC at `p=none`, read the aggregate reports for a couple of weeks, then move to
+`p=quarantine` once SPF/DKIM pass for every legitimate sender. Check a delivered message's headers
+for `spf=pass`, `dkim=pass`, `dmarc=pass`.
+
+### Listmonk beside blog0
+
+`docker-compose.yml` is the reference shape: one Postgres **instance**, Listmonk in **its own
+database** with its own role (`scripts/compose/init-db.sh` does exactly this for the local stack),
+Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private network as
+`http://listmonk:9000`. For production:
+
+1. **Database** — on the blog0 Postgres instance, as a superuser (a strong password, not the dev
+   `listmonk`):
+
+   ```bash
+   psql "$ADMIN_URL" -c "CREATE ROLE listmonk LOGIN PASSWORD '<listmonk-db-password>'" -c 'CREATE DATABASE listmonk OWNER listmonk'
+   ```
+
+2. **Run Listmonk** with the compose service's `command` (install once, idempotent; upgrade; serve)
+   and environment, changing: `LISTMONK_db__host` / `__password` (and `__ssl_mode` if the DB needs
+   TLS) to your instance, `LISTMONK_app__root_url` to Listmonk's **public https URL** (e.g.
+   `https://lists.example.com` — its own unsubscribe/tracking pages use it), and the first-run
+   admin `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD` (a strong password from your secret
+   store; it is only read by the first `--install`). Put it behind the same TLS reverse proxy;
+   restrict `/admin` to operators if you can.
+
+3. **Admin user** — sign in at `https://lists.example.com/admin` with that admin. It is for
+   operators only; blog0 never uses it.
+
+4. **API user + token** — Listmonk v5: admin UI → **Users** → **New** → type **API user**
+   (username e.g. `blog0`, a role that may read and manage subscribers, lists, campaigns,
+   templates and bounces — the local stack uses the install's Super Admin role). The token is
+   shown **once** → store it as `BLOG0_LISTMONK_API_TOKEN`, the username as
+   `BLOG0_LISTMONK_API_USER`. The same steps as API calls (admin login → `GET /api/roles/users` →
+   `POST /api/users {type:'api', …}` → `data.password` is the token) are automated, for the local
+   stack, in `scripts/listmonk-dev.sh` (`pnpm listmonk:up`; its header lists the procedure).
+
+5. **List** — from the ops checkout, with `BLOG0_LISTMONK_URL` (as reachable from that host),
+   `BLOG0_LISTMONK_API_USER` and `BLOG0_LISTMONK_API_TOKEN` set:
+
+   ```bash
+   pnpm newsletter:sync -- --create-list
+   # list blog0 created: id <n> — set BLOG0_LISTMONK_LIST_ID=<n>
+   ```
+
+   It creates (or finds) the private, single opt-in list `blog0`. blog0 never sends to any other
+   list.
+
+6. **Template** — nothing to do: on the first send blog0 creates the campaign template
+   `blog0-issue` (`{{ template "content" . }}` — the issue HTML carries the whole layout, the
+   unsubscribe link and the consent line as subscriber-attribute expressions). Do not edit or
+   delete it.
+
+7. **SMTP inside Listmonk** — admin → Settings → **SMTP**: the relay you chose above
+   (`smtp-relay.gmail.com` or `smtp-relay.brevo.com`, port `587`, TLS **STARTTLS**, auth `none`
+   for an IP-allowlisted Workspace relay or `login` with the same user/password or SMTP key, HELO
+   hostname = your sending host's name). Settings → General: the default **From** address on the
+   same domain as `BLOG0_SMTP_FROM`. Use Listmonk's **Test connection**, then send a campaign to
+   yourself.
+
+8. **Point blog0 at it** — add to the web container's env and restart it:
+
+   ```bash
+   BLOG0_NEWSLETTER_SENDER=listmonk
+   BLOG0_LISTMONK_URL=http://listmonk:9000
+   BLOG0_LISTMONK_API_USER=blog0
+   BLOG0_LISTMONK_API_TOKEN=<token>
+   BLOG0_LISTMONK_LIST_ID=<n>
+   ```
+
+   **Site → Newsletter** now reads "Sender: **Listmonk** · list blog0 · healthy". Push the existing
+   confirmed subscribers once: **Sync to Listmonk** there, or `pnpm newsletter:sync` from the ops
+   checkout (`synced N, blocklisted N, skipped N, N changed`; a second run `… 0 changed`). Every
+   send syncs again first.
+
+9. **Subscribers from before double opt-in** (migration `0002_newsletter` marks them
+   `legacy_unconfirmed`; they never receive issues): once SMTP works, **Site → Newsletter → Send
+   confirmation to all legacy** — each address gets one confirmation email, ever.
+
+### Unsubscribes and bounces back into blog0
+
+- **blog0's own link** — every issue and confirmation email links to
+  `/newsletter/unsubscribe?t=…` (confirmation emails also carry `List-Unsubscribe` +
+  one-click `List-Unsubscribe-Post`). That writes the suppression in blog0 and blocklists the
+  address in Listmonk at once.
+- **Hourly poll** — `pnpm newsletter:tick` pulls Listmonk's **blocklisted** subscribers and
+  **hard bounces / complaints** since the last tick into blog0's suppression ledger (source
+  `provider`), refreshes the stats of issues sent in the last 30 days, creates the digest draft
+  when it is due (sends it only with auto-send on), and prunes IPs older than 12 months. blog0 has
+  no in-process timer — schedule it. It runs from the ops checkout (the image does not carry the
+  script), with a `.env` holding the **same values as the web server** (it validates the whole
+  config: `BLOG0_DATABASE_URL`, `BLOG0_SESSION_SECRET`, `BLOG0_OPENROUTER_API_KEY`,
+  `BLOG0_PUBLIC_BASE_URL`, `BLOG0_SITE_SLUG`, `BLOG0_NEWSLETTER_SENDER`, `BLOG0_LISTMONK_*` with a
+  URL reachable from that host), mode 0600, and the checkout at the deployed version:
+
+  ```cron
+  7 * * * * cd /srv/blog0-repo && pnpm -s newsletter:tick >> /var/log/blog0-newsletter-tick.log 2>&1
+  # digest: not due; suppressions pulled 0; stats refreshed 1; ips pruned 0
+  ```
+
+  Exit 1 = a step failed (the others still ran; the error lines follow) — alert on it.
+- **Bounce processing in Listmonk** — admin → Settings → **Bounces**: enable it (a bounce mailbox
+  over POP, or a supported provider webhook) so hard bounces exist for the poll to pull. Settings →
+  Privacy: keep "Allow blocklisting" on so a subscriber who unsubscribes on Listmonk's own page
+  can blocklist themselves. **Caution:** an unsubscribe that Listmonk records only at list level
+  (subscription `unsubscribed`, subscriber not blocklisted) is not pulled by the poll, and the next
+  sync re-adds a confirmed blog0 subscriber's membership — blog0's own footer link is the
+  unsubscribe path that always holds.
+- **Webhook** (optional) — for a relay or automation that can POST JSON:
+
+  ```bash
+  curl -fsS -X POST https://blog.example.com/api/newsletter/webhook \
+    -H "Authorization: Bearer $BLOG0_NEWSLETTER_WEBHOOK_SECRET" -H 'content-type: application/json' \
+    -d '{"event":"bounce","email":"reader@example.org","reason":"550 mailbox unavailable","providerRef":"<id>"}'
+  # {"ok":true,"data":{"accepted":true}}      ← false (and nothing written) for an unknown address
+  ```
+
+  `event` is `unsubscribe` | `bounce` | `complaint`. Set `BLOG0_NEWSLETTER_WEBHOOK_SECRET`
+  (≥ 24 chars, `openssl rand -base64 32`) on the web server; unset, the endpoint answers 404; a
+  wrong secret answers 401 `WEBHOOK_UNAUTHORIZED`. Idempotent. Listmonk itself does not call it.
+
+### Consent records and IP retention
+
+- Every subscriber keeps its consent text + version, signup/confirmation timestamps, user agent,
+  source page and (behind a trusted proxy, `BLOG0_TRUSTED_PROXY_HOPS`) IP. Events and suppression
+  entries are append-only; a suppression is never removed, so an unsubscribed address is never
+  mailed again unless the person signs up and confirms anew.
+- **IPs are kept 12 months**, then nulled by `pnpm newsletter:tick` (event `ip_pruned`): the
+  subscriber's IPs 12 months after its latest consent or confirmation (a re-signup restarts the
+  clock for the IP it records; an old confirmation's IP still ages out on its own date), and each
+  event's IP 12 months after that event. Without the hourly cron the prune does not run.
+- Proof of consent on request: `/admin/subscribers` → the subscriber page, or **Export audit
+  (JSON)** (every subscriber, event and suppression). Listmonk holds a copy of the consent fields
+  as subscriber attributes, but blog0's export is the record.
+
+### Newsletter backups
+
+`pnpm backup` covers the blog0 database, which includes the whole list, its consent records and
+the suppression ledger (see [Backups](#backups); `rate_limit_bucket` is excluded). The
+**Listmonk database is separate** and not in it. Losing it loses only campaign history and stats —
+the subscribers are rebuilt from blog0 with `pnpm newsletter:sync` (a fresh Listmonk also needs
+steps 4–5 and the SMTP settings again). To keep the history, dump it on the same schedule:
+
+```bash
+pg_dump -Fc -d 'postgres://listmonk:…@<host>:5432/listmonk' -f /srv/backups/listmonk-$(date -u +%Y%m%dT%H%M%SZ).dump
+```
 
 ## Health endpoints
 

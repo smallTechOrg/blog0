@@ -32,12 +32,13 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   // The walks share one database and run in this order (each needs the state the previous one
-  // leaves): tldr → reader → listen → smoke. Project dependencies pin it.
+  // leaves): tldr → reader → listen → smoke → newsletter. Project dependencies pin it.
   projects: [
     { name: 'tldr', testMatch: 'tldr.spec.ts', use: { ...devices['Desktop Chrome'] } },
     { name: 'reader', testMatch: 'reader.spec.ts', dependencies: ['tldr'], use: { ...devices['Desktop Chrome'] } },
     { name: 'listen', testMatch: 'listen.spec.ts', dependencies: ['reader'], use: { ...devices['Desktop Chrome'] } },
     { name: 'smoke', testMatch: 'smoke.spec.ts', dependencies: ['listen'], use: { ...devices['Desktop Chrome'] } },
+    { name: 'newsletter', testMatch: 'newsletter.spec.ts', dependencies: ['smoke'], use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: externalBaseUrl
     ? undefined
@@ -52,6 +53,11 @@ export default defineConfig({
           BLOG0_PUBLIC_BASE_URL: `http://localhost:${E2E_PORT}`,
           BLOG0_LOG_FILE: 'test-results/e2e-server.log',
           BLOG0_STORAGE_DIR: E2E_STORAGE_DIR,
+          // Newsletter: the recording stubs (capabilities newsletter-list / newsletter-issues) — an
+          // already-set (even empty) variable is never overridden by .env, so a configured SMTP relay
+          // or Listmonk in .env is never used by the suite.
+          BLOG0_SMTP_HOST: '',
+          BLOG0_NEWSLETTER_SENDER: 'stub',
         },
         reuseExistingServer: false,
         timeout: 120_000,

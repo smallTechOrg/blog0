@@ -90,7 +90,10 @@ and try-again messages are unchanged.
 
 ### Newsletter link pages `/newsletter/confirm`, `/newsletter/unsubscribe` (Phase 7)
 Server components in the site chrome (`src/app/(site)/newsletter/{confirm,unsubscribe}/page.tsx`,
-`dynamic = 'force-dynamic'`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`, `<title>` "Subscription — blog0").
+`dynamic = 'force-dynamic'`, `Cache-Control: no-store`, `robots: noindex` metadata, `<title>` "Subscription — blog0").
+The "410" (expired / used) and "429" (rate-limited) outcomes below name the outcome, not the HTTP
+status: a page can only answer 200 or a true 404, so both render at 200 (the JSON routes carry
+410 / 429 — `spec/api.md`).
 One `.surface` card centred in `main`: an eyebrow `.tag` ("Newsletter"), a plain `h1` and one
 paragraph, then a `.btn-outline` link **Back to blog0** (`/`). Copy per outcome
 (`spec/api.md` → newsletter): confirm 200 "You’re subscribed." / "Thanks — <brand> issues will
@@ -360,7 +363,8 @@ via `useAdminLoad` keyed on the filter + query.
   pill (`.tag` + modifier: `confirmed` solid, `pending` dashed + "expired" suffix when
   `pendingExpired`, `legacy_unconfirmed` → "Legacy", `unsubscribed`, `bounced`) · Signed up
   (relative, title = ISO) · Confirmed (relative or —) · Source (`footer` + the `sourceUrl` path in
-  `.admin-faint`, or `legacy`) · Synced (✓ with relative time, or —).
+  `.admin-faint`, or `legacy`) · Synced (✓ with relative time, or — ; always — under the stub
+  sender, which never syncs).
 - **Empty**: "No subscribers yet. Signups from the footer form on every public page land here."
   (filtered: "Nothing with that status." / "No address matches.").
 - **Legacy banner** above the table when `counts.legacy_unconfirmed > 0`: the same sentence as the
@@ -383,8 +387,10 @@ via `useAdminLoad` keyed on the filter + query.
   "expired" when past), confirmation emails sent (count), provider id + last sync.
 - **Timeline** (`SubscriberTimeline.tsx`, `<ol>`): every event oldest first — icon by kind,
   label ("Signed up from /p/…", "Confirmation email sent (smtp)", "Confirmed", "Unsubscribed via
-  email link", "Re-subscribed", "Bounced (provider)", "Synced to Listmonk", "IP pruned"), source,
-  actor, time; `details` as a `<details>` JSON block.
+  email link", "Re-subscribed", "Bounced (provider)", "Unsubscribed (provider)", "Synced to
+  Listmonk", "Removed from Listmonk", "IP pruned"), source, actor, time; `details` as a `<details>`
+  JSON block. The two provider entries appear only with the Listmonk sender — the stub sender skips
+  sync, so designer mode and the E2E walk show no sync entry (`spec/architecture.md` §13.3).
 - **Suppression entries** card: a small table (reason, source, when, details) with the caption
   "Append-only — these entries are never removed."; "None" when empty.
 - **Messages** card: confirmation/issue messages sent to this address (kind, subject, transport,
@@ -413,14 +419,18 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
   inline (**Save** → PATCH), posts list with ↑ ↓ ✕ and **Add post** (the compose checklist in an
   `.admin-dialog`); otherwise read-only.
 - **Actions bar**: **Send test to me** (any status; → "Test sent to <email> (<smtp|stub>)";
-  error inline) · **Send** (`draft`/`failed` only; primary; opens `SendDialog.tsx`: "Send to
+  error inline) · **Send** (`draft`/`failed`, or `sending` with `stuckSending`; primary; opens `SendDialog.tsx`: "Send to
   <n> confirmed subscribers?" with the sender line "via Listmonk · list <name>" or "via the stub
   sender — recorded, not delivered", buttons **Send now** / Cancel; while sending the button reads
   "Sending…" and the page polls; result "Sent to <n> subscribers" or the failure card "Couldn’t
-  send: <lastError>" + **Try again**) · **Refresh stats** (sent only) · **Delete draft** (draft
-  only, confirm) · menu **Open preview in new tab** (`…/preview` → a `/admin/newsletter/[id]/preview`
-  route that serves the HTML with `Content-Type: text/html`; admin-gated).
-- **Preview** (`IssuePreview.tsx`): tabs **HTML** / **Text**. HTML = `<iframe sandbox srcdoc={html} title="Issue preview">`
+  send: <lastError>" + **Try again**. When `stuckSending` is true (no progress in `sending` for
+  10 min) the page stops polling and shows the failure card "Couldn’t send: the send has been
+  stuck in Sending for over 10 minutes (the request was interrupted)" + **Try again**) · **Refresh stats** (sent only) · **Delete draft** (draft
+  only, confirm). There is no separate HTML preview page or "open in new tab" route — the preview
+  lives only in the panel below.
+- **Preview** (`IssuePreview.tsx`): loads the JSON `GET /api/admin/newsletter/issues/:id/preview`
+  (`IssuePreviewDto`) and renders it client-side — tabs **HTML** / **Text**. HTML = `<iframe sandbox srcdoc={html} title="Issue preview">`
+  (empty `sandbox`: no scripts, no same-origin, so the email HTML can never reach the admin session)
   sized to its content (600 px column, light and dark toggles that set `color-scheme` on the
   iframe); Text = `<pre>` of `text`. Above it: "Preview uses sample values for the unsubscribe
   link and consent line." Loads `GET …/preview` (re-snapshots a draft — the note "Posts refreshed
@@ -439,6 +449,9 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
 > again later (3 confirmation emails per 24 hours)." (the list/detail DTO has no `retryAt`); the exact
 > "Limit reached — try after <date, time>." appears when the server answers `CONFIRMATION_ALREADY_SENT`.
 > **Assumed (S7.4):** the search `q` joins `status` in the admin URL; CSV export takes the status filter only.
+> **Assumed (S7.4):** no admin-gated HTML preview page route (`/admin/newsletter/[id]/preview`) is
+> built — the JSON preview endpoint rendered into the sandboxed `srcdoc` iframe plus the **Text** tab
+> covers "preview HTML + text"; an admin wanting the raw email uses **Send test to me**.
 > **Assumed (S7.4):** the HTML preview iframe is a fixed 760 px (min 480 px) scrolling frame — an empty
 > `sandbox` (no `allow-same-origin`) cannot be measured to fit its content.
 > **Assumed (S7.4):** "Posts refreshed from their published versions" shows when a draft's `posts`

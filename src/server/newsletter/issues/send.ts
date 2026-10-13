@@ -14,7 +14,7 @@ import type { NewsletterSender } from '../sender/types';
 
 import * as repo from './repo';
 import { postsOf, snapshotPosts } from './snapshot';
-import { issueDetail, issueNotDraft, issueNotFound, renderIssue, siteRowById, type IssueActor } from './service';
+import { isStuckSending, issueDetail, issueNotDraft, issueNotFound, renderIssue, siteRowById, type IssueActor } from './service';
 
 // Sending (spec/architecture.md §13.5 send.ts; capability newsletter-issues.md "Send"): one
 // transaction freezes the bodies and moves the issue `draft|failed → sending` (event
@@ -83,11 +83,12 @@ export async function sendIssue(siteId: string, id: string, actor: IssueActor, o
   const frozen = await db.transaction(async (tx) => {
     const row = await repo.findIssue(tx, siteId, id, true);
     if (!row) throw issueNotFound();
-    if (row.status !== 'draft' && row.status !== 'failed') throw issueNotDraft(row.status, 'sent');
+    const now = options.now ?? new Date();
+    const stuck = isStuckSending(row, now);
+    if (row.status !== 'draft' && row.status !== 'failed' && !stuck) throw issueNotDraft(row.status, 'sent');
     const counts = await listRepo.countsOf(tx, siteId);
     if (counts.confirmed === 0) throw new ApiError('NO_RECIPIENTS', 409, 'There are no confirmed subscribers to send to yet.');
     const siteRow = await siteRowById(tx, siteId);
-    const now = options.now ?? new Date();
     let posts = postsOf(row.posts);
     let html = row.renderedHtml;
     let text = row.renderedText;
@@ -111,7 +112,7 @@ export async function sendIssue(siteId: string, id: string, actor: IssueActor, o
       issueId: row.id,
       kind: 'send_requested',
       actorUserId: actor.userId,
-      details: { recipientCount: counts.confirmed, sender: sender.kind, retry: row.status === 'failed' },
+      details: { recipientCount: counts.confirmed, sender: sender.kind, retry: row.status !== 'draft', ...(stuck ? { stuckSince: row.updatedAt.toISOString() } : {}) },
     });
     return updated;
   });

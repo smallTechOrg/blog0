@@ -4,7 +4,7 @@ import { getConfig } from '../../config';
 import type { NewsletterSubscriberRow, SiteRow } from '../../db/schema';
 
 import { CONFIRM_TOKEN_TTL_MS } from '../constants';
-import { confirmUrl, unsubscribeUrl } from '../links';
+import { confirmUrl, oneClickUnsubscribeUrl, unsubscribeUrl } from '../links';
 import { confirmationEmail } from './templates';
 import { getMailTransport, type MailResult } from './transport';
 
@@ -12,6 +12,7 @@ export { confirmationEmail, esc, type RenderedEmail } from './templates';
 export {
   createMailTransport,
   getMailTransport,
+  listUnsubscribeHeaders,
   MailError,
   mailStatus,
   resetMailTransportForTests,
@@ -47,7 +48,8 @@ export async function sendConfirmationMail(
     kind: 'confirmation',
     subscriberId: subscriber.id,
     confirmUrl: link,
-    unsubscribeUrl: unsubscribe,
+    // The header goes to the RFC 8058 POST endpoint; the body links (above) stay the page.
+    listUnsubscribeUrl: oneClickUnsubscribeUrl(subscriber.id),
     requestId,
   });
 }

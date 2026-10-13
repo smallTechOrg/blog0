@@ -6,6 +6,10 @@
 # it (e.g. a fork PR) the key is the `pending-placeholder` value (so the server still boots),
 # BLOG0_REQUIRE_REAL_KEY=0, and the real-key tests SKIP visibly as "PENDING KEY" — with a
 # workflow warning, never reported as a pass.
+#
+# Listmonk (Phase 7, spec/architecture.md §12.6): the integration job runs `pnpm listmonk:up` (compose)
+# so the Listmonk adapter + sync tests run against a real container; if Docker is unreachable
+# (exit 3) it emits a PENDING DOCKER warning and those tests skip visibly. The e2e job uses the stubs.
 name: ci
 
 on:
@@ -49,7 +53,7 @@ jobs:
       - run: pnpm test:unit
 
   integration:
-    name: integration (postgres:18 + real OpenRouter)
+    name: integration (postgres:18 + Listmonk + real OpenRouter)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -87,6 +91,29 @@ jobs:
         run: |
           pg_dump --version
           pg_restore --version
+      # Listmonk beside the service Postgres (docker-compose.yml: its own postgres on 127.0.0.1:5433 +
+      # listmonk on :9000). Exit 0 → var/listmonk-dev.env (API user, token, list id) is exported for
+      # the rest of the job, so newsletter-listmonk + newsletter-sync run against the real container.
+      # Exit 3 → PENDING DOCKER: those two files skip visibly (never a pass). Anything else fails the job.
+      - name: Start Listmonk (pnpm listmonk:up)
+        run: |
+          set +e
+          pnpm listmonk:up
+          code=$?
+          set -e
+          if [ "$code" = "3" ]; then
+            echo "::warning::PENDING DOCKER — pnpm listmonk:up could not reach Docker; the Listmonk integration tests (newsletter-listmonk, newsletter-sync) skip"
+            exit 0
+          fi
+          if [ "$code" != "0" ]; then exit "$code"; fi
+          while IFS='=' read -r name value; do
+            case "$name" in
+              BLOG0_LISTMONK_*)
+                if [ "$name" = "BLOG0_LISTMONK_API_TOKEN" ]; then echo "::add-mask::$value"; fi
+                echo "$name=$value" >> "$GITHUB_ENV"
+                ;;
+            esac
+          done < var/listmonk-dev.env
       - run: pnpm db:create
       - run: pnpm db:migrate
       - run: pnpm db:verify
@@ -94,6 +121,12 @@ jobs:
       - name: PENDING KEY warning
         if: env.HAS_OPENROUTER_KEY != 'true'
         run: echo "::warning::PENDING KEY — real-key tests were skipped (no OPENROUTER_API_KEY secret)"
+      - name: Listmonk logs on failure
+        if: failure()
+        run: docker compose logs --tail 100 listmonk || true
+      - name: Stop Listmonk (pnpm listmonk:down)
+        if: always()
+        run: pnpm listmonk:down || true
 
   e2e:
     name: e2e (production build + designer mode)

@@ -514,6 +514,38 @@ describe('send through the stub sender', () => {
     expect(retried.events.filter((ev) => ev.kind === 'provider_created')).toHaveLength(1);
   });
 
+  it('R1: an issue stuck in `sending` (no progress for 10 min) can be retried — fresh `sending` → 409; stale → Try again reuses the campaign → sent', async () => {
+    await addSubscriber('r@example.test', 'confirmed');
+    const article = await publishNew('Stuck');
+    const issue = data((await createIssue({ title: 'Stuck', articleIds: [article.id] })).env).issue;
+    const flaky = new FlakySender();
+    flaky.failStart = true;
+    resetNewsletterSenderForTests(flaky);
+    await send(issue.id); // campaign created, bodies frozen, then failed at start
+    flaky.failStart = false;
+    // what a crashed process leaves behind: `sending`, never settled
+    const setSending = (agoMs: number) =>
+      getDb().update(newsletterIssue).set({ status: 'sending', lastError: null, updatedAt: new Date(Date.now() - agoMs) }).where(eq(newsletterIssue.id, issue.id));
+
+    await setSending(9 * 60_000);
+    const fresh = data((await getIssue(issue.id)).env).issue;
+    expect(fresh).toMatchObject({ status: 'sending', stuckSending: false });
+    const refused = await send(issue.id);
+    expect(refused.status).toBe(409);
+    expect(err(refused.env).code).toBe('ISSUE_NOT_DRAFT');
+
+    await setSending(11 * 60_000);
+    expect(data((await getIssue(issue.id)).env).issue).toMatchObject({ status: 'sending', stuckSending: true });
+    const retried = data((await send(issue.id)).env).issue;
+    expect(retried).toMatchObject({ status: 'sent', stuckSending: false, lastError: null });
+    expect(flaky.createCalls).toBe(1); // the campaign created before the crash is reused
+    const requested = retried.events.filter((ev) => ev.kind === 'send_requested');
+    expect(requested.at(-1)!.details).toMatchObject({ retry: true, stuckSince: expect.any(String) });
+    expect(await issueMessages(issue.id)).toHaveLength(1);
+    // a sent issue is never "stuck"
+    expect((await send(issue.id)).status).toBe(409);
+  });
+
   it('an unhealthy listmonk sender → 503 SENDER_UNAVAILABLE naming the host only; the issue is untouched', async () => {
     await addSubscriber('r@example.test', 'confirmed');
     const article = await publishNew('Down');
@@ -609,7 +641,7 @@ describe('settings and status', () => {
     await addSubscriber('u@example.test', 'unsubscribed');
     const ok = await call<NewsletterSyncResponse>(syncRoute, 'POST', '/api/admin/newsletter/sync', { body: { confirm: true } });
     const no = await call(syncRoute, 'POST', '/api/admin/newsletter/sync', { body: {} });
-    expect(data(ok.env)).toEqual({ synced: 0, blocklisted: 0, skipped: 2, changed: 0, errors: [] });
+    expect(data(ok.env)).toEqual({ synced: 0, blocklisted: 0, skipped: 2, suppressedFromProvider: 0, changed: 0, errors: [] });
     expect(no.status).toBe(400);
     expect((await getDb().select().from(newsletterSubscriber)).every((s) => s.providerSyncedAt === null)).toBe(true);
   });

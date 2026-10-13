@@ -12,6 +12,8 @@ import { signUnsubscribeToken } from './tokens';
 
 export const CONFIRM_PATH = '/newsletter/confirm';
 export const UNSUBSCRIBE_PATH = '/newsletter/unsubscribe';
+/** RFC 8058 one-click target: the POST endpoint itself (a GET there 303s to the page). */
+export const ONE_CLICK_UNSUBSCRIBE_PATH = '/api/newsletter/unsubscribe';
 
 function base(): string {
   return getConfig().publicBaseUrl.replace(/\/+$/, '');
@@ -24,6 +26,19 @@ export function confirmUrl(token: string): string {
 /** The subscriber's permanent one-click unsubscribe link (signed with the session secret). */
 export function unsubscribeUrl(subscriberId: string): string {
   return `${base()}${UNSUBSCRIBE_PATH}?t=${encodeURIComponent(unsubscribeToken(subscriberId))}`;
+}
+
+/**
+ * The `List-Unsubscribe` header target (RFC 8058): mail providers POST `List-Unsubscribe=One-Click`
+ * straight to this URL, so it must be the API route, not the page. Visible links stay `unsubscribeUrl`.
+ */
+export function oneClickUnsubscribeUrl(subscriberId: string): string {
+  return `${base()}${ONE_CLICK_UNSUBSCRIBE_PATH}?t=${encodeURIComponent(unsubscribeToken(subscriberId))}`;
+}
+
+/** The page link for a token already in hand (the GET fallback of the one-click URL). */
+export function unsubscribePageUrl(token: string): string {
+  return `${base()}${UNSUBSCRIBE_PATH}?t=${encodeURIComponent(token)}`;
 }
 
 export function unsubscribeToken(subscriberId: string): string {

@@ -52,6 +52,13 @@ export interface SenderSuppression {
   details: Record<string, unknown>;
 }
 
+export interface SenderSyncResult {
+  providerId: string;
+  changed: boolean;
+  /** Set only when a provider-side opt-out won: the caller records it in blog0 (`suppressByEmail`, source `provider`). */
+  optOut?: SenderSuppression;
+}
+
 export interface SenderHealth {
   ok: boolean;
   message: string;
@@ -61,8 +68,10 @@ export interface SenderHealth {
 export interface NewsletterSender {
   readonly kind: 'listmonk' | 'stub';
   healthcheck(): Promise<SenderHealth>;
-  /** Upsert, idempotent: `changed` is false when nothing differed at the provider. */
-  syncSubscriber(s: SenderSubscriber): Promise<{ providerId: string; changed: boolean }>;
+  /** Upsert, idempotent: `changed` is false when nothing differed at the provider. For an `enabled`
+   *  input whose provider copy carries an opt-out (blocklist / list-level unsubscribe) newer than the
+   *  attribs' consent / confirmation, nothing is written and `optOut` reports it (sender/opt-out.ts). */
+  syncSubscriber(s: SenderSubscriber): Promise<SenderSyncResult>;
   /** Blocklist — never delete; an address unknown to the provider → `changed: false`. */
   removeSubscriber(email: string): Promise<{ changed: boolean }>;
   createIssue(i: SenderIssue): Promise<{ campaignId: string }>;

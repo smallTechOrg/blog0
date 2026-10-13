@@ -137,9 +137,9 @@ export function eventLabel(ev: SubscriberEventDto): string {
     case 'bounced':
       return `Bounced (${ev.source})`;
     case 'provider_synced':
-      return str(d, 'provider') === 'stub' ? 'Synced (stub)' : 'Synced to Listmonk';
+      return 'Synced to Listmonk';
     case 'provider_removed':
-      return str(d, 'provider') === 'stub' ? 'Removed (stub)' : 'Removed from Listmonk';
+      return 'Removed from Listmonk';
     case 'ip_pruned':
       return 'IP pruned';
     default:

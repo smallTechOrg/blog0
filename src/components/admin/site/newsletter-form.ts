@@ -173,6 +173,7 @@ export function digestHint(digest: NewsletterStatusDto['digest'], timeZone: stri
   return `Next digest: ${due} · ${posts}${since}`;
 }
 
-export function syncResultLine(r: { synced: number; blocklisted: number; skipped: number; changed: number }): string {
-  return `Synced ${r.synced}, blocklisted ${r.blocklisted}, ${r.changed} changed` + (r.skipped ? ` (${r.skipped} skipped)` : '');
+export function syncResultLine(r: { synced: number; blocklisted: number; skipped: number; changed: number; suppressedFromProvider?: number }): string {
+  const optedOut = r.suppressedFromProvider ? ` · ${r.suppressedFromProvider} unsubscribed at the provider (not re-added)` : '';
+  return `Synced ${r.synced}, blocklisted ${r.blocklisted}, ${r.changed} changed` + (r.skipped ? ` (${r.skipped} skipped)` : '') + optedOut;
 }

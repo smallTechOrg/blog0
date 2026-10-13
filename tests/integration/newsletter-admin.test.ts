@@ -6,7 +6,7 @@ import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { and, eq } from 'drizzle-orm';
+import { and, sql as dsql, eq } from 'drizzle-orm';
 import postgres from 'postgres';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -24,15 +24,19 @@ import type {
   SubscriberDetailResponse,
   SubscriberListResponse,
 } from '@/lib/api/dto';
-import { closeDb, getDb } from '@/server/db/client';
+import { closeDb, getDb, rowsOf } from '@/server/db/client';
 import { MIGRATIONS_FOLDER, getMigrationStatus, readJournal, runMigrations } from '@/server/db/migrate';
 import { newsletterMessage, newsletterSubscriber, newsletterSubscriberEvent, newsletterSuppression, type SiteRow } from '@/server/db/schema';
 import { subscribersToCsv } from '@/server/newsletter/audit';
 import { IP_RETENTION_MS } from '@/server/newsletter/constants';
 import { MailError, resetMailTransportForTests, type MailTransport } from '@/server/newsletter/mail';
+import { sendLegacyConfirmation } from '@/server/newsletter/legacy';
 import { pruneIps } from '@/server/newsletter/prune';
 import { resetNewsletterRateLimiterForTests } from '@/server/newsletter/rate-limit';
-import { confirmByToken, subscribe } from '@/server/newsletter/service';
+import { runTick } from '@/server/newsletter/issues/tick';
+import { unsubscribeToken } from '@/server/newsletter/links';
+import { StubNewsletterSender } from '@/server/newsletter/sender';
+import { confirmByToken, subscribe, unsubscribeByToken } from '@/server/newsletter/service';
 import { resetCurrentSiteForTests } from '@/server/site/current';
 
 import { call, data, err, ORIGIN } from '../helpers/api';
@@ -103,10 +107,10 @@ describe('migration 0002_newsletter on a Phase 2 database', () => {
       await pg`insert into newsletter_subscriber (site_id, email, status) values (${site.id}, 'old-gone@example.com', 'unsubscribed')`;
 
       const applied = await runMigrations(url);
-      expect(applied).toEqual(['0002_newsletter']);
+      expect(applied).toEqual(['0002_newsletter', '0003_newsletter_prune_fix']);
       const status = await getMigrationStatus(url);
-      expect(status.applied).toHaveLength(3);
-      expect(status.latestApplied).toBe('0002_newsletter');
+      expect(status.applied).toHaveLength(4);
+      expect(status.latestApplied).toBe('0003_newsletter_prune_fix');
       expect(status.pending).toEqual([]);
     } finally {
       await pg.end({ timeout: 5 });
@@ -376,6 +380,48 @@ describe('subscriber detail, send-confirmation and admin unsubscribe', () => {
   });
 });
 
+describe('legacy one-time confirmation under concurrency (R4)', () => {
+  async function legacyRow(email: string) {
+    const [r] = await getDb().insert(newsletterSubscriber).values({ siteId: currentSite.id, email, status: 'legacy_unconfirmed', source: 'legacy' }).returning();
+    return r;
+  }
+
+  it('two racing sends (a click + "send all", or a double click) mail once: one 200, one 409 CONFIRMATION_ALREADY_SENT; one message, one event', async () => {
+    const legacy = await legacyRow('legacy-race@example.com');
+    const outcomes = await Promise.allSettled([sendLegacyConfirmation(currentSite.id, legacy, { userId: admin.user.id }), sendLegacyConfirmation(currentSite.id, legacy, { userId: admin.user.id })]);
+    expect(outcomes.filter((o) => o.status === 'fulfilled')).toHaveLength(1);
+    const rejected = outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: 'CONFIRMATION_ALREADY_SENT', status: 409 });
+    expect(await getDb().select().from(newsletterMessage).where(eq(newsletterMessage.subscriberId, legacy.id))).toHaveLength(1);
+    const evs = await getDb().select().from(newsletterSubscriberEvent).where(eq(newsletterSubscriberEvent.subscriberId, legacy.id));
+    expect(evs.map((e) => e.kind)).toEqual(['legacy_confirmation_sent']);
+    expect(await row('legacy-race@example.com')).toMatchObject({ confirmationSentCount: 1 });
+
+    // a stale in-memory row (legacyConfirmationSentAt still null) is re-checked under the lock
+    await expect(sendLegacyConfirmation(currentSite.id, legacy, { userId: admin.user.id })).rejects.toMatchObject({ code: 'CONFIRMATION_ALREADY_SENT' });
+    expect(await getDb().select().from(newsletterMessage).where(eq(newsletterMessage.subscriberId, legacy.id))).toHaveLength(1);
+  });
+
+  it('a mail failure releases the claim: the row is exactly as before (MAIL_FAILED changes nothing) and a later send works', async () => {
+    const legacy = await legacyRow('legacy-fail@example.com');
+    const before = await row('legacy-fail@example.com');
+    resetMailTransportForTests({
+      kind: 'smtp',
+      send: async () => {
+        throw new MailError('smtp', 'relay down');
+      },
+    });
+    await expect(sendLegacyConfirmation(currentSite.id, legacy, { userId: admin.user.id })).rejects.toMatchObject({ code: 'MAIL_FAILED', status: 502 });
+    expect(await row('legacy-fail@example.com')).toEqual(before);
+    expect(await getDb().select().from(newsletterSubscriberEvent).where(eq(newsletterSubscriberEvent.subscriberId, legacy.id))).toHaveLength(0);
+
+    resetMailTransportForTests();
+    const ok = await sendLegacyConfirmation(currentSite.id, legacy, { userId: admin.user.id });
+    expect(ok.subscriber.legacyConfirmationSentAt).not.toBeNull();
+    expect(ok.subscriber.confirmTokenHash).not.toBeNull();
+  });
+});
+
 describe('IP retention (pruneIps — pnpm newsletter:tick)', () => {
   it('13 months after confirmation nulls signup_ip / confirmed_ip on the row and its events, appends ip_pruned, keeps UA/source/consent; a second run changes nothing; young rows untouched', async () => {
     const t0 = new Date('2025-09-01T00:00:00Z');
@@ -408,5 +454,100 @@ describe('IP retention (pruneIps — pnpm newsletter:tick)', () => {
     const second = await pruneIps(now);
     expect(second).toEqual({ pruned: 0, eventRows: 0 });
     expect((await getDb().select().from(newsletterSubscriberEvent).where(eq(newsletterSubscriberEvent.subscriberId, o.id))).length).toBe(4);
+  });
+
+  /** Confirmed two years ago (IPs on the row + events), unsubscribed 23 months ago (IP on the event), re-signed up `today` with a fresh IP. */
+  async function oldThenResignup(email: string, today: Date) {
+    const t0 = new Date(today.getTime() - 2 * IP_RETENTION_MS);
+    await subscribe({ ip: '198.51.100.1', userAgent: 'Old UA', now: t0 }, { email, name: null, sourceUrl: '/old' });
+    const tok = new URL(logs.find('newsletter.mail').at(-1)!.confirm_url as string).searchParams.get('t') as string;
+    await confirmByToken(tok, { ip: '198.51.100.2', userAgent: 'Old Mail', now: new Date(t0.getTime() + 60_000) });
+    const id = (await row(email)).id;
+    await unsubscribeByToken(unsubscribeToken(id), 'email_link', { ip: '198.51.100.3', userAgent: 'Old Mail', now: new Date(t0.getTime() + 30 * 86_400_000) });
+    await subscribe({ ip: '203.0.113.77', userAgent: 'New UA', now: today }, { email, name: null, sourceUrl: '/new' });
+    return { id, t0 };
+  }
+
+  async function eventsOf(id: string) {
+    return getDb().select().from(newsletterSubscriberEvent).where(eq(newsletterSubscriberEvent.subscriberId, id)).orderBy(newsletterSubscriberEvent.createdAt, newsletterSubscriberEvent.id);
+  }
+
+  it('B3: confirmed 2 years ago → unsubscribed → re-signup today with an IP → the prune keeps the new signup_ip and the new signup event IP, nulls the old event IPs and the old confirmed_ip', async () => {
+    const today = new Date();
+    const { id } = await oldThenResignup('back-again@example.com', today);
+    const before = await row('back-again@example.com');
+    expect(before).toMatchObject({ status: 'pending', signupIp: '203.0.113.77', confirmedIp: '198.51.100.2' });
+
+    const first = await pruneIps(today);
+
+    expect(first).toEqual({ pruned: 1, eventRows: 4 }); // old signup + confirmation_sent + confirmed + unsubscribed
+    const after = await row('back-again@example.com');
+    expect(after).toMatchObject({ signupIp: '203.0.113.77', confirmedIp: null, signupUserAgent: 'New UA', confirmedUserAgent: 'Old Mail', status: 'pending' });
+    expect(after.ipPrunedAt?.toISOString()).toBe(today.toISOString());
+    const evs = await eventsOf(id);
+    const fresh = evs.filter((e) => e.createdAt.getTime() >= today.getTime() && e.kind !== 'ip_pruned');
+    const old = evs.filter((e) => e.createdAt.getTime() < today.getTime());
+    expect(old.map((e) => e.kind)).toEqual(['signup', 'confirmation_sent', 'confirmed', 'unsubscribed']);
+    expect(old.every((e) => e.ip === null)).toBe(true);
+    expect(old[0].userAgent).toBe('Old UA'); // only `ip` is touched
+    expect(fresh.find((e) => e.kind === 'signup')).toMatchObject({ ip: '203.0.113.77', userAgent: 'New UA' });
+    expect(evs.find((e) => e.kind === 'ip_pruned')).toMatchObject({ source: 'system', details: { hadSignupIp: false, hadConfirmedIp: true, eventRows: 4 } });
+
+    // idempotent; and a year later the re-signup's own IPs age out too
+    expect(await pruneIps(today)).toEqual({ pruned: 0, eventRows: 0 });
+    const nextYear = new Date(today.getTime() + IP_RETENTION_MS + 86_400_000);
+    const later = await pruneIps(nextYear);
+    expect(later.pruned).toBe(1);
+    expect(later.eventRows).toBeGreaterThanOrEqual(1);
+    expect(await row('back-again@example.com')).toMatchObject({ signupIp: null, confirmedIp: null });
+    expect((await eventsOf(id)).every((e) => e.ip === null)).toBe(true);
+  });
+
+  it('B3 boundary: an event exactly at the bar is kept; one 1 ms older is nulled (newsletter_prune_event_ips(p_before) is strict)', async () => {
+    const now = new Date();
+    const bar = new Date(now.getTime() - IP_RETENTION_MS);
+    await subscribe({ ip: '192.0.2.1', userAgent: 'u', now: new Date(bar.getTime() - 1) }, { email: 'edge-old@example.com', name: null, sourceUrl: '/' });
+    await subscribe({ ip: '192.0.2.2', userAgent: 'u', now: bar }, { email: 'edge-at@example.com', name: null, sourceUrl: '/' });
+    await pruneIps(now);
+    const oldEv = await eventsOf((await row('edge-old@example.com')).id);
+    const atEv = await eventsOf((await row('edge-at@example.com')).id);
+    expect(oldEv.find((e) => e.kind === 'signup')!.ip).toBeNull();
+    expect((await row('edge-old@example.com')).signupIp).toBeNull();
+    expect(atEv.find((e) => e.kind === 'signup')!.ip).toBe('192.0.2.2');
+    expect((await row('edge-at@example.com')).signupIp).toBe('192.0.2.2');
+  });
+
+  it('B3 via the tick path: runTick (stub sender) prunes the same way and reports ips_pruned', async () => {
+    const today = new Date();
+    const { id } = await oldThenResignup('tick-back@example.com', today);
+    const sender = new StubNewsletterSender({ recordToDb: false });
+
+    const tick = await runTick(currentSite.id, { now: today, sender });
+
+    expect(tick.errors).toEqual([]);
+    expect(tick.ipsPruned).toBe(1);
+    expect(await row('tick-back@example.com')).toMatchObject({ signupIp: '203.0.113.77', confirmedIp: null });
+    const evs = await eventsOf(id);
+    expect(evs.filter((e) => e.createdAt.getTime() < today.getTime()).every((e) => e.ip === null)).toBe(true);
+    expect(evs.find((e) => e.kind === 'signup' && e.createdAt.getTime() === today.getTime())!.ip).toBe('203.0.113.77');
+    expect(logs.find('newsletter.tick').at(-1)).toMatchObject({ ips_pruned: 1 });
+    expect((await runTick(currentSite.id, { now: today, sender })).ipsPruned).toBe(0);
+  });
+
+  it('B3 error path: the old one-argument prune function is gone (no caller can null every event IP)', async () => {
+    const r = await subscribe({ ip: '192.0.2.9', userAgent: 'u' }, { email: 'fn@example.com', name: null, sourceUrl: '/' });
+    let caught: unknown = null;
+    try {
+      await getDb().execute(dsql`select newsletter_prune_event_ips(${r.subscriber.id}::uuid)`);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).not.toBeNull();
+    expect((await row('fn@example.com')).signupIp).toBe('192.0.2.9');
+    // R5: the SECURITY DEFINER function pins its search_path
+    const list = rowsOf<{ args: string; prosecdef: boolean; proconfig: string[] | null }>(
+      await getDb().execute(dsql`select pg_get_function_identity_arguments(oid) as args, prosecdef, proconfig from pg_proc where proname = 'newsletter_prune_event_ips'`),
+    );
+    expect(list).toEqual([{ args: 'p_subscriber_id uuid, p_before timestamp with time zone', prosecdef: true, proconfig: ['search_path=public, pg_temp'] }]);
   });
 });

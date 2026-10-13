@@ -128,16 +128,73 @@ describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker
     createdEmails.add(c.email);
     const blocked = await sender.syncSubscriber(c);
     expect(blocked.changed).toBe(true);
-    expect((await raw.subscriberByEmail(c.email))!.status).toBe('blocklisted');
+    const blockedRow = (await raw.subscriberByEmail(c.email))!;
+    expect(blockedRow.status).toBe('blocklisted');
+    expect(blockedRow.lists).toEqual([]); // a suppressed row never gets a list membership — blocklist only
     expect(await sender.syncSubscriber(c)).toEqual({ providerId: blocked.providerId, changed: false });
 
-    // re-confirmation in blog0 → enabled again, and the list subscription is confirmed again
-    const again = await sender.syncSubscriber(s);
+    // blog0's own blocklists carry the blog0 marker (they mirror a blog0 suppression, not a provider opt-out)
+    expect((await raw.subscriberByEmail(s.email))!.attribs.blog0_blocklisted_at).toEqual(expect.any(String));
+    expect(blockedRow.attribs.blog0_blocklisted_at).toEqual(expect.any(String));
+
+    // re-confirmation in blog0 → enabled again, and the list subscription is confirmed again (blog0's own
+    // blocklist never blocks blog0's later confirmation, whatever the clocks say); the marker is dropped
+    const reconfirmed = s;
+    const again = await sender.syncSubscriber(reconfirmed);
     expect(again.changed).toBe(true);
+    expect(again.optOut).toBeUndefined();
     const row = await raw.subscriberByEmail(s.email);
     expect(row!.status).toBe('enabled');
     expect(row!.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'confirmed' })]);
-    expect(await sender.syncSubscriber(s)).toEqual({ providerId: again.providerId, changed: false });
+    expect(row!.attribs.blog0_blocklisted_at).toBeUndefined();
+    expect(await sender.syncSubscriber(reconfirmed)).toEqual({ providerId: again.providerId, changed: false });
+  });
+
+  it('a list-level unsubscribe at Listmonk (subscriber stays enabled) → fetchSuppressions reports it; syncSubscriber never re-adds over it unless blog0 re-confirmed later', async () => {
+    const f = subscriber('f', { attribs: { ...subscriber('f').attribs, consented_at: new Date(Date.now() - 3_600_000).toISOString(), confirmed_at: new Date(Date.now() - 3_600_000).toISOString() } });
+    createdEmails.add(f.email);
+    const { providerId } = await sender.syncSubscriber(f);
+    const since = new Date();
+    await new Promise((r) => setTimeout(r, 50));
+    // what Listmonk does for the List-Unsubscribe header / its own unsubscribe page (no blocklist)
+    await raw.call('PUT', '/api/subscribers/lists', { ids: [Number(providerId)], action: 'unsubscribe', target_list_ids: [env.listId] });
+    const remote = (await raw.subscriberByEmail(f.email))!;
+    expect(remote.status).toBe('enabled');
+    expect(remote.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'unsubscribed' })]);
+
+    const found = (await sender.fetchSuppressions(since)).filter((x) => x.email === f.email);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ reason: 'unsubscribed', details: { providerId, providerStatus: 'enabled', optOut: 'list_unsubscribed', listId: env.listId } });
+    expect(found[0]!.at.getTime()).toBeGreaterThan(since.getTime());
+    expect((await sender.fetchSuppressions(new Date(Date.now() + 60_000))).some((x) => x.email === f.email)).toBe(false);
+
+    // blog0's confirmation (an hour ago) is older than the opt-out: no re-add, no write, the opt-out is handed back
+    const logs = captureLogs();
+    try {
+      const refused = await sender.syncSubscriber(f);
+      expect(refused).toEqual({ providerId, changed: false, optOut: expect.objectContaining({ email: f.email, reason: 'unsubscribed', at: found[0]!.at }) });
+      expect(logs.find('newsletter.provider').filter((l) => l.method === 'PUT')).toEqual([]);
+      expect(logs.find('newsletter.provider').some((l) => l.outcome === 'provider_opt_out' && l.optOut === 'list_unsubscribed')).toBe(true);
+    } finally {
+      logs.stop();
+    }
+    expect((await raw.subscriberByEmail(f.email))!.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'unsubscribed' })]);
+    // an attribute change does not sneak a re-add through either
+    const rotated = { ...f, attribs: { ...f.attribs, blog0_unsubscribe_url: 'http://localhost:3410/newsletter/unsubscribe?t=f2' } };
+    expect((await sender.syncSubscriber(rotated)).optOut).toBeDefined();
+    expect((await raw.subscriberByEmail(f.email))!.attribs.blog0_unsubscribe_url).toBe(f.attribs.blog0_unsubscribe_url);
+
+    // a fresh double opt-in in blog0 after the opt-out → re-added, confirmed (1.1 s: the container's
+    // clock runs up to ~100 ms apart from the host's)
+    await new Promise((r) => setTimeout(r, 1100));
+    const fresh = new Date().toISOString();
+    const reconfirmed = { ...f, attribs: { ...f.attribs, consented_at: fresh, confirmed_at: fresh } };
+    expect(await sender.syncSubscriber(reconfirmed)).toEqual({ providerId, changed: true });
+    const back = (await raw.subscriberByEmail(f.email))!;
+    expect(back.status).toBe('enabled');
+    expect(back.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'confirmed' })]);
+    expect((await sender.fetchSuppressions(since)).some((x) => x.email === f.email)).toBe(false);
+    expect(await sender.syncSubscriber(reconfirmed)).toEqual({ providerId, changed: false });
   });
 
   it('createIssue + sendIssue → a campaign on the blog0 template, running/finished within 60 s; sendIssue is idempotent; fetchStats returns numbers', async () => {
@@ -200,6 +257,32 @@ describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker
     expect(stats.recipients).toBeGreaterThanOrEqual(1);
   });
 
+  it('an issue whose title / body carry literal Go-template braces ({{ x }}) → createIssue succeeds and Listmonk renders them literally (B4)', async () => {
+    const title = `Templating with {{ x }} and }} {{ ${run}`;
+    const issue = {
+      issueId: `22222222-2222-4333-8444-${run.padStart(12, '0').slice(-12)}`,
+      number: 77,
+      subject: title,
+      html: `<h1>${title}</h1><p>Use {{ .Subscriber.Email }} in a template.</p><p><a href="${UNSUBSCRIBE_PLACEHOLDER}">Unsubscribe</a></p><p>${CONSENT_PLACEHOLDER}</p>`,
+      text: `${title}\nUse {{ .Subscriber.Email }} in a template.\nUnsubscribe: ${UNSUBSCRIBE_PLACEHOLDER}\n${CONSENT_PLACEHOLDER}\n`,
+    };
+    const { campaignId } = await sender.createIssue(issue);
+    createdCampaigns.add(campaignId);
+    const created = await raw.campaign(campaignId);
+    // Baseline: the same body unescaped is refused by Listmonk's template compiler (what B4 fixed).
+    await expect(
+      raw.call('POST', '/api/campaigns', { name: `raw ${run}`, subject: 'raw', lists: [env.listId], type: 'regular', content_type: 'html', body: issue.html, template_id: created.template_id }),
+    ).rejects.toThrow(/→ 400/);
+    expect(created.body).toContain('{{ "{{" }} x {{ "}}" }}');
+    expect(created.body).toContain('{{ .Subscriber.Attribs.blog0_unsubscribe_url }}');
+
+    const preview = await raw.previewCampaign(campaignId);
+    expect(preview).toContain(`<h1>${title}</h1>`);
+    expect(preview).toContain('Use {{ .Subscriber.Email }} in a template.');
+    expect(preview).not.toContain('{{ "{{" }}');
+    expect(preview).not.toContain('%%BLOG0_');
+  });
+
   it('fetchSuppressions(since) lists the blocklisted address as unsubscribed (and not those blocklisted before `since`)', async () => {
     const e = subscriber('e');
     createdEmails.add(e.email);
@@ -208,7 +291,8 @@ describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker
     await new Promise((r) => setTimeout(r, 1100));
     const since = new Date();
     await new Promise((r) => setTimeout(r, 1100));
-    await sender.removeSubscriber(e.email);
+    // a blocklist made at Listmonk (its admin UI / API), not by blog0
+    await raw.call('PUT', '/api/subscribers/blocklist', { ids: [(await raw.subscriberByEmail(e.email))!.id] });
 
     const recent = await sender.fetchSuppressions(since);
     const mine = recent.find((s) => s.email === e.email);
@@ -220,6 +304,36 @@ describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker
     expect(earlier.some((s) => s.email === e.email)).toBe(true);
     const future = await sender.fetchSuppressions(new Date(Date.now() + 60_000));
     expect(future.some((s) => s.email === e.email)).toBe(false);
+
+    // blog0's own blocklist (removeSubscriber) is blog0's state mirrored — never pulled back as a provider event
+    const own = subscriber('e2');
+    createdEmails.add(own.email);
+    await sender.syncSubscriber(own);
+    await sender.removeSubscriber(own.email);
+    expect((await raw.subscriberByEmail(own.email))!.status).toBe('blocklisted');
+    expect((await sender.fetchSuppressions(before)).some((s) => s.email === own.email)).toBe(false);
+  });
+
+  it('a blocklist made at Listmonk newer than blog0\'s confirmation → syncSubscriber refuses to re-enable and reports it; a newer blog0 confirmation re-enables + re-adds', async () => {
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const g = subscriber('g', { attribs: { ...subscriber('g').attribs, consented_at: hourAgo, confirmed_at: hourAgo } });
+    createdEmails.add(g.email);
+    const { providerId } = await sender.syncSubscriber(g);
+    await raw.call('PUT', '/api/subscribers/blocklist', { ids: [Number(providerId)] });
+
+    const refused = await sender.syncSubscriber(g);
+    expect(refused).toMatchObject({ providerId, changed: false, optOut: { email: g.email, reason: 'unsubscribed', details: { optOut: 'blocklisted', providerStatus: 'blocklisted' } } });
+    const still = (await raw.subscriberByEmail(g.email))!;
+    expect(still.status).toBe('blocklisted');
+    expect(still.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'unsubscribed' })]);
+
+    await new Promise((r) => setTimeout(r, 1100)); // container clock skew (see above)
+    const fresh = new Date().toISOString();
+    const reconfirmed = { ...g, attribs: { ...g.attribs, consented_at: fresh, confirmed_at: fresh } };
+    expect(await sender.syncSubscriber(reconfirmed)).toEqual({ providerId, changed: true });
+    const back = (await raw.subscriberByEmail(g.email))!;
+    expect(back.status).toBe('enabled');
+    expect(back.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'confirmed' })]);
   });
 
   it('error paths: bad token → SenderError HTTP 403, unknown campaign → HTTP 400, closed port → UNAVAILABLE after one retry', async () => {

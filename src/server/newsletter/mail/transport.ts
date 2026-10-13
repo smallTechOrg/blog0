@@ -23,8 +23,9 @@ export interface MailMessage {
   issueId?: string;
   /** Stub only: logged in clear so the signup → confirm walk runs with nothing configured. */
   confirmUrl?: string;
-  /** Confirmation messages: `List-Unsubscribe` + RFC 8058 one-click headers point here. */
-  unsubscribeUrl?: string;
+  /** Confirmation messages: the `List-Unsubscribe` + RFC 8058 one-click header target — the POST
+   *  endpoint (`oneClickUnsubscribeUrl`), never the page. */
+  listUnsubscribeUrl?: string;
   requestId?: string;
 }
 
@@ -100,6 +101,12 @@ export class StubTransport implements MailTransport {
   }
 }
 
+/** RFC 2369 + RFC 8058 headers for a one-click unsubscribe target (none without one). */
+export function listUnsubscribeHeaders(url: string | undefined): Record<string, string> {
+  if (!url) return {};
+  return { 'List-Unsubscribe': `<${url}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' };
+}
+
 export class SmtpTransport implements MailTransport {
   readonly kind = 'smtp' as const;
   readonly #from: string;
@@ -120,11 +127,7 @@ export class SmtpTransport implements MailTransport {
 
   async send(msg: MailMessage): Promise<MailResult> {
     const started = performance.now();
-    const headers: Record<string, string> = {};
-    if (msg.unsubscribeUrl) {
-      headers['List-Unsubscribe'] = `<${msg.unsubscribeUrl}>`;
-      headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
-    }
+    const headers = listUnsubscribeHeaders(msg.listUnsubscribeUrl);
     let providerMessageId: string | null = null;
     let failure: unknown = null;
     try {

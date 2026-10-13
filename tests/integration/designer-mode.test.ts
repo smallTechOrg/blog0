@@ -111,10 +111,10 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
     const applied = await runMigrations(getDbHandle());
     const status = await getMigrationStatus(getDbHandle());
 
-    expect(applied).toEqual(['0000_init', '0001_rate_limit_bucket', '0002_newsletter']);
+    expect(applied).toEqual(['0000_init', '0001_rate_limit_bucket', '0002_newsletter', '0003_newsletter_prune_fix']);
     expect(status.engine).toBe('pglite');
     expect(status.pending).toEqual([]);
-    expect(status.latestApplied).toBe('0002_newsletter');
+    expect(status.latestApplied).toBe('0003_newsletter_prune_fix');
     expect(status.serverVersion).toMatch(/^17\./);
     expect(await runMigrations(getDbHandle())).toEqual([]); // idempotent
   });

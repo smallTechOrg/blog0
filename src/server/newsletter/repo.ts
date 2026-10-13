@@ -189,16 +189,32 @@ export async function allSuppressions(db: Executor, siteId: string): Promise<New
     .orderBy(asc(newsletterSuppression.createdAt), asc(newsletterSuppression.id));
 }
 
-/** Candidates for the 12-month IP prune: still holding an IP, past the retention bar. */
+/**
+ * Candidates for the 12-month IP prune (prune.ts): a row whose own IPs are past the bar — `signup_ip`
+ * by the retention anchor `coalesce(greatest(confirmed_at, consented_at), created_at)` (a fresh
+ * re-signup or re-confirmation restarts the clock), `confirmed_ip` by `coalesce(confirmed_at, anchor)` —
+ * OR a row with any event IP older than the bar (an old unsubscribe's ledger rows age out even while a
+ * re-signup keeps the row young).
+ */
 export async function pruneCandidates(db: Executor, siteId: string, bar: Date): Promise<NewsletterSubscriberRow[]> {
+  const b = sql`${bar.toISOString()}::timestamptz`;
+  const anchor = sql`coalesce(greatest(${newsletterSubscriber.confirmedAt}, ${newsletterSubscriber.consentedAt}), ${newsletterSubscriber.createdAt})`;
   return db
     .select()
     .from(newsletterSubscriber)
     .where(
       and(
         eq(newsletterSubscriber.siteId, siteId),
-        sql`(${newsletterSubscriber.signupIp} is not null or ${newsletterSubscriber.confirmedIp} is not null)`,
-        sql`coalesce(${newsletterSubscriber.confirmedAt}, ${newsletterSubscriber.createdAt}) < ${bar.toISOString()}::timestamptz`,
+        sql`(
+          (${newsletterSubscriber.signupIp} is not null and ${anchor} < ${b})
+          or (${newsletterSubscriber.confirmedIp} is not null and coalesce(${newsletterSubscriber.confirmedAt}, ${anchor}) < ${b})
+          or exists (
+            select 1 from ${newsletterSubscriberEvent}
+            where ${newsletterSubscriberEvent.subscriberId} = ${newsletterSubscriber.id}
+              and ${newsletterSubscriberEvent.ip} is not null
+              and ${newsletterSubscriberEvent.createdAt} < ${b}
+          )
+        )`,
       ),
     )
     .orderBy(asc(newsletterSubscriber.createdAt));

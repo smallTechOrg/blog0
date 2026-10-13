@@ -10,7 +10,8 @@ import type { NewsletterSender } from './types';
 // `getConfig().newsletter.sender`; `resetNewsletterSenderForTests(s?)` drops it (or injects one).
 
 export * from './types';
-export { ListmonkSender, toListmonkExpressions, BLOG0_TEMPLATE_NAME, BLOG0_TEMPLATE_BODY } from './listmonk';
+export { ListmonkSender, BLOG0_BLOCKLIST_MARKER, escapeGoTemplate, isBlog0Blocklist, listmonkOptOut, redactEmails, safePath, toListmonkExpressions, BLOG0_TEMPLATE_NAME, BLOG0_TEMPLATE_BODY } from './listmonk';
+export { latestConsentMs, providerOptOutWins } from './opt-out';
 export { StubNewsletterSender, type StubCampaign, type StubSenderOptions } from './stub';
 
 let current: NewsletterSender | null = null;

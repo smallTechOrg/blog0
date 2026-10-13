@@ -386,7 +386,8 @@ export const NEWSLETTER_SETTINGS_LIMITS = {
 
 /** POST /api/admin/newsletter/sync. */
 export interface NewsletterSyncRequest { confirm: true }
-export interface NewsletterSyncResponse { synced: number; blocklisted: number; skipped: number; changed: number; errors: Array<{ email: string; message: string }> }
+/** `suppressedFromProvider`: confirmed rows suppressed in blog0 because the provider holds a newer opt-out (never re-added). */
+export interface NewsletterSyncResponse { synced: number; blocklisted: number; skipped: number; suppressedFromProvider: number; changed: number; errors: Array<{ email: string; message: string }> }
 
 export type IssueStatus = 'draft' | 'sending' | 'sent' | 'failed';
 export type IssueOrigin = NewsletterMode;
@@ -414,6 +415,8 @@ export interface IssueDetailDto extends IssueListItemDto {
   events: IssueEventDto[];
   /** status === 'draft' */
   editable: boolean;
+  /** status === 'sending' with no progress for 10 min (crashed send): Try again is offered and allowed. */
+  stuckSending: boolean;
 }
 export interface IssueDetailResponse { issue: IssueDetailDto }
 export interface IssueCreateRequest { title: string; introMd?: string; articleIds: string[] }

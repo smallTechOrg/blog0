@@ -95,18 +95,25 @@ Edit any component under `src/` and the browser updates in place.
   expected — that cache is switched off on purpose (it caused a reload loop); it is not an error.
 - **One process per data dir:** PGlite has no directory lock — never run `pnpm db:*` against
   `pglite://./var/pglite` while the dev server is running.
+- **Newsletter without SMTP or Listmonk:** a footer signup "sends" its confirmation email through
+  the recording stub — the confirmation link is printed in the dev server's output (a
+  `"event":"newsletter.mail"` JSON line with `"transport":"stub"` and a `confirm_url`; open it to
+  confirm), and it is also on the subscriber's page in the admin (**Messages** → **Open confirm
+  link**). Issues are recorded by the stub sender, never delivered. See [Newsletter](#newsletter).
 
 Designer mode is for local design work only: the integration/E2E gates and every deployment run on
 PostgreSQL. In designer mode a Generate holds the single PGlite connection for its whole
 transaction, so concurrent requests queue behind it (the double-click guard still refuses a second
 run via the `running` generation row).
 
-Status: **Scaffold + Phases 1–3 and 5 done; Phase 4 on hold; next: Phase 6** (see
-[`spec/roadmap.md`](spec/roadmap.md)). An admin signs in at
+Status: **Scaffold + Phases 1–3 and 5 done; Phase 4 on hold; Phase 7 (newsletter) in progress;
+Phase 6 planned** (see [`spec/roadmap.md`](spec/roadmap.md)). An admin signs in at
 `/admin/login`, writes a Markdown article with images, generates a TLDR deck with Jev (one real
 OpenRouter call, only on an explicit click), edits it, uploads a Listen recording, and publishes;
 readers open the article in Read, TLDR or Listen mode at `/p/<slug>`. Listen and images are real;
-the only stub is the editor's **History** tab, clearly labelled as not built yet.
+the only stub is the editor's **History** tab, clearly labelled as not built yet. Readers can
+subscribe to the newsletter from the footer (double opt-in); admins manage subscribers and issues
+— see [Newsletter](#newsletter).
 
 ## Prerequisites
 
@@ -177,7 +184,7 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
    ```
 
 6. **Prove the OpenRouter key and the Jev model** with one real structured-output call (prints
@@ -257,8 +264,10 @@ Then open:
 | `http://localhost:3410/p/<slug>/tldr` | the same article with the TLDR deck open |
 | `http://localhost:3410/p/<slug>/listen` | the same article in Listen mode (falls back to Read without a recording) |
 | <http://localhost:3410/archive>, <http://localhost:3410/about> | archive and about |
-| <http://localhost:3410/admin/site> | admin: site settings (About texts) |
-| <http://localhost:3410/admin/subscribers> | admin: newsletter subscribers (+ CSV) |
+| <http://localhost:3410/admin/site> | admin: site settings (About texts) and the **Newsletter** card (sender status, mode, auto-send, consent text, legacy confirmations, **Sync to Listmonk**) |
+| <http://localhost:3410/admin/subscribers> | admin: newsletter subscribers — status filter, search, **Export CSV**, **Export audit (JSON)**; each subscriber's proof of consent and timeline |
+| <http://localhost:3410/admin/newsletter> | admin: newsletter issues — **New issue**, preview, test send, **Send**, stats |
+| `http://localhost:3410/newsletter/confirm?t=<token>` / `…/newsletter/unsubscribe?t=<token>` | the confirmation and unsubscribe pages behind the email links |
 | `http://localhost:3410/media/<key>` | uploaded audio and images |
 
 The server logs one JSON line per API request (`"event":"api.request"`) to stdout, and also to
@@ -363,7 +372,71 @@ reports `PENDING KEY`. The image is rebuilt only when a build-context file is ne
 (`BLOG0_CONTAINER_BUILD=always|never` overrides).
 
 Backups: `pnpm backup -- --out <dir>`; restore + check: `pnpm restore -- --in <backupDir> --db <name> --storage <dir>`
-(details and cron example in the runbook).
+(details and cron example in the runbook). Newsletter in production (SMTP relay, Listmonk, DNS,
+the hourly `pnpm newsletter:tick` cron): the runbook's **Newsletter** section.
+
+## Newsletter
+
+**How it works.** blog0 owns the subscriber list and is its source of truth; Listmonk only sends.
+
+1. A reader enters an email in the footer form → a `pending` subscriber row with the consent text,
+   time, IP (only behind a trusted proxy), user agent and source page → a confirmation email
+   (transactional, sent by blog0 itself over SMTP — `BLOG0_SMTP_*`).
+2. The reader clicks the link within 72 h → `confirmed` (double opt-in). Every step is an
+   append-only event; unsubscribes and bounces are append-only suppression entries.
+3. Confirmed subscribers are mirrored to one Listmonk list (`BLOG0_NEWSLETTER_SENDER=listmonk`);
+   suppressed ones are blocklisted there. Issues (manual, one per first publish, or a digest —
+   **Site → Newsletter**) are drafted in blog0, then sent as a Listmonk campaign.
+4. Unsubscribes come back through blog0's own link in every issue, through
+   `POST /api/newsletter/webhook` (bearer `BLOG0_NEWSLETTER_WEBHOOK_SECRET`), and through the
+   hourly `pnpm newsletter:tick`, which pulls Listmonk's blocklist and hard bounces.
+
+**Stubs in dev, tests and designer mode.** With `BLOG0_SMTP_HOST` unset the confirmation mail goes
+to the recording **stub** transport (a `newsletter_message` row + a `newsletter.mail` log line
+whose `confirm_url` you can open); with `BLOG0_NEWSLETTER_SENDER=stub` (the default) issues are
+recorded per confirmed subscriber and never delivered. The **Site → Newsletter** card says so
+("Sender: **Stub** — issues are recorded, not delivered"). Designer mode, the integration tests
+and the E2E suites always use both stubs — no SMTP, no Listmonk, no Docker.
+
+**Admin pages.** `/admin/subscribers` (list, filters, CSV + audit export, per-subscriber proof of
+consent, resend confirmation, unsubscribe), `/admin/newsletter` (issues: create, preview, test
+send to yourself, send, stats), `/admin/site` → **Newsletter** card (mode, auto-send, consent
+text, legacy confirmations, sender status, **Sync to Listmonk**).
+
+**A real Listmonk locally** (Docker, e.g. `colima start`; compose Postgres on `127.0.0.1:5433`,
+Listmonk on <http://localhost:9000>, admin `admin` / `listmonk-admin-dev-password`):
+
+```bash
+pnpm listmonk:up
+# … listmonk-dev: ready in <n> s — source it: set -a && . var/listmonk-dev.env && set +a
+set -a && . var/listmonk-dev.env && set +a      # BLOG0_LISTMONK_URL / _API_USER / _API_TOKEN / _LIST_ID
+BLOG0_NEWSLETTER_SENDER=listmonk pnpm newsletter:sync
+# sender listmonk (list <id>), site blog0
+# synced N, blocklisted N, skipped N, N changed       (a second run: "… 0 changed")
+pnpm listmonk:down                               # keeps the volumes; `pnpm listmonk:down -- -v` drops them
+```
+
+`pnpm listmonk:up` exits 0 when ready, **3** with `PENDING DOCKER` when no Docker daemon answers
+(never a pass), 1 otherwise. It is idempotent: it creates the API user `blog0` (token shown once,
+written only to `var/listmonk-dev.env`, mode 0600) and the list `blog0-test`. The compose Listmonk
+has no SMTP, so campaigns "finish" without delivering anything. To run the app against it, put
+`BLOG0_NEWSLETTER_SENDER=listmonk` and the four values from `var/listmonk-dev.env` in `.env`.
+
+| Command | What it does |
+|---|---|
+| `pnpm listmonk:up` | compose `postgres` + `listmonk` (v5.1.0), wait for health, ensure API user + list, write `var/listmonk-dev.env`; exit 3 = `PENDING DOCKER` |
+| `pnpm listmonk:down [-- -v]` | stop them (`-v` also removes the volumes and the env file) |
+| `pnpm listmonk:reset` | drop and re-create the `listmonk` database, then `up` (fresh state) |
+| `pnpm newsletter:sync` | push every confirmed subscriber to the sender, blocklist the unsubscribed/bounced; prints `synced N, blocklisted N, skipped N, N changed`; idempotent; exit 1 on any error |
+| `pnpm newsletter:sync -- --create-list` | create (or find) the Listmonk list `blog0` and print its id for `BLOG0_LISTMONK_LIST_ID` |
+| `pnpm newsletter:tick` | the hourly housekeeping (run it from cron): create the digest draft when due (send only with auto-send on) → pull provider suppressions → refresh stats of recent issues → prune IPs older than 12 months; prints `digest: …; suppressions pulled N; stats refreshed N; ips pruned N` |
+
+**Tests and Docker.** `tests/integration/newsletter-listmonk.test.ts` and
+`tests/integration/newsletter-sync.test.ts` run against the compose Listmonk: run
+`pnpm listmonk:up` first. Without a Docker daemon they **skip** with the visible reason
+`PENDING DOCKER: start it with colima start, then pnpm listmonk:up` (pending, not a pass); with
+Docker up but no `var/listmonk-dev.env` they **fail** ("run pnpm listmonk:up"). CI runs
+`pnpm listmonk:up` before the integration suite.
 
 ## Database
 
@@ -384,7 +457,7 @@ Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g
 
 ```bash
 BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
-# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 2 applied (latest 0001_rate_limit_bucket), 0 pending: OK
+# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 4 applied (latest 0003_newsletter_prune_fix), 0 pending: OK
 ```
 
 Run them only while no dev server has that directory open. `drizzle-kit` commands
@@ -421,6 +494,17 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_REQUIRE_REAL_KEY` | no | — | `1` → a missing/placeholder OpenRouter key fails the real-key tests; `0` → PENDING KEY skip; unset → `CI` decides |
 | `BLOG0_RATE_LIMIT_STORE` | no | `auto` | sign-in/newsletter throttle store: `auto` (Postgres on `postgres://`, memory on `pglite://`) \| `db` \| `memory` |
 | `BLOG0_SHUTDOWN_TIMEOUT_MS` | no | `8000` | drain deadline after SIGTERM/SIGINT (1000–120000) |
+| `BLOG0_SMTP_HOST` | no | — | SMTP relay for confirmation + test emails; unset/empty → the recording **stub** (confirm links in the server log) |
+| `BLOG0_SMTP_PORT` | no | `587` | 1–65535; `465` → implicit TLS, anything else → STARTTLS required |
+| `BLOG0_SMTP_USER` | with `BLOG0_SMTP_HOST` | — | set together with `BLOG0_SMTP_PASS`, or both empty for an IP-allowlisted relay |
+| `BLOG0_SMTP_PASS` | with `BLOG0_SMTP_USER` | — | secret; the `replace-with-…` placeholder is rejected at boot |
+| `BLOG0_SMTP_FROM` | with `BLOG0_SMTP_HOST` | stub: `blog0 <newsletter@localhost>` | `Name <address>` or a bare address — the From of every transactional email |
+| `BLOG0_NEWSLETTER_SENDER` | no | `stub` | `listmonk` \| `stub`; `listmonk` requires the four `BLOG0_LISTMONK_*` values |
+| `BLOG0_LISTMONK_URL` | with sender `listmonk` | — | e.g. `http://localhost:9000` (compose from the host) or `http://listmonk:9000` (same compose network) |
+| `BLOG0_LISTMONK_API_USER` | with sender `listmonk` | — | a Listmonk **API user** (v5: admin UI → Users → API user); local: `blog0` from `pnpm listmonk:up` |
+| `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | secret; that user's token (shown once at creation) |
+| `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | integer id of the one list blog0 mirrors into (`pnpm newsletter:sync -- --create-list`) |
+| `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | no | — | ≥ 24 chars (`openssl rand -base64 32`); bearer secret of `POST /api/newsletter/webhook`; unset → that endpoint answers 404 |
 
 ## Layout
 

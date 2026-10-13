@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import { IssueCompose } from '@/components/admin/newsletter/IssueCompose';
-import { IssueDetail } from '@/components/admin/newsletter/IssueDetail';
+import { IssueDetail, sendAffordance, STUCK_SENDING_TEXT } from '@/components/admin/newsletter/IssueDetail';
 import { IssueList } from '@/components/admin/newsletter/IssueList';
 import { IssuePreview } from '@/components/admin/newsletter/IssuePreview';
 import { IssueStats } from '@/components/admin/newsletter/IssueStats';
@@ -94,7 +94,7 @@ describe('issue labels', () => {
 const ISSUE: IssueDetailDto = {
   id: 'i1', number: 3, status: 'draft', origin: 'per_post', title: 'Hello world', postCount: 1, recipientCount: null,
   createdAt: '2026-10-12T11:50:00Z', sentAt: null, lastError: null, introMd: 'Intro', providerCampaignId: null, stats: null,
-  createdBy: 'Sai', sentBy: null, editable: true,
+  createdBy: 'Sai', sentBy: null, editable: true, stuckSending: false,
   posts: [{ articleId: 'a1', slug: 'hello', title: 'Hello', dek: 'Dek', excerpt: 'Ex', topic: 'AI', publishedLabel: '1 Oct 2026', readUrl: 'https://b/p/hello', tldrUrl: null, listenUrl: null }],
   events: [{ id: 'e1', kind: 'created', actor: 'Sai', details: {}, createdAt: '2026-10-12T11:50:00Z' }],
 };
@@ -189,6 +189,23 @@ describe('SendLog + IssueStats', () => {
     expect(html).toContain('Unsubscribes');
     expect(html).toContain('>n/a<');
     expect(html).toContain('as of 5 min ago');
+  });
+});
+
+describe('sendAffordance (R1: an issue stuck in sending can be retried)', () => {
+  it('draft / failed offer Send; failed shows its error above Try again', () => {
+    expect(sendAffordance(ISSUE, null)).toEqual({ canSend: true, shownFailure: null, polling: false });
+    expect(sendAffordance({ ...ISSUE, status: 'failed', lastError: 'Listmonk down' }, null)).toEqual({ canSend: true, shownFailure: 'Listmonk down', polling: false });
+  });
+
+  it('a fresh `sending` polls and offers nothing; a stuck one (> 10 min) stops polling and offers Try again', () => {
+    expect(sendAffordance({ ...ISSUE, status: 'sending' }, null)).toEqual({ canSend: false, shownFailure: null, polling: true });
+    expect(sendAffordance({ ...ISSUE, status: 'sending', stuckSending: true }, null)).toEqual({ canSend: true, shownFailure: STUCK_SENDING_TEXT, polling: false });
+  });
+
+  it('sent never offers Send; this session\'s own failure text wins', () => {
+    expect(sendAffordance({ ...ISSUE, status: 'sent' }, null)).toEqual({ canSend: false, shownFailure: null, polling: false });
+    expect(sendAffordance({ ...ISSUE, status: 'failed', lastError: 'x' }, 'fresh')).toMatchObject({ shownFailure: 'fresh' });
   });
 });
 
