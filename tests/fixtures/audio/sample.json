@@ -1,0 +1,6 @@
+{
+  "text": "blog0 is a small publishing platform for writers who want every article to reach readers in more than one shape. You write once in Markdown. The same text becomes a readable page, a short slide deck, and a spoken reading you can listen to. Nothing is generated behind your back; every format is reviewed before it is published. Readers pick the shape that fits their moment.",
+  "mp3": { "durationMs": 21274, "bytes": 128278, "sha256": "02fb85034b0ae6dfb97ba7bbd87b3ea1bce11365f1cfd7ea3ae7a659f6e1d3ab" },
+  "m4a": { "durationMs": 21409, "bytes": 134457, "sha256": "aeee59721a5d046453e0d6e82d5ca1ed47622fb2232adf94788386dc8d3f9004" },
+  "wav": { "durationMs": 1000, "bytes": 16078, "sha256": "618bb5496c62552694bcefbe9d26ffa124c8b641c00d8a4950274c75da83f259" }
+}

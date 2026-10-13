@@ -1,0 +1,249 @@
+# blog0 CI (spec/architecture.md §12.4). Gates run on the production engine (postgres:18).
+# No deploy job, no registry push. Secrets are never echoed; the session secret is generated per run.
+#
+# Real-key rule (spec/architecture.md → Conventions → Real-key tests): with the OPENROUTER_API_KEY
+# repository secret set, BLOG0_REQUIRE_REAL_KEY=1 and the real-key tests must run and pass. Without
+# it (e.g. a fork PR) the key is the `pending-placeholder` value (so the server still boots),
+# BLOG0_REQUIRE_REAL_KEY=0, and the real-key tests SKIP visibly as "PENDING KEY" — with a
+# workflow warning, never reported as a pass.
+#
+# Listmonk (Phase 7, spec/architecture.md §12.6): the integration job runs `pnpm listmonk:up` (compose)
+# so the Listmonk adapter + sync tests run against a real container; if Docker is unreachable
+# (exit 3) it emits a PENDING DOCKER warning and those tests skip visibly. The e2e job uses the stubs.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BLOG0_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY || 'pending-placeholder' }}
+  BLOG0_REQUIRE_REAL_KEY: ${{ secrets.OPENROUTER_API_KEY != '' && '1' || '0' }}
+  HAS_OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}
+  BLOG0_DATABASE_URL: postgres://postgres:postgres@localhost:5432/blog0_dev
+  BLOG0_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/blog0_test
+  BLOG0_ADMIN_EMAIL: ci-admin@example.test
+  BLOG0_ADMIN_PASSWORD: ci-admin-password-0001
+  NEXT_TELEMETRY_DISABLED: 1
+
+jobs:
+  check:
+    name: typecheck, lint, unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.1 # = package.json devEngines.runtime.version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate a per-run session secret
+        run: echo "BLOG0_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> "$GITHUB_ENV"
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test:unit
+
+  integration:
+    name: integration (postgres:18 + Listmonk + real OpenRouter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate a per-run session secret
+        run: echo "BLOG0_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> "$GITHUB_ENV"
+      - name: Install PostgreSQL 18 client tools (PGDG; backup-restore test)
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - name: Check client tool versions
+        run: |
+          pg_dump --version
+          pg_restore --version
+      # Listmonk beside the service Postgres (docker-compose.yml: its own postgres on 127.0.0.1:5433 +
+      # listmonk on :9000). Exit 0 → var/listmonk-dev.env (API user, token, list id) is exported for
+      # the rest of the job, so newsletter-listmonk + newsletter-sync run against the real container.
+      # Exit 3 → PENDING DOCKER: those two files skip visibly (never a pass). Anything else fails the job.
+      - name: Start Listmonk (pnpm listmonk:up)
+        run: |
+          set +e
+          pnpm listmonk:up
+          code=$?
+          set -e
+          if [ "$code" = "3" ]; then
+            echo "::warning::PENDING DOCKER — pnpm listmonk:up could not reach Docker; the Listmonk integration tests (newsletter-listmonk, newsletter-sync) skip"
+            exit 0
+          fi
+          if [ "$code" != "0" ]; then exit "$code"; fi
+          while IFS='=' read -r name value; do
+            case "$name" in
+              BLOG0_LISTMONK_*)
+                if [ "$name" = "BLOG0_LISTMONK_API_TOKEN" ]; then echo "::add-mask::$value"; fi
+                echo "$name=$value" >> "$GITHUB_ENV"
+                ;;
+            esac
+          done < var/listmonk-dev.env
+      - run: pnpm db:create
+      - run: pnpm db:migrate
+      - run: pnpm db:verify
+      - run: pnpm test:integration
+      - name: PENDING KEY warning
+        if: env.HAS_OPENROUTER_KEY != 'true'
+        run: echo "::warning::PENDING KEY — real-key tests were skipped (no OPENROUTER_API_KEY secret)"
+      - name: Listmonk logs on failure
+        if: failure()
+        run: docker compose logs --tail 100 listmonk || true
+      - name: Stop Listmonk (pnpm listmonk:down)
+        if: always()
+        run: pnpm listmonk:down || true
+
+  e2e:
+    name: e2e (production build + designer mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate a per-run session secret
+        run: echo "BLOG0_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> "$GITHUB_ENV"
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm db:create
+      - run: pnpm build
+      - run: pnpm test:e2e
+      - run: pnpm test:e2e:design
+      - name: Upload Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: PENDING KEY warning
+        if: env.HAS_OPENROUTER_KEY != 'true'
+        run: echo "::warning::PENDING KEY — real-key tests were skipped (no OPENROUTER_API_KEY secret)"
+
+  image:
+    name: container image (non-root, probes, graceful stop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t blog0:ci .
+      - name: Runs as uid 1000
+        run: |
+          uid="$(docker run --rm blog0:ci id -u)"
+          echo "uid=$uid"
+          test "$uid" = "1000"
+      - name: Image size under 500 MiB
+        run: |
+          size="$(docker image inspect -f '{{.Size}}' blog0:ci)"
+          echo "image size: ${size} bytes"
+          test "$size" -lt 524288000
+      - name: Image contents (no .env; prompts, migrations journal, release.mjs present)
+        run: |
+          docker run --rm --entrypoint sh blog0:ci -c \
+            'test ! -e .env && test -f src/server/jev/prompts/rank-v1.md && test -f src/server/db/migrations/meta/_journal.json && test -f release.mjs'
+      - name: No env → refuses to boot (exit 1 within 15 s)
+        run: |
+          set +e
+          out="$(timeout 15 docker run --rm blog0:ci 2>&1)"
+          code=$?
+          set -e
+          echo "$out" | tail -n 20
+          echo "exit code: $code"
+          test "$code" = "1"
+          grep -q 'BLOG0_DATABASE_URL is required in production' <<<"$out"
+      - name: Probes, docker health and graceful shutdown (unreachable DB)
+        run: |
+          set -euo pipefail
+          docker run -d --name blog0-ci -p 3410:3410 \
+            -e BLOG0_DATABASE_URL=postgres://nobody@127.0.0.1:1/none \
+            -e BLOG0_SESSION_SECRET="$(openssl rand -base64 48 | tr -d '\n')" \
+            -e BLOG0_OPENROUTER_API_KEY=pending-placeholder \
+            blog0:ci
+          live=""
+          for _ in $(seq 1 60); do
+            live="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3410/api/health/live || true)"
+            [ "$live" = "200" ] && break
+            sleep 1
+          done
+          if [ "$live" != "200" ]; then docker logs blog0-ci; echo "live probe: expected 200, got ${live:-none}"; exit 1; fi
+          ready_body="$(curl -s -w '\n%{http_code}' http://localhost:3410/api/health/ready || true)"
+          ready_status="$(printf '%s' "$ready_body" | tail -n 1)"
+          echo "ready: $ready_body"
+          test "$ready_status" = "503"
+          printf '%s' "$ready_body" | head -n 1 | jq -e '.error.code == "NOT_READY" and .error.details.reason == "DB_UNAVAILABLE"'
+          # Docker HEALTHCHECK probes liveness only (no DB) → healthy even with the DB down.
+          health=""
+          for _ in $(seq 1 60); do
+            health="$(docker inspect -f '{{.State.Health.Status}}' blog0-ci)"
+            [ "$health" = "healthy" ] && break
+            sleep 1
+          done
+          echo "docker health: $health"
+          test "$health" = "healthy"
+          docker stop -t 15 blog0-ci
+          code="$(docker inspect -f '{{.State.ExitCode}}' blog0-ci)"
+          docker logs blog0-ci > container.log 2>&1
+          echo "exit code: $code"
+          test "$code" = "143"
+          grep 'app.shutdown' container.log | grep -q '"phase":"draining"'
+          grep 'app.shutdown' container.log | grep -q '"phase":"closed"'
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs blog0-ci || true
+      - name: Remove the container
+        if: always()
+        run: docker rm -f blog0-ci || true

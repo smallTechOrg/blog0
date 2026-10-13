@@ -1,0 +1,28 @@
+# Build context for the blog0 image (spec/architecture.md §12.1). Secrets, local data, build
+# output and everything the image build does not need stay out — the image never contains .env.
+.git
+.github
+node_modules
+.next
+.next-*
+dist
+var
+test-results
+playwright-report
+blob-report
+coverage
+.env
+.env.*
+!.env.example
+spec
+docs
+tests
+workers
+# configs that import the excluded tests/ (the build's type-check must not see them)
+playwright.config.ts
+playwright.design.config.ts
+vitest.config.ts
+*.tsbuildinfo
+.DS_Store
+Dockerfile
+.dockerignore

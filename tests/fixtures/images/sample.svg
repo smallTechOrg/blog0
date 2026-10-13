@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200">
+  <rect width="320" height="200" fill="#eee"/>
+  <script>alert('never rendered')</script>
+  <text x="20" y="110" font-size="32">blog0 sample.svg</text>
+</svg>

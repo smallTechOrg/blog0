@@ -1,0 +1,24 @@
+{
+  "slug": "ai-is-expensive",
+  "model": "typesafe/jev-1.13",
+  "promptVersion": "jev-rank-v1",
+  "capturedAt": "2026-10-13T15:01:31.274Z",
+  "lines": [
+    {
+      "text": "AI may be smarter than humans and all that but who says it’s cheaper.",
+      "relevance": 0.9
+    },
+    {
+      "text": "You know, like Oil, Gas, Nuclear, Hydro and all that jazz?",
+      "relevance": 0.13
+    },
+    {
+      "text": "Well you know that little checkbox you tick before you sign up EVERYWHERE.",
+      "relevance": 0.17
+    },
+    {
+      "text": "Yeah babe that app ain’t free",
+      "relevance": 0.18
+    }
+  ]
+}
