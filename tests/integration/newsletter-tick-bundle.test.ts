@@ -39,6 +39,9 @@ const baseEnv: Record<string, string | undefined> = {
   HOME: process.env.HOME,
   BLOG0_DATABASE_URL: DB_URL,
   BLOG0_SESSION_SECRET: 'tick-bundle-session-secret-0123456789abcdef',
+  // The tick never calls OpenRouter, but config requires the key to be present: set a placeholder so the
+  // test doesn't depend on a developer's .env (CI has no key).
+  BLOG0_OPENROUTER_API_KEY: 'pending-placeholder',
   BLOG0_SITE_SLUG: 'blog0',
   BLOG0_PUBLIC_BASE_URL: 'http://localhost:3499',
   BLOG0_NEWSLETTER_SENDER: 'stub',
