@@ -315,8 +315,10 @@ export type NewsletterSource = 'footer' | 'email_link' | 'one_click' | 'admin' |
 export type SuppressionReason = 'unsubscribed' | 'bounced' | 'complaint' | 'admin' | 'erased';
 
 /** POST /api/newsletter — the same shape for a new, pending, confirmed or suppressed address (no enumeration). */
-export interface NewsletterSubscribeRequest { email: string; name?: string; sourceUrl?: string }
-export interface NewsletterSubscribeResponse { subscribed: true }
+export interface NewsletterSubscribeRequest { email: string; name?: string; sourceUrl?: string; /** honeypot — must be empty */ website?: string; /** ms since the form rendered (bot check) */ fillMs?: number }
+/** What happened to the confirmation email (Stage A): `recorded` = stub transport (nothing sent). */
+export type NewsletterDelivery = 'sent' | 'recorded' | 'failed';
+export interface NewsletterSubscribeResponse { subscribed: true; delivery: NewsletterDelivery }
 
 /** POST /api/newsletter/confirm → data. */
 export interface NewsletterConfirmRequest { token: string }
@@ -408,7 +410,7 @@ export interface NewsletterSettingsDto {
 /** PATCH /api/admin/newsletter/settings body — `modeSetAt` is server-set and rejected. */
 export type NewsletterSettingsPatch = Partial<Omit<NewsletterSettingsDto, 'modeSetAt'>>;
 export interface NewsletterStatusDto {
-  sender: { kind: 'listmonk' | 'stub'; configured: boolean; listId: string | null; listName: string | null; lastSyncAt: string | null; healthy: boolean | null; message: string | null };
+  sender: { kind: 'listmonk' | 'stub'; configured: boolean; listId: string | null; listName: string | null; lastSyncAt: string | null; healthy: boolean | null; message: string | null; trackingPublic: boolean };
   mail: { transport: 'smtp' | 'stub'; from: string | null };
   counts: SubscriberCounts;
   /** only in digest mode */
@@ -450,6 +452,8 @@ export interface IssueListItemDto {
 export interface IssueListResponse { issues: IssueListItemDto[]; total: number; confirmedCount: number }
 export interface IssueEventDto { id: string; kind: IssueEventKind; actor: string | null; details: Record<string, unknown>; createdAt: string }
 export interface IssueDetailDto extends IssueListItemDto {
+  /** false when Listmonk's root URL is not publicly reachable (opens can't be counted); true for the stub. */
+  trackingPublic: boolean;
   introMd: string; posts: IssuePost[]; providerCampaignId: string | null; stats: IssueStatsDto | null;
   createdBy: string | null; sentBy: string | null;
   /** oldest first */

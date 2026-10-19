@@ -154,8 +154,20 @@ from the article."
 
 ## 4. Content pipeline (deterministic; `src/server/content`)
 
-`renderArticle({ title, dek, bodyMd }): Promise<RenderedArticle>` — types in
+`renderArticle({ title, dek, bodyMd, imageDims? }): Promise<RenderedArticle>` — types in
 `src/lib/content/types.ts`:
+
+**Image dimensions (Stage A; `renderArticle` stays pure).** `imageDims?: ReadonlyMap<string, {
+width: number; height: number }>` keyed by the image `src` exactly as written (`/media/<key>`).
+The `images` plugin adds `width` / `height` attributes to an `img` whose `src` is in the map and
+leaves every other image without them (unknown key, external URL, no map). The DB lookup is a
+pre-render step in `src/server/public/image-dims.ts`: `mediaImageSrcs(bodyMd): string[]` (pure,
+`/media/` srcs from the mdast) → `loadImageDims(siteId, srcs)` (one `media_asset` query, `kind =
+'image'`, non-null width/height) → the map passed by the published-page render
+(`page-data.ts`). Admin preview and every other caller pass no map. The render cache key becomes
+`revisionId + ':' + RENDER_VERSION + (imageDims ? ':dims' : '')` and `RENDER_VERSION` → `'r2'`.
+`additions.css`: `.prose img[width][height] { height: auto; }` keeps the aspect ratio when the
+column is narrower than the image.
 
 ```ts
 export type Block =
@@ -218,7 +230,8 @@ staleness compares the `sentences` fingerprint; the Listen `text_changed` warnin
 **Stats.** `words` = word count of all paragraph plain text; `readMinutes = max(1, ceil(words / 230))`.
 
 **Cache.** `src/server/content/cache.ts`: LRU (max 200 entries) keyed by
-`revisionId + ':' + RENDER_VERSION` (`RENDER_VERSION = 'r1'`, bump on any pipeline change).
+`revisionId + ':' + RENDER_VERSION` (`RENDER_VERSION = 'r1'`, bump on any pipeline change; Stage A
+key and version: Image dimensions above).
 Preview renders are not cached.
 
 ## 5. Formats model
@@ -291,7 +304,8 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
 
   ```ts
   export type RateScope = 'login.pair' | 'login.email' | 'newsletter.ip' | 'newsletter.email' | 'newsletter.site'
-    | 'newsletter.link.ip' | 'newsletter.link.site';   // Phase 7: confirm + unsubscribe links
+    | 'newsletter.link.ip' | 'newsletter.link.site'    // Phase 7: confirm + unsubscribe links
+    | 'login.ip' | 'login.delay';                      // Stage A (login.email is no longer used)
   export interface RateBucket { scope: RateScope; key: string; max: number; windowMs: number }
   export type RateCheck = { limited: false } | { limited: true; retryAfterSec: number; scope: RateScope };
   export interface RateLimitStore {
@@ -304,6 +318,9 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
     clear(siteId: string, bucket: RateBucket, now: number): Promise<void>;
     /** Deletes expired windows; returns how many. */
     prune(now: number): Promise<number>;
+    /** Stage A — progressive delay, atomic check-and-reserve for one key (below). */
+    attemptDelay(siteId: string, key: string, now: number): Promise<RateCheck>;   // scope 'login.delay'
+    clearDelay(siteId: string, key: string): Promise<void>;
   }
   export class MemoryRateLimitStore implements RateLimitStore {}   // one FixedWindowCounter per (scope, max, windowMs); keys siteId\0key
   ```
@@ -323,15 +340,31 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   (`src/server/newsletter/rate-limit.ts`) are thin async wrappers that build their buckets and call
   `getRateLimitStore()` per call (no state of their own; `resetLoginRateLimiterForTests()` /
   `resetNewsletterRateLimiterForTests(limits?)` keep their names and reset the store / limits).
-- Login throttling: 5 failures per (lower-cased email, client IP) per 15 min, and 20 failures per
-  lower-cased email across all IPs per 15 min → 429 `RATE_LIMITED` with `Retry-After` (even for
-  the right password). Each allowed attempt is reserved atomically by `store.attempt()` (buckets
-  `login.pair` + `login.email`) **before** the password is verified, so concurrent attempts — on
-  any instance — cannot overrun the limit; a correct password `clear`s the pair bucket and
-  `refund`s the email bucket at the attempt's `now`. Client IP:
+- Login throttling (**Stage A — replaces the hard per-email lock**, so knowing the admin email can't
+  lock the owner out): (a) hard caps, **only when the client IP is a real address** (skipped for
+  `direct`/`unknown`, exactly like the newsletter per-IP bucket — otherwise the pair cap would be a
+  per-email lock again): 5 failures per (lower-cased email, IP) per 15 min (`login.pair`) and 50 per
+  IP per 15 min (`login.ip`); (b) **progressive per-email delay** (`login.delay`, key = lower-cased
+  email), always: with `n` = attempts counted for that email since its last success (reset after
+  15 quiet minutes), the next attempt must wait `delay(n) = n < 5 ? 0 : min(60, 2^(n−5))` seconds
+  after the previous one (5th failure → 1 s, then 2, 4, 8, 16, 32, 60, 60 …). An attempt inside the
+  wait → 429 `RATE_LIMITED`, `Retry-After = ceil(remaining)`, nothing counted, password not
+  checked; after the wait a **correct password succeeds**. Order: `store.attempt()` (pair + ip
+  buckets) → limited ⇒ 429 (delay untouched); else `store.attemptDelay()` → limited ⇒ `refund` the
+  pair/ip buckets, 429; else verify the password. Every admitted attempt is reserved before
+  verification (concurrent attempts on any instance cannot overrun); a correct password `clear`s
+  the pair bucket, `refund`s the ip bucket and `clearDelay`s the email. **Delay storage (no
+  migration):** one `rate_limit_bucket` row per key with scope `login.delay`, `window_start =
+  epoch 0` (constant), `count = n`, `expires_at = last attempt + 15 min` (so last attempt =
+  `expires_at − 15 min`; the normal prune resets an idle key). `DbRateLimitStore.attemptDelay` =
+  one transaction: upsert the row → `select … for update` → expired ⇒ treat `n = 0` → wait check →
+  `count = n + 1, expires_at = now + 15 min`. `MemoryRateLimitStore` keeps the same state in a
+  bounded map (10 000 keys). `auth.login` adds `scope` on `rate_limited`
+  (`'login.pair'|'login.ip'|'login.delay'`). > **Assumed:** 5 free attempts, 1 s doubling to a
+  60 s cap, 15 min reset, 50/IP — constants in `src/server/auth/rate-limit.ts`. Client IP:
   `BLOG0_TRUSTED_PROXY_HOPS` = 0 (default, no proxy) ignores `X-Forwarded-For` and `X-Real-IP`
-  (client-controlled) and uses the constant `direct`, so the login limit is effectively per email
-  (and the newsletter per-IP bucket is skipped — next bullet); N > 0 takes the Nth entry from the
+  (client-controlled) and uses the constant `direct`, so login is protected by the per-email delay
+  alone (and the newsletter per-IP bucket is skipped — next bullet); N > 0 takes the Nth entry from the
   right of `X-Forwarded-For` (fewer entries → `unknown`); `X-Real-IP` is never trusted. Sessions
   store the IP only when it is a real address.
 - Newsletter throttling (same client-IP derivation): body validated first (invalid → 400, never
@@ -339,7 +372,10 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   client IP per hour only when the IP is a real address — with `direct`/`unknown` the per-IP bucket
   is skipped (a shared constant would otherwise let one caller exhaust it for everyone). Any cap →
   429 `RATE_LIMITED` with `Retry-After`. Production behind a reverse proxy MUST set
-  `BLOG0_TRUSTED_PROXY_HOPS`, or the per-IP cap is inert.
+  `BLOG0_TRUSTED_PROXY_HOPS`, or the per-IP cap is inert. Stage A: the honeypot / fill-time bot
+  drop (`spec/api.md` → `POST /api/newsletter`) runs after validation and before any bucket is
+  counted (`src/server/newsletter/bot-check.ts`, pure: `botDropReason(body): 'honeypot' |
+  'too_fast' | null`, `MIN_FILL_MS = 2000`).
 - **Newsletter link throttling (Phase 7)** — `src/server/newsletter/rate-limit.ts`
   `getNewsletterLinkThrottle()`: the confirm and unsubscribe routes (pages and JSON, one shared
   pair of buckets) count 30 per known client IP per hour (`newsletter.link.ip`, skipped for
@@ -383,7 +419,11 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `(await headers()).get('x-nonce') ?? undefined` and renders the theme script as
   `<script nonce={nonce} dangerouslySetInnerHTML=…>` (every HTML route is already dynamic, so
   this costs nothing). `/media/[...key]` keeps its own headers (§9.2); `nosniff` from both sources
-  is the same value.
+  is the same value. **Stage A JSON-LD:** structured data is rendered as `<script
+  type="application/ld+json" nonce={nonce}>` by `src/components/site/JsonLd.tsx` with the body from
+  `serializeJsonLd(obj)` (`src/server/public/seo.ts`, pure): `JSON.stringify` then replace `<` →
+  `<`, `>` → `>`, `&` → `&`, U+2028 → ` `, U+2029 → ` `, so author text can
+  never close the element; the CSP is unchanged.
 - Raw HTML in Markdown is never rendered. Uploaded files are validated by content (§9.3), stored
   under unguessable uuid keys, and served with their stored MIME type,
   `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`; the `/media/` route never
@@ -421,6 +461,9 @@ tests (`captureLogs()`).
 | `newsletter.issue` | issues service | `issue_id, number, origin, action ('created'\|'updated'\|'deleted'\|'test_sent'\|'send'\|'stats'), outcome ('ok'\|'sent'\|'failed'\|'skipped'), recipient_count?, campaign_id?, user_id?, err_code?` |
 | `newsletter.tick` | `pnpm newsletter:tick` | `digest_created (bool), suppressions_pulled, stats_refreshed, ips_pruned, latency_ms` |
 | `newsletter.mail_not_configured` | first transactional send in a production process without `BLOG0_SMTP_HOST` (`warn`, once per process) | `hint` |
+| `newsletter.signup_dropped` | signup route (Stage A bot drop) | `request_id, reason ('honeypot'\|'too_fast'), source_url` — never the email |
+| `auth.password_reset` | `admin:reset-password` / `reset-password.mjs` (Stage A) | `email_masked, sessions_ended` |
+| `ops.heartbeat` | `pingHeartbeat` (Stage A; `info` on 2xx, `warn` otherwise) | `job ('backup'\|'newsletter_tick'), signal ('success'\|'fail'), outcome ('ok'\|'http_error'\|'timeout'\|'network_error'\|'invalid_url'), status?, ms` — never the URL (it embeds the check's secret uuid) |
 | `error` | anywhere unexpected | `err_message, err_stack (non-prod only), request_id` |
 
 `input_summary` / `output_summary` are small objects of counts and ids (e.g.
@@ -667,6 +710,8 @@ so legacy payloads parse).
 | `BLOG0_LISTMONK_API_USER` / `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | a Listmonk **API user** + its token (Listmonk ≥ v4, Settings → Users); `TOKEN` is a secret field |
 | `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | integer id of the list blog0 mirrors into (created once by hand or by `pnpm newsletter:sync --create-list`); blog0 never sends to any other list |
 | `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | no | — | ≥ 24 chars; secret field. Unset ⇒ `POST /api/newsletter/webhook` answers 404 |
+| `BLOG0_HEARTBEAT_BACKUP_URL` | no | — | Stage A. Absolute http(s) URL (else `ConfigError`); secret field (redacted — the URL is the credential). After `pnpm backup` succeeds: `GET <url>`; after it fails: `GET <url>/fail` (§12.3) |
+| `BLOG0_HEARTBEAT_TICK_URL` | no | — | Stage A. Same rules, pinged by `pnpm newsletter:tick` |
 | `BLOG0_EVAL_LOG_LEVEL` | no | `warn` | scripts only (local/scripts only, not in `.env.example`; not read by `config.ts`): `scripts/eval-jev.ts` (`pnpm eval:jev`) sets `BLOG0_LOG_LEVEL` from it, e.g. `info` to see every `llm.call` |
 | `BLOG0_LISTMONK_PORT` | no | `9000` | compose/local only (not in `.env.example`; not read by `config.ts`): the host port of the compose Listmonk (`docker-compose.yml` port mapping + `root_url`) and `scripts/listmonk-dev.sh` (§12.6) |
 | `BLOG0_LISTMONK_PURGE` | no | `0` | local only (not in `.env.example`; not read by `config.ts`): `1` makes `scripts/listmonk-dev.sh down` also drop the compose volumes (same as `down -v`) |
@@ -822,7 +867,8 @@ Three stages, `ARG NODE_VERSION=22.23.1` (must equal `package.json` `devEngines.
    copy from build: `.next/standalone/` → `/app/`, `.next/static/` → `/app/.next/static/`,
    `public/` → `/app/public/` (always exists — created in the build stage), `src/server/db/migrations/` → same path,
    `src/server/jev/prompts/` → same path (both are read via `process.cwd()` paths — §11.2 migrator,
-   `jev/prompt.ts`), `dist/release.mjs` → `/app/release.mjs`. Files stay root-owned;
+   `jev/prompt.ts`), `dist/release.mjs` → `/app/release.mjs`, `dist/reset-password.mjs` →
+   `/app/reset-password.mjs` (Stage A). Files stay root-owned;
    `mkdir -p /data/storage /app/.next/cache && chown node:node /data/storage /app/.next/cache`;
    `VOLUME /data/storage`; `USER node`; `EXPOSE 3410`; `STOPSIGNAL SIGTERM`;
    `HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 CMD ["node","-e","fetch('http://127.0.0.1:'+(process.env.PORT||3410)+'/api/health/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]`;
@@ -869,6 +915,23 @@ disk) to `scripts/lib/empty-module.mjs`. Banner (bundled CommonJS such as `@next
 `import { createRequire as __blog0CreateRequire } from 'node:module'; const require = __blog0CreateRequire(import.meta.url); const __filename = import.meta.filename; const __dirname = import.meta.dirname;`.
 The container runs it as `node release.mjs` with the same env as the web server.
 Product-level note: `spec/capabilities/container-image.md` (Assumed S5.1).
+
+**Password reset (Stage A).** `src/server/ops/reset-password.ts` — `runResetPassword({ env, email,
+password, slug, out })`: `loadDatabaseTarget(env)` (`pglite://` allowed — designer mode has admins
+too) → find the `app_user` of site `slug` by lower-cased email (none → `ResetUsageError` "no admin
+with that email", exit 1) → password 12–200 chars (else exit 2) → one transaction: `password_hash
+= argon2id(password)` (the §6 parameters, same helper as `admin:create`), `delete from session
+where user_id = …`, and on `postgres://` delete that email's `login.delay` row (a memory store lives
+in the server process and expires on its own) → log `auth.password_reset` →
+`out('password reset for <masked email> · <n> sessions ended')`. `scripts/reset-password.ts`
+(`pnpm admin:reset-password --email <e>`): loads `.env` like `scripts/release.ts` (and, like it,
+never imports `scripts/lib/cli.ts`); password = `BLOG0_NEW_ADMIN_PASSWORD` when set, else a hidden
+TTY prompt asked twice (mismatch → exit 2; no TTY and no env → exit 2 "set
+BLOG0_NEW_ADMIN_PASSWORD or run with a terminal"); never echoes or logs the password.
+`scripts/build-release.mjs` also bundles it, with the identical esbuild options, to
+`dist/reset-password.mjs`; the Dockerfile runtime stage copies it to `/app/reset-password.mjs`, so
+`docker exec -it <container> node reset-password.mjs --email <e>` works in the production image.
+Runbook: `docs/deploy.md` → "Reset an admin password".
 
 ### 12.2 Probes and graceful shutdown
 
@@ -920,6 +983,17 @@ Product-level note: `spec/capabilities/container-image.md` (Assumed S5.1).
   → storage (refuse/empty with guards, extract) → restore-check (`compareRestore`).
 - `scripts/backup.ts`, `scripts/restore.ts`: `runCli` + flag parsing (a leading `--` from
   `pnpm <script> -- …` is ignored); usage errors exit 2.
+- **Heartbeats (Stage A)** — `src/server/ops/heartbeat.ts`: `heartbeatUrlFromEnv(env, name):
+  string | null` (absolute http(s) or null; the same rule `config.ts` enforces at server boot) and
+  `pingHeartbeat({ job, url, signal: 'success' | 'fail', fetch?, timeoutMs = 5000 }): Promise<void>`
+  — `GET url` (success) or `GET url.replace(/\/+$/, '') + '/fail'` (fail), `AbortSignal.timeout`,
+  logs `ops.heartbeat`, **never throws** and never changes the job's exit code. `scripts/backup.ts`
+  pings `BLOG0_HEARTBEAT_BACKUP_URL`, `scripts/newsletter-tick.ts` pings `BLOG0_HEARTBEAT_TICK_URL`,
+  each once, after the job's outcome is known (success = the path that exits 0; a usage error
+  (exit 2) pings nothing). Unset → no request, no log line; an invalid value in a script → one
+  `warn` `ops.heartbeat` with `outcome: 'invalid_url'`, job unaffected.
+  > **Assumed:** the `/fail` suffix follows the healthchecks.io convention and is always sent on
+  > failure; services without it see a harmless 404 (logged `http_error`).
 
 ### 12.4 CI (`.github/workflows/ci.yml`)
 
@@ -1243,6 +1317,7 @@ export interface NewsletterSender {
   sendIssue(campaignId: string): Promise<void>;                                            // start; idempotent for a running/finished campaign
   fetchStats(campaignId: string): Promise<SenderStats>;
   fetchSuppressions(since: Date): Promise<SenderSuppression[]>;
+  trackingPublic(): Promise<boolean>;   // Stage A — stub: always true; listmonk: below. Never throws.
 }
 export class SenderError extends Error { constructor(public code: 'UNAVAILABLE' | 'HTTP' | 'TIMEOUT' | 'INVALID', message: string, public httpStatus?: number) }
 export function getNewsletterSender(): NewsletterSender;   // from getConfig().newsletter.sender; resetNewsletterSenderForTests(s?)
@@ -1264,6 +1339,7 @@ to method, query-stripped path, HTTP status and a fixed description; nor the API
 | `createIssue` | ensure template `blog0-issue` exists with body `{{ template "content" . }}\n{{ TrackView }}` (`GET /api/templates` by name; a different body → `PUT /api/templates/:id`; none → `POST /api/templates { name, type: 'campaign', body }`) → `POST /api/campaigns { name: 'blog0 #<number> — <subject>', subject, lists: [listId], type: 'regular', content_type: 'html', body: html, altbody: text, template_id, tags: ['blog0', 'issue:<issueId>'] }` → `campaignId = String(data.id)`; before the POST, `html`/`text` are first **template-escaped** (in **one pass** over `/\{\{|\}\}/g` — sequential replaces would re-escape their own output — every literal `{{` → `{{ "{{" }}` and `}}` → `{{ "}}" }}`, so author text such as a code sample can never execute as a Listmonk/Go template expression) and **only then** have the blog0 placeholders replaced with Listmonk expressions (13.4) — that order keeps the two expressions live; absolute http(s) content hrefs in `html` (not unsubscribe / privacy / `mailto:`) become `{{ TrackLink "<url>" }}`, kept out of that escape pass (click tracking; `text` untracked) |
 | `sendIssue` | `PUT /api/campaigns/<id>/status { status: 'running' }` (a campaign already `running`/`finished` → no-op) |
 | `fetchStats` | `GET /api/campaigns/<id>` → `{ recipients: to_send, sent, delivered: null, opens: views, clicks, bounces, unsubscribes: null }` |
+| `trackingPublic` (Stage A) | `GET /api/settings` (3 s timeout, no retry) → `app.root_url` (needs the API user's `settings:get`); on any failure fall back to `BLOG0_LISTMONK_URL`. Result cached 10 min per process. `false` when the URL's host is non-public — pure `isPublicHost(host)` in `sender/public-host.ts`: `localhost` / `*.localhost`, a single-label name (no dot, e.g. `listmonk`), `*.local` / `*.internal`, IPv4 `127/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `0.0.0.0`, IPv6 `::1`, `fc00::/7`, `fe80::/10`; else `true`. Exposed as `NewsletterStatusDto.sender.trackingPublic` and `IssueDetailDto.trackingPublic` (`spec/api.md`). |
 | `fetchSuppressions` | `GET /api/subscribers?query=subscribers.status='blocklisted' AND subscribers.updated_at > '<since ISO>'&per_page=all` → `unsubscribed`; **list-level unsubscribes**: `GET /api/subscribers?list_id=<listId>&subscription_status=unsubscribed&per_page=all`, keeping rows whose `lists[]` entry for `listId` has `subscription_updated_at > since` → `unsubscribed` with `at = subscription_updated_at`, `details.scope = 'list'`; `GET /api/bounces?...` (rows with `created_at > since`, `type = 'hard'`) → `bounced`; `complaint` type → `complaint` |
 
 **Stub adapter** (`stub.ts`): keeps subscribers in a `Map` (`providerId = 'stub-' + subscriberId`),

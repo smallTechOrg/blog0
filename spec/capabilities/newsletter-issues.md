@@ -80,6 +80,17 @@ blog0 keeps the issue, its send log and its stats.
   blocklisted addresses are skipped by Listmonk itself.
 - **Stats** are fetched from the provider on demand (**Refresh stats**) and by
   `pnpm newsletter:tick`; the stub counts its own rows. Stats never change the issue status.
+  **Stage A:** a sent issue's page refreshes stats on open and every 60 s while the tab is visible;
+  a `stats_fetched` event is logged only when a number changed; when Listmonk's public root URL is
+  not reachable from the internet (localhost / private / single-label host) the page notes that
+  opens can't be counted (`trackingPublic`, `spec/api.md`; HOW `spec/architecture.md` §13.3;
+  screen `spec/ui.md` §4 Issue). `pnpm newsletter:tick` pings `BLOG0_HEARTBEAT_TICK_URL` when set
+  (`spec/architecture.md` §12.3).
+  - [ ] Stage A (unit): `isPublicHost` → false for `localhost`, `app.localhost`, `listmonk`,
+    `127.0.0.1`, `10.1.2.3`, `172.20.0.5`, `192.168.1.9`, `::1`, `fd00::1`, `mail.local`; true for
+    `lists.example.com`, `8.8.8.8`. Integration: two stats refreshes with unchanged stub numbers →
+    one `stats_fetched` event, `fetchedAt` updated twice; `GET …/issues/:id` and settings carry
+    `trackingPublic: true` with the stub. E2E: the issue page shows the tiles without a click.
 - **Sender adapter** (`spec/architecture.md` §13.3): `syncSubscriber`, `removeSubscriber`,
   `createIssue`, `sendIssue`, `fetchStats`, `fetchSuppressions`, `healthcheck`. `stub` is the
   default and is what designer mode, unit/integration tests and the E2E suite use; `listmonk`

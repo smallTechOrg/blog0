@@ -23,11 +23,18 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 3. The design's `#root` becomes `<div id="blog0-root">` (used by `PrintIn`'s selector root).
 4. The root layout injects, before paint, the design's theme script extended with persistence:
    read `localStorage['blog0.theme']` (`'light'|'dark'`); else `prefers-color-scheme`; set
-   `data-theme` on `<html>` (`suppressHydrationWarning`). Unless reduced motion is preferred, the
-   same script also sets `data-printing` on `<html>` (`additions.css` hides `#blog0-root` while it
-   is set) so server HTML never flashes before the print-in; `PrintIn` removes it in its layout
-   effect once the lines are staged, and a 2.5 s timeout in the script removes it if hydration
-   never arrives.
+   `data-theme` on `<html>` (`suppressHydrationWarning`). **Stage A — intro only once:** the same
+   script decides the intro: `intro = location.pathname === '/' && !sessionStorage['blog0.intro']
+   && !reducedMotion`; it then sets `sessionStorage['blog0.intro'] = '1'` on **every** first load
+   (whatever the path; storage errors → treat as already seen, no intro) and only when `intro` sets
+   `data-printing` on `<html>` (`additions.css` hides `#blog0-root` while it is set) so server HTML
+   never flashes before the print-in; `PrintIn` removes it in its layout effect once the lines are
+   staged, and a 2.5 s timeout in the script removes it if hydration never arrives. Every other
+   load and every client navigation (article, archive, about, privacy, newsletter pages, admin, and
+   `/` after the first load) renders text at first paint: no `data-printing`, no `.ln` stagger,
+   no typing (§3 Chrome). The decision is exposed as `document.documentElement.dataset.intro =
+   '1'` for the client components. > **Assumed:** the intro is tied to the visit's first document
+   load (a visit that starts on an article never sees it); the owner reviews it in the UI round.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
    400), JetBrains Mono (400/500), exposed as CSS variables and wired in `additions.css`:
    `:root { --font-head: var(--nf-head), 'Helvetica Neue', Arial, sans-serif; --font-body:
@@ -82,11 +89,47 @@ contact mail, X/LinkedIn icons only when the site has URLs, no RSS, "> end of bl
 view, `© <year> blog0 | smallTech`). `PrintIn` runs on every pathname change. The theme toggle
 flips `data-theme` and persists it.
 
+**Stage A — intro scope.** When `html[data-intro="1"]` (§1 rule 4): the boot strip types `> start
+of blog0`, the wordmark and tagline type in, and `PrintIn` staggers the page. Otherwise: the boot
+strip shows the current page's command (`> cd ~`, `> ls archive`, `> cat about`, `> open <slug>`)
+fully written, the wordmark and tagline render complete, Home's `Typewriter` texts render
+complete, and `PrintIn` is a no-op. Unchanged everywhere: the nought spin, the footer `> end of
+blog0` typed on view, deck typing (interactive surfaces).
+
+**Stage A — accessible animated text.** Every typed or spun text (`Wordmark`, tagline, `Boot` line,
+`Typewriter`) renders `<span class="sr">{full text}</span><span aria-hidden="true">{animated
+copy}</span>`; the boot strip drops its outer `aria-hidden` so its sr text is read once; the
+`.sr` rule is the design's visually-hidden rule.
+
+**Stage A — head and share metadata** (root layout + `generateMetadata`, `metadataBase =
+BLOG0_PUBLIC_BASE_URL`): icons `/favicon.svg` (`image/svg+xml`), `/favicon-32.png` (32×32),
+`/favicon.ico` (16+32); on every public page `openGraph.images = [{ url: '/og-default.png', width:
+1200, height: 630, alt: '<brand>' }]` and `twitter = { card: 'summary_large_image', title,
+description, images: ['/og-default.png'] }` (articles use the default image — no per-article
+images). Assets in `public/`: `favicon.svg`, `favicon-32.png`, `favicon.ico`, `og-default.png`
+(1200×630 PNG < 60 KB: a plain wordmark card — `--bg` field, **blog0** in Space Grotesk 700 `--ink`,
+tagline in `--muted`, a 6 px `--accent` rule; made once with any tool, the binary is committed) and
+`logo.png` (512×512 wordmark mark, the JSON-LD publisher logo). **Designer-replaceable:** a
+designer may overwrite any of these files keeping the name, format and pixel size; nothing else
+changes. **JSON-LD** (`JsonLd.tsx`, escaping and CSP: `spec/architecture.md` §6): home → one
+`@graph` with `Organization` (`name` = brand, `url`, `logo` = absolute `/logo.png`, `sameAs` = the
+site's X/LinkedIn URLs when set) and `WebSite` (`name`, `url`); article → `Article` (`headline`
+title, `description` dek, `datePublished` `first_published_at`, `dateModified`
+`content_updated_at ?? first_published_at`, `author` `{ '@type': 'Person', name }`, `publisher`
+the same Organization with `logo`, `url` and `mainEntityOfPage` the absolute canonical
+`/p/<slug>`, `image` absolute `/og-default.png`). Builders: `src/server/public/seo.ts` (pure).
+
 **Newsletter form (Phase 7, `NewsletterForm.tsx` takes over).** Same markup as the design; the
 `.ft-micro` line renders `site.newsletterConsentText` (the consent line the signup records); the
 request body adds `sourceUrl: location.pathname + location.search`; success (`.ft-done`,
 `role=status`) reads "Almost there — check your inbox and confirm." (div. 15 amended); the invalid
-and try-again messages are unchanged.
+and try-again messages are unchanged. **Stage A:** the success copy follows the response's
+`delivery` — `sent` → "Almost there — check your inbox and confirm."; `recorded` → "Signup
+recorded — this environment doesn't send email."; `failed` → "We couldn't send your confirmation
+email — please try again shortly." (`role=alert`, the form stays usable for a retry). The form adds
+a honeypot `<input name="website" tabindex="-1" autocomplete="off">` inside a wrapper with
+`aria-hidden="true"` and an off-screen class (never `display:none`), and sends `website` (its
+value) and `fillMs = Math.round(performance.now() − mountedAt)` with the body (`spec/api.md`).
 
 ### Newsletter link pages `/newsletter/confirm`, `/newsletter/confirmed`, `/newsletter/unsubscribe` (Phase 7)
 > **Owner decision (2026-10-19) — confirm on open:** `GET /newsletter/confirm?t=…` is a **route
@@ -253,7 +296,9 @@ dropped. Errors render `AdminLoadError` (`role=alert`): "Couldn’t load <what>:
 ### Sign in `/admin/login`
 Centered `.surface` card: wordmark, "Sign in to the desk", Email, Password (labels, autocomplete),
 primary button **Sign in** (disabled + "Signing in…" while pending). Errors inline under the form:
-"Email or password is incorrect." / "Too many attempts — try again in N minutes." Success →
+"Email or password is incorrect." / "Too many attempts — try again in N minutes." (Stage A: from
+`Retry-After`; under 60 s it reads "Too many attempts — try again in N seconds." — "1 second" when
+N = 1) Success →
 `next` param or `/admin`. Already signed in → redirect to `/admin`.
 
 ### Desk `/admin`
@@ -509,7 +554,13 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
   Updated · Test sent to <email> · Send requested (<n> recipients) · Campaign created <id> ·
   Campaign started · Sent · Failed: <error> · Stats fetched).
 - **Stats** (`IssueStats.tsx`, sent only): six `.statbox` tiles (Recipients, Sent, Opens, Clicks,
-  Bounces, Unsubscribes — "n/a" for null) + "as of <relative time>".
+  Bounces, Unsubscribes — "n/a" for null) + "as of <relative time>". **Stage A:** for a `sent`
+  issue the page POSTs `…/stats` once on open and then every 60 s while
+  `document.visibilityState === 'visible'` (hidden → paused; visible again → refresh at once if
+  ≥ 60 s since the last; stopped on unmount; one request in flight at a time); a failed refresh
+  keeps the last tiles and shows "Couldn’t refresh stats" muted beside "as of …"; **Refresh stats**
+  stays. When `issue.trackingPublic === false` a small muted note under the tiles reads "Opens
+  can't be counted: Listmonk's public URL isn't reachable from the internet."
 - States: loading "Loading the issue…", `AdminLoadError` + Retry, 404 → "That issue isn’t here."
 
 > **Assumed (S7.4):** the Subscriber **Messages** card has no **Open confirm link** — `SubscriberMessageDto`
@@ -568,6 +619,13 @@ browsing/restore is deferred (`spec/capabilities/revision-history.md`).
   user, the History tab, belongs to deferred revision history with no phase, so "later phase"
   would promise a schedule that does not exist).
 - `.mode:disabled` (opacity .45, cursor not-allowed) — the design references disabled modes.
+- **Stage A:** `--faint` override (design.css stays verbatim) in all three theme blocks —
+  `:root`, `:root[data-theme="dark"]`, and `@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) }` — each the same-hue value nearest the design's (`#8C8F95`
+  light, `#857F75` dark) whose WCAG contrast is **≥ 4.5:1 against both `--bg` and `--surface`** of
+  that theme. `.prose img[width][height] { height: auto; }` (`spec/architecture.md` §4). The
+  honeypot wrapper `.ft-hp { position: absolute; left: -10000px; width: 1px; height: 1px;
+  overflow: hidden; }`.
 
 `src/styles/admin.css` (tokens only): desk, editor, TLDR panel and sign-in styles;
 `.tabchip--text_changed` / `.fchip--text_changed` (transparent fill, **dashed** `--accent` border,
@@ -589,3 +647,8 @@ Empty, loading, error and populated states as written above; all controls are re
 `<button>`/`<a>`/`<label>`; focus-visible ring from the design; deck is `role=dialog`
 `aria-modal`, slide changes announced (`.sr` live region "Slide n of m"); capsule is a
 `role=tablist`; reduced motion disables typing, spins, print-in, deck transitions (design rules).
+Stage A: animated text is read once from its `.sr` copy (§3 Chrome); `--faint` text meets 4.5:1
+in both themes (§5) — proven by a unit test (`tests/unit/site/contrast.test.ts`: parses the three
+theme blocks of `design.css` + `additions.css`, computes WCAG contrast of the effective `--faint`
+against `--bg` and `--surface`, asserts ≥ 4.5) and an E2E check (computed `color` of a `--faint`
+element vs the page background, light and dark).

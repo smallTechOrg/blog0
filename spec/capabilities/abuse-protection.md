@@ -35,7 +35,11 @@ scripts, framing, MIME sniffing and needless powerful features.
 ## Business Rules
 - **Caps are unchanged** (`spec/architecture.md` §6, `newsletter-list.md` — formerly `newsletter-signup.md`, `admin-auth.md`; Phase 7 adds the confirm/unsubscribe link caps in §6):
   login 5 failures per (email, IP) and 20 per email per 15 min; newsletter 3 per email, 300 per
-  site, 10 per known client IP per hour. Every bucket is per site.
+  site, 10 per known client IP per hour. Every bucket is per site. **Stage A (login only):** the
+  20-per-email cap is replaced by a progressive per-email delay and the hard caps become 5 per
+  (email, real IP) + 50 per real IP (`admin-auth.md`, `spec/architecture.md` §6); the delay state
+  is DB-backed in the same table (no migration). Newsletter signups also drop honeypot / too-fast
+  submissions before counting (`newsletter-list.md`).
 - **Atomic check-and-count across buckets:** an attempt is refused if **any** of its buckets is at
   its cap (nothing is counted); otherwise it is counted in **all** of them — in one database
   transaction with row locks, so N concurrent attempts against a cap of M admit exactly M, across
@@ -88,7 +92,7 @@ scripts, framing, MIME sniffing and needless powerful features.
 
 ## Success Criteria
 - [ ] Integration (DB store, real `blog0_test`): 20 concurrent `attempt()` calls on a 5-cap bucket → exactly 5 allowed, 15 limited, the row's `count` = 5.
-- [ ] Integration (DB store): 5 wrong passwords for one email → the 6th login is 429 with `Retry-After`; after replacing the store with a **new** `DbRateLimitStore` instance (simulated restart) the next attempt is still 429; after the window (injected `now` + 15 min) it is allowed.
+- [ ] Integration (DB store; Stage A wording): 5 wrong passwords for one email → an immediate 6th login is 429 with `Retry-After: 1`; after replacing the store with a **new** `DbRateLimitStore` instance (simulated restart) an attempt inside the wait is still 429; at `now` + 1 s it is admitted; after 15 quiet minutes the delay is gone (the prune removes the `login.delay` row). Concurrent: 10 simultaneous attempts after the 5th failure admit exactly 1.
 - [ ] Integration (DB store): a correct password after 3 failures clears the pair row and leaves the per-email count at 3.
 - [ ] Integration (DB store): newsletter with `perEmail` cap reached → 429, and the per-IP/site rows were **not** incremented by the refused attempt.
 - [ ] Integration (DB store on `pglite://memory` after `runMigrations`): the same 5-cap attempt sequence behaves identically.

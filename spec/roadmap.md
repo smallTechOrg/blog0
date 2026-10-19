@@ -105,6 +105,8 @@ the gates that proved it; Phases 4 and 6 and every other unbuilt item are listed
 "on hold" or "deferred" for unbuilt work means **Frozen — not scheduled**. The open design
 divergences (`spec/architecture.md` → `## Design divergences (ask user)` → Open) remain open user
 decisions with their defaults in force — they are decisions, not features.
+**Owner-approved exception (2026-10-19):** **Launch polish (Stage A)** — after Phase 8, below — is
+the one scheduled build on top of the freeze; it does not reopen anything in the Frozen table.
 
 ### Planning rules (as used by the built phases)
 
@@ -750,6 +752,84 @@ The `ci.yml` change is proven by its first run on push (`gh run watch`); until t
 
 **Known gap (R1):** in-flight decisions requests and their retries are not aborted at the run
 deadline — Frozen, not scheduled (below).
+
+---
+
+### Launch polish (Stage A) — owner-approved exception to the freeze
+
+**Owner (2026-10-19):** "get these done and ready for production" — autonomous run; every open
+choice is an `Assumed:` in the file that owns the rule. **Goal:** 13 launch-polish items, no new
+capability, **no migration**. Rules live where cited; this section owns slices, gate and test steps.
+
+| # | Item | Slice | Rules |
+|---|---|---|---|
+| 1 | Intro (boot line + print-in) only on a visit's first load of `/`; everything else renders at first paint | A1 | `spec/ui.md` §1 rule 4, §3 Chrome; `reader-site.md` |
+| 2 | Favicon (SVG, 32 px PNG, ICO), `og-default.png` 1200×630 < 60 KB, `logo.png`, `summary_large_image` | A1 | `spec/ui.md` §3 head and share metadata |
+| 3 | `--faint` ≥ 4.5:1 both themes (additions.css override) + tests | A1 | `spec/ui.md` §5, §6 |
+| 4 | Animated text: `.sr` full text + `aria-hidden` animated copy | A1 | `spec/ui.md` §3 Chrome, §6 |
+| 5 | JSON-LD (Article; Organization + WebSite), nonce, escaped | A1 | `spec/ui.md` §3; `spec/architecture.md` §6 |
+| 6 | Inline image `width`/`height` from `media_asset` (pre-render dims map; `renderArticle` pure) | A1 | `spec/architecture.md` §4; `media-images.md` |
+| 7 | `pnpm admin:reset-password` + bundled `reset-password.mjs` + runbook | A2 | `spec/architecture.md` §12.1; `admin-auth.md` |
+| 8 | Login: progressive per-email delay replaces the hard per-email lock | A2 (+ A1 login copy) | `spec/architecture.md` §6; `admin-auth.md`; `abuse-protection.md` |
+| 9 | Signup `delivery: 'sent'\|'recorded'\|'failed'` + honest form copy | A2 server, A1 form | `spec/api.md`; `newsletter-list.md`; `spec/ui.md` §3 |
+| 10 | Issue stats auto-refresh (open + 60 s visible) + `trackingPublic` note | A2 DTO/server, A1 UI | `spec/api.md`; `spec/architecture.md` §13.3; `spec/ui.md` §4 Issue |
+| 11 | nodemailer ≥ 10.0.6 | orchestrator bump, A2 fixes | — |
+| 12 | Signup honeypot `website` + `fillMs` ≥ 2 000 → silent drop | A2 server, A1 form | `spec/api.md`; `newsletter-list.md`; `spec/architecture.md` §6 |
+| 13 | Heartbeats `BLOG0_HEARTBEAT_BACKUP_URL` / `BLOG0_HEARTBEAT_TICK_URL` (`/fail` on failure) | A2 | `spec/architecture.md` §10, §12.3; `backup-restore.md` |
+
+**Before fan-out (orchestrator, one commit `stage-a: contracts`):** `package.json` +
+`pnpm-lock.yaml`: `nodemailer` ≥ 10.0.6 (and `@types/nodemailer` to its matching major if present),
+script `admin:reset-password` = `tsx scripts/reset-password.ts`; `src/lib/api/dto.ts`: exactly the
+three Stage A additions of `spec/api.md` (`NewsletterDelivery` + `NewsletterSubscribeResponse.delivery`,
+`NewsletterStatusDto.sender.trackingPublic`, `IssueDetailDto.trackingPublic`) — contract only; A2
+owns `dto.ts` afterwards. Typecheck may fail until the slices land (the server must now return the
+fields).
+
+**Slices** — two concurrent code-generators; disjoint files; neither edits `package.json`.
+
+| Slice | Owns | Depends on |
+|---|---|---|
+| **A1 Frontend / public** | `src/app/**` except `src/app/api/**`; `src/components/**`; `src/styles/**` (`additions.css`; never `design.css`); `src/server/public/**` (new `seo.ts`, `image-dims.ts`; `page-data.ts`, `metadata.ts` take over); `src/server/content/**` (`renderArticle` `imageDims`, `images` plugin, cache key, `RENDER_VERSION 'r2'`) and `src/lib/content/**` if the render input type lives there; `public/` (`favicon.svg`, `favicon-32.png`, `favicon.ico`, `og-default.png`, `logo.png`); `tests/unit/{site,reader,admin,content}/**`; `tests/e2e/**` (intro, metadata, JSON-LD, contrast, image dims, form copy + 2 s wait, issue auto-refresh, login seconds copy) | contract commit |
+| **A2 Server / ops** | `src/server/**` except `public/` and `content/` (`auth/rate-limit.ts`, `auth/login.ts`, `rate-window-store.ts`, `rate-window.ts`, `newsletter/{bot-check,service,…}.ts`, `newsletter/sender/{types,listmonk,stub,public-host}.ts`, `newsletter/issues/*`, `newsletter/mail/*` (nodemailer 10), `ops/{heartbeat,reset-password}.ts`, `config.ts`, `log.ts`); `src/lib/api/dto.ts`; `src/app/api/**`; `scripts/**` (`reset-password.ts`, `build-release.mjs`, `backup.ts`, `newsletter-tick.ts`, `container-e2e.sh` + a reset-password step); `Dockerfile` (copy `reset-password.mjs`); `tests/integration/**`; `tests/unit/{auth,newsletter,ops,helpers,config}/**`; `docs/**` (`deploy.md`: "Reset an admin password", heartbeats, login delay); `README.md`; `.env.example` (the two heartbeat rows) | contract commit |
+
+Hand-offs: A1 builds the form, issue page and login copy against the DTO contract and
+`spec/api.md`; the E2E run in the gate needs A2's server (runtime-only dependency). A2 never edits
+markup; A1 never edits a route handler under `src/app/api/`.
+
+**Gate (exact)** — `.env` as in the planning rules (stub transport + stub sender unless noted):
+```bash
+pnpm install --frozen-lockfile
+pnpm db:migrate && pnpm db:verify             # "… 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK" — no Stage A migration
+pnpm typecheck && pnpm lint && pnpm test:unit # + site/contrast, site/seo (serializeJsonLd, og-default IHDR + size), content/image-dims, auth/rate-limit (delay schedule), newsletter/{bot-check,public-host}, ops/heartbeat, config (heartbeat URLs)
+BLOG0_REQUIRE_REAL_KEY=1 pnpm test:integration   # login delay (memory + DB, restart, concurrency), reset-password, signup delivery/drop (stub + Mailpit SMTP), stats event dedupe, heartbeats
+pnpm build:release && ls dist/release.mjs dist/reset-password.mjs
+BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_REQUIRE_REAL_KEY=1 BLOG0_DIST_DIR=.next-gate pnpm test:e2e   # tldr → reader → listen → smoke → newsletter, with the Stage A assertions
+pnpm test:e2e:design
+pnpm test:container                           # exit 0 → "container-e2e: PASS" incl. `node reset-password.mjs`; exit 3 → "PENDING DOCKER"
+# Boot check (background tool): pnpm start   then:
+curl -fsS http://localhost:3410/api/health/ready                                   # "pending":0
+curl -fsS http://localhost:3410/ | grep -c 'application/ld+json'                    # 1
+curl -fsSI http://localhost:3410/og-default.png | grep -i 'content-type: image/png'
+```
+A `PENDING DOCKER` line makes the gate "pending docker", not passed.
+
+**How the user tests it:**
+1. New private window → `http://localhost:3410/`: the boot line types and the page prints in. Reload
+   → everything is there at once. New private window straight to an article → text at first paint,
+   no typing.
+2. Paste an article URL into a link-preview checker (or view source): large card image, icons in
+   the tab, one JSON-LD block.
+3. Footer signup (wait two seconds): "Signup recorded — this environment doesn't send email." (stub);
+   with SMTP configured: "Almost there — check your inbox and confirm."
+4. Sign in with a wrong password six times quickly: "Too many attempts — try again in 1 second.",
+   and the waits grow with more failures; the right password after the wait signs you in.
+5. `BLOG0_NEW_ADMIN_PASSWORD=… pnpm admin:reset-password --email <you>` → masked line; the old
+   session is signed out.
+6. Admin → Newsletter → a sent issue: the stats tiles fill without clicking; with Listmonk on
+   `localhost` the "Opens can't be counted …" note shows.
+7. Set `BLOG0_HEARTBEAT_BACKUP_URL` to a healthchecks.io check and run `pnpm backup -- --out
+   var/backups` → the check turns green.
+No labelled stubs are introduced.
 
 ---
 

@@ -30,7 +30,7 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 | Event ledger | append-only rows: signup, confirmation_sent, confirmed, unsubscribed, resubscribed, bounced, provider_synced, provider_removed, ip_pruned | `newsletter_subscriber_event` |
 | Suppression ledger | append-only rows (email, reason, source, when) — never deleted | `newsletter_suppression` |
 | Confirmation email | transactional message (HTML + text) with the confirm link | reader's inbox (SMTP) or `newsletter_message` (stub) |
-| Footer copy | "Almost there — check your inbox and confirm." | footer form |
+| Footer copy | "Almost there — check your inbox and confirm." — Stage A: per `delivery` (`sent` / `recorded` / `failed`, copy in `spec/ui.md` §3) | footer form |
 | Confirm / unsubscribe pages | site-chrome pages stating the outcome | reader |
 | Provider copy | subscriber upsert / blocklist with consent metadata as attributes | sender adapter (`newsletter-issues.md`) |
 | Subscriber list, filters, per-subscriber audit view | table + detail | Admin → Subscribers |
@@ -75,6 +75,16 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
   are stored only hashed.
 - **No enumeration.** The footer form gets the same success whether the address was new, pending,
   confirmed or suppressed. A `confirmed` address signing up again changes nothing and sends nothing.
+- **Stage A — honest result.** The response says whether the confirmation went out: `sent` (SMTP),
+  `recorded` (stub transport — nothing leaves this environment), `failed` (SMTP rejected this
+  request's email; the pending row is still kept). Outcomes that send nothing report the
+  environment's success value, so enumeration stays closed. > **Assumed:** `failed` reveals only
+  that a send was attempted; acceptable (an attacker cannot make SMTP fail on demand).
+- **Stage A — bot drop.** A filled hidden `website` field, or a submission less than 2 s after the
+  form appeared (or without the fill time), is silently dropped: same 200 success shape, no row,
+  no event, no email, no rate-limit count, one `newsletter.signup_dropped` log line with the
+  reason. > **Assumed:** 2 s minimum; API callers must send `fillMs` (the only client is the
+  footer form).
 - **Suppression is append-only and permanent.** Unsubscribing (link, one-click POST, admin, or
   provider) writes a `newsletter_suppression` row and an `unsubscribed`/`bounced` event, sets the
   status, and blocklists the address at the provider. Suppression rows are never deleted or
@@ -255,6 +265,7 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 > every well-formed token) is what ships.
 
 ## Success Criteria
+- [ ] Stage A (integration): every signup request in these criteria sends `fillMs: 5000`. Stub transport → `delivery: 'recorded'` for new, pending, confirmed, capped and suppressed addresses alike; an SMTP transport (Mailpit sink) → `'sent'` for the same set; an SMTP transport that rejects (unreachable port) → `'failed'` with the pending row and a `confirmation_sent` event `outcome: 'failed'`. `website: 'x'` → 200 with the environment's delivery, no `newsletter_subscriber` / event / message / `rate_limit_bucket` row written, one `newsletter.signup_dropped` `reason: 'honeypot'`; `fillMs: 1500` or no `fillMs` → the same with `reason: 'too_fast'`; `fillMs: 'x'` → 400. E2E: the footer form waits ≥ 2 s before submitting and shows "Signup recorded — this environment doesn't send email." (stub).
 - [ ] Integration: `POST /api/newsletter { email: ' A@B.com ', sourceUrl: '/p/humans-are-software' }` → `{ subscribed: true }`; the row is `pending`, `email = 'a@b.com'`, `signup_source_url` set, `consent_text`/`consent_version` equal the site settings, `confirm_token_hash` is 64 hex chars and is not the token; one `signup` + one `confirmation_sent` event; one `newsletter_message` row (stub) whose HTML contains `/newsletter/confirm?t=`.
 - [ ] Integration: opening that link → 303 to `/newsletter/confirmed?status=ok` ("You’re confirmed — welcome to <brand>."); the row is `confirmed` with `confirmed_at`, `confirmed_ip`, `confirmed_user_agent` set and the token hash null; a `confirmed` event with that IP/UA and `details.via = 'link_open'`; **no** `provider_synced` event and `provider_synced_at` null (stub sender skips sync); opening it again → `?status=already` ("You’re already confirmed.", nothing written), and `POST /api/newsletter/confirm` with the same token → 410 `TOKEN_EXPIRED`. Expired → `?status=expired`; malformed/unknown → `?status=invalid` (a true 404); over the cap → `?status=limited&m=N`. *(Owner decision 2026-10-19.)*
 - [ ] Integration: with injected `now` 73 h later the unused link → the expired copy on the page (200) and 410 `TOKEN_EXPIRED` from the JSON route; a new signup for the same address issues a different hash and a second `confirmation_sent` event; a 4th signup within 24 h sends nothing (3 `confirmation_sent` events, 4 `signup` events).

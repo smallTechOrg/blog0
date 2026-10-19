@@ -428,6 +428,9 @@ Drizzle (`src/server/db/schema.ts`, slice S7.1): `newsletterSubscriberEvent`,
 `BACKUP_TABLES` (= `ALL_TABLE_NAMES` minus `rate_limit_bucket`) therefore includes every
 newsletter table — the consent ledger is part of every backup.
 `rate_limit_bucket.scope` gains `newsletter.link.ip` and `newsletter.link.site` (no migration).
+Stage A adds `login.ip` and `login.delay` (no migration; `login.delay` rows use `window_start =
+epoch 0`, `count` = attempts since the last success, `expires_at` = last attempt + 15 min —
+`spec/architecture.md` §6) and stops writing `login.email`.
 
 ### media_asset
 | Column | Type | Notes |

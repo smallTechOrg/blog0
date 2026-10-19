@@ -139,7 +139,7 @@ level otherwise (`spec/architecture.md` §7); DTOs live in the health section of
 
 | Method & path | Auth | Request | Response `data` / notes |
 |---|---|---|---|
-| POST `/api/auth/login` | none | `{ email: string, password: string }` | `{ user: UserDto }` + `Set-Cookie: blog0_session`. Errors: `BAD_CREDENTIALS`, `RATE_LIMITED`. |
+| POST `/api/auth/login` | none | `{ email: string, password: string }` | `{ user: UserDto }` + `Set-Cookie: blog0_session`. Errors: `BAD_CREDENTIALS`, `RATE_LIMITED` (429 + `Retry-After` seconds; Stage A: also the progressive per-email delay — `spec/architecture.md` §6; the body's `error.details.retryAfterSec` equals the header). |
 | POST `/api/auth/logout` | admin | — | `{ signedOut: true }`, cookie cleared (also succeeds with no session). |
 | GET `/api/auth/me` | admin | — | `{ user: UserDto }` |
 | POST `/api/admin/preview` | admin | `{ title: string, dek: string, bodyMd: string }` (body ≤ 200 000 chars) | `PreviewResultDto` |
@@ -160,7 +160,7 @@ level otherwise (`spec/architecture.md` §7); DTOs live in the health section of
 | Method & path | Auth | Request | Response `data` |
 |---|---|---|---|
 | GET `/api/public/articles/:slug/tldr` | none | — | `PublicTldrDto = { slug, title, topic, dek, meta: string, slides: Array<{ text: string }>, disclosure: string, times: { read: number, tldr: number, listen: number \| null }, shareUrl: string }` — published deck only, else 404. `times.listen` = the published recording's minutes or null. `Cache-Control: public, max-age=60`. |
-| POST `/api/newsletter` | none | `{ email: string, name?: string, sourceUrl?: string }` (Phase 7 adds `sourceUrl`: a relative path ≤ 500, default `/`) | `{ subscribed: true }` (the same for a new, pending, confirmed or suppressed address — no enumeration). Phase 7: creates/re-opens a `pending` subscriber and sends the confirmation email (`spec/capabilities/newsletter-list.md`). Invalid bodies → 400 `VALIDATION_FAILED` before any rate-limit counting. `RATE_LIMITED` (429 + `Retry-After`) per the caps in `spec/architecture.md` §6. |
+| POST `/api/newsletter` | none | `{ email: string, name?: string, sourceUrl?: string, website?: string, fillMs?: number }` (Phase 7 adds `sourceUrl`: a relative path ≤ 500, default `/`. Stage A adds the honeypot `website` (string ≤ 200) and `fillMs` (integer 0–86 400 000: ms from form mount to submit); wrong types → 400) | `NewsletterSubscribeResponse` = `{ subscribed: true, delivery }` (the same for a new, pending, confirmed or suppressed address — no enumeration). **Stage A `delivery`:** `'failed'` only when this request's confirmation email was attempted over SMTP and the transport rejected it; otherwise the environment's success value — `'sent'` with the SMTP transport, `'recorded'` with the stub — including every no-send outcome (confirmed, capped, suppressed) so it never enumerates. **Stage A bot drop:** after body validation and **before** any rate-limit counting, a non-empty trimmed `website` (reason `honeypot`) or a missing / < 2 000 `fillMs` (reason `too_fast`) → 200 with the environment's success `delivery`, no DB write of any kind, log `newsletter.signup_dropped`. Phase 7: creates/re-opens a `pending` subscriber and sends the confirmation email (`spec/capabilities/newsletter-list.md`). Invalid bodies → 400 `VALIDATION_FAILED` before any rate-limit counting. `RATE_LIMITED` (429 + `Retry-After`) per the caps in `spec/architecture.md` §6. |
 | GET `/api/admin/subscribers` | admin | see the Phase 7 newsletter section | `SubscriberListResponse` or CSV / audit-JSON download |
 | GET `/api/admin/site` | admin | — | `{ site: SiteSettingsDto }` — Phase 7 adds `newsletter: NewsletterSettingsDto` inside `SiteSettingsDto` (read-only here; edited via `/api/admin/newsletter/settings`) |
 | PATCH `/api/admin/site` | admin | any subset of the editable site fields (never `newsletter`; unknown keys → 400) | `{ site: … }` |
@@ -249,8 +249,9 @@ type SubscriberEventKind = 'signup' | 'confirmation_sent' | 'confirmed' | 'resub
 type NewsletterSource = 'footer' | 'email_link' | 'one_click' | 'admin' | 'provider' | 'webhook' | 'migration' | 'system';
 type SuppressionReason = 'unsubscribed' | 'bounced' | 'complaint' | 'admin';
 
-/** POST /api/newsletter — unchanged shape (no enumeration). */
-interface NewsletterSubscribeResponse { subscribed: true }
+/** POST /api/newsletter — no enumeration. Stage A adds `delivery` (rules: endpoint row above). */
+type NewsletterDelivery = 'sent' | 'recorded' | 'failed';
+interface NewsletterSubscribeResponse { subscribed: true; delivery: NewsletterDelivery }
 
 interface SubscriberDto {                       // list rows (replaces the Phase 2 shape; CSV uses the same fields)
   id: string; email: string; name: string | null; status: SubscriberStatus; source: string;
@@ -287,7 +288,8 @@ type NewsletterMode = 'per_post' | 'digest' | 'manual';
 interface NewsletterSettingsDto { mode: NewsletterMode; autoSend: boolean; digestDays: number; digestPosts: number; consentText: string; consentVersion: string; modeSetAt: string | null }
 type NewsletterSettingsPatch = Partial<NewsletterSettingsDto>;   // modeSetAt is server-set and rejected in a PATCH
 interface NewsletterStatusDto {
-  sender: { kind: 'listmonk' | 'stub'; configured: boolean; listId: string | null; listName: string | null; lastSyncAt: string | null; healthy: boolean | null; message: string | null };
+  sender: { kind: 'listmonk' | 'stub'; configured: boolean; listId: string | null; listName: string | null; lastSyncAt: string | null; healthy: boolean | null; message: string | null;
+    trackingPublic: boolean };                  // Stage A: false when Listmonk's root URL host is not public (spec/architecture.md §13.3); always true for the stub
   mail: { transport: 'smtp' | 'stub'; from: string | null };
   counts: SubscriberCounts;
   digest: { lastIssueAt: string | null; newPostsSince: number; dueAt: string | null } | null;   // only in digest mode
@@ -308,6 +310,7 @@ interface IssueDetailDto extends IssueListItemDto {
   createdBy: string | null; sentBy: string | null; events: IssueEventDto[];   // oldest first
   editable: boolean;                            // status === 'draft'
   stuckSending: boolean;                        // status === 'sending' and updated_at older than SENDING_STALE_MS (10 min) — Try again allowed (spec/architecture.md §13.5)
+  trackingPublic: boolean;                      // Stage A: same value as NewsletterStatusDto.sender.trackingPublic
 }
 interface IssueDetailResponse { issue: IssueDetailDto }
 interface IssueCreateRequest { title: string; introMd?: string; articleIds: string[] }
@@ -355,7 +358,7 @@ routes** carry the exact 410 / 429 (+ `Retry-After`).
 | GET `/api/admin/newsletter/issues/:id/preview` | admin | — | `IssuePreviewDto` — for a `draft`, re-snapshots the posts from their current published revisions first (persisted); for other statuses returns the frozen bodies. |
 | POST `/api/admin/newsletter/issues/:id/test` | admin | — | `IssueTestResponse` — to the signed-in admin's email through the transactional transport; event `test_sent`; status unchanged; `MAIL_FAILED`. |
 | POST `/api/admin/newsletter/issues/:id/send` | admin | `IssueSendRequest` | `IssueDetailResponse` with status `sent` (or `failed` + `lastError`, HTTP 502 `SENDER_FAILED` with the detail in `error.details.issue`). `ISSUE_NOT_DRAFT` unless `draft`, `failed`, or `sending` for more than 10 min (stuck — `spec/architecture.md` §13.5); `NO_RECIPIENTS`; `SENDER_UNAVAILABLE`. Runs the blog0→provider sync for confirmed subscribers first (listmonk only). `maxDuration = 120`. |
-| POST `/api/admin/newsletter/issues/:id/stats` | admin | — | `IssueDetailResponse` with fresh `stats` (event `stats_fetched`); `ISSUE_NOT_DRAFT` for drafts; `SENDER_FAILED` on a provider error (status unchanged). |
+| POST `/api/admin/newsletter/issues/:id/stats` | admin | — | `IssueDetailResponse` with fresh `stats` (event `stats_fetched` — Stage A: appended only when a counter differs from the stored stats, so the issue page's 60 s auto-refresh never floods the send log; `fetchedAt` is always updated); `ISSUE_NOT_DRAFT` for drafts; `SENDER_FAILED` on a provider error (status unchanged). |
 
 ## Endpoints — Frozen — not scheduled (was Phase 4)
 
