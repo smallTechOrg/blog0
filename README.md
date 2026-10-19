@@ -185,7 +185,7 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 7 applied (latest 0006_known_device), 0 pending: OK
    ```
 
 6. **Prove the OpenRouter key and Jev** (the decisions model `typesafe/jev-1.13`) with one real
@@ -495,13 +495,13 @@ suite.
 | `pnpm seed:tldr [-- --write-fixture]` | publish a TLDR deck for each seeded post without one (real Jev call with a key, committed fixture without; `--write-fixture` refreshes the fixture with a real key) |
 | `pnpm spike:pglite` | PGlite feasibility spike (embedded-engine smoke check) |
 | `pnpm admin:create --email <address> --name "<Display Name>"` | add another admin to the site |
-| `pnpm admin:reset-password --email <address>` | set a new password for that admin (from `BLOG0_NEW_ADMIN_PASSWORD` or a hidden prompt, 12–200 chars), end all their sessions and clear the email's sign-in delay; prints `password reset for s***@… · N sessions ended` (exit 1 unknown admin, 2 bad input). In the image: `node reset-password.mjs --email <address>` |
+| `pnpm admin:reset-password --email <address>` | set a new password for that admin (from `BLOG0_NEW_ADMIN_PASSWORD` or a hidden prompt, 12–200 chars), end all their sessions, forget their known devices (`blog0_device` cookies — those skip the shared sign-in delay) and clear the email's sign-in delay; prints `password reset for s***@… · N sessions ended` (exit 1 unknown admin, 2 bad input). In the image: `node reset-password.mjs --email <address>` |
 
 Every `pnpm db:*` / `admin:create` / `admin:reset-password` script also works on the embedded engine, e.g.:
 
 ```bash
 BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
-# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK
+# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 7 applied (latest 0006_known_device), 0 pending: OK
 ```
 
 Run them only while no dev server has that directory open. `drizzle-kit` commands

@@ -43,6 +43,13 @@
       "when": 1792426044468,
       "tag": "0005_newsletter_erase_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792432877623,
+      "tag": "0006_known_device",
+      "breakpoints": true
     }
   ]
 }

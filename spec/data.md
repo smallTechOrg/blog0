@@ -42,6 +42,9 @@ Phase 7, `pnpm db:verify` reports `4 applied (latest 0003_newsletter_prune_fix)`
 > 'g')`); new rows are redacted by the app before insert. The salt is per site so rotating any
 > secret never breaks erasure matching; losing it (a restore from before `0004`) would — it is
 > inside every backup.
+> **Stage C — `0006_known_device`** (`7 applied (latest 0006_known_device)`): adds nullable
+> `app_user.devices_valid_after`; `admin:reset-password` sets it so earlier known-device cookies stop
+> counting (spec/architecture.md §6).
 > **Owner decision 2026-10-19 — `0005_newsletter_erase_delete`** (Drizzle-generated DDL + hand-written
 > SQL; `6 applied (latest 0005_newsletter_erase_delete)`): erasing personal data **deletes** the
 > subscriber; the 0004 tombstone is retired (its deterministic address collided on
@@ -120,6 +123,7 @@ Admins/writers. No roles in v0.1 — every user is an admin.
 | password_hash | text not null | argon2id PHC string |
 | last_login_at | timestamptz null | |
 | disabled_at | timestamptz null | disabled users cannot sign in (Phase 4 UI) |
+| devices_valid_after | timestamptz null | Stage C (`0006_known_device`): known-device cookies (`blog0_device`, architecture §6) issued at or before it are ignored; set to now by `admin:reset-password`. Null = every valid cookie counts. **Assumed (Stage C)** |
 | created_at, updated_at | timestamptz | |
 
 ### session

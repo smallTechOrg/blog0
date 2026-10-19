@@ -76,6 +76,10 @@ services:
     environment:
       LISTMONK_app__address: 0.0.0.0:9000
       TZ: Etc/UTC
+      # The image entrypoint chowns /listmonk (incl. the uploads volume) to PUID:PGID, then drops
+      # root via su-exec; the default 0 would run Listmonk as root. Inherited by docker-compose.local.yml.
+      PUID: '1000'
+      PGID: '1000'
     depends_on:
       cloud-sql-proxy: { condition: service_healthy, required: false }
     ports: ['127.0.0.1:9000:9000'] # admin only via the SSH tunnel; the public paths go through Caddy

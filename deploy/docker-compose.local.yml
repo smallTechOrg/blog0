@@ -52,7 +52,7 @@ services:
       - media-backup-local:/backup/media # MEDIA_BACKUP_DEST=/backup/media (deploy/local/compose.env)
 
   listmonk:
-    env_file: !override [local/listmonk.env]
+    env_file: !override [local/listmonk.env] # `environment` (PUID/PGID 1000, address, TZ) merges from the prod file
     depends_on:
       postgres: { condition: service_healthy }
       mailpit: { condition: service_healthy }

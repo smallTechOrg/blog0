@@ -146,6 +146,8 @@ export const appUser = pgTable(
     passwordHash: text('password_hash').notNull(),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     disabledAt: timestamp('disabled_at', { withTimezone: true }),
+    /** Stage C (0006_known_device): known-device cookies issued at or before this are ignored; set by reset-password. */
+    devicesValidAfter: timestamp('devices_valid_after', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

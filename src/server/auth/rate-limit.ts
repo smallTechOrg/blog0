@@ -18,6 +18,11 @@ export { delayDecision, LOGIN_DELAY_CAP_SEC, LOGIN_DELAY_RESET_MS, LOGIN_FREE_AT
 // `recordSuccess()` (clear pair, refund ip, clear delay). This module holds no state of its own.
 // > Assumed: 5 free attempts, 1 s doubling to 60 s, 15 min reset, 50 per IP (constants here and in
 // > login-delay.ts).
+// Stage C — known device (auth/known-device.ts): an attempt carrying a valid `blog0_device` cookie of
+// the account being tried skips the shared per-email delay and is counted in its OWN delay key
+// (email + device id) instead; its success clears only that key, never the shared one, so neither an
+// owner's typo nor an owner's sign-in changes what an attacker on unknown devices faces. The hard
+// caps (a) apply unchanged. > Assumed (Stage C).
 
 export const LOGIN_MAX_FAILURES = 5;
 export const LOGIN_IP_MAX_FAILURES = 50;
@@ -52,6 +57,20 @@ export function loginDelayKey(email: string): string {
   return normalize(email);
 }
 
+/** The `login.delay` key of one known device of an email (a NUL never occurs in an email). */
+export function knownDeviceDelayKey(email: string, deviceId: string): string {
+  return `${normalize(email)}\u0000device\u0000${deviceId}`;
+}
+
+/** Options for one sign-in attempt: `knownDeviceId` = the device id of a verified known-device cookie. */
+export interface LoginAttemptOptions {
+  knownDeviceId?: string | null;
+}
+
+function delayKeyFor(email: string, options: LoginAttemptOptions): string {
+  return options.knownDeviceId ? knownDeviceDelayKey(email, options.knownDeviceId) : loginDelayKey(email);
+}
+
 export class LoginRateLimiter {
   readonly #store: RateLimitStore | null;
 
@@ -68,13 +87,13 @@ export class LoginRateLimiter {
    * Check + reserve atomically: when allowed, the attempt is already counted (hard caps and delay).
    * Call `recordSuccess` (same `now`) if the password matches. A store failure propagates (fail closed).
    */
-  async attempt(siteId: string, email: string, ip: string, now: number = Date.now()): Promise<RateLimitCheck> {
+  async attempt(siteId: string, email: string, ip: string, now: number = Date.now(), options: LoginAttemptOptions = {}): Promise<RateLimitCheck> {
     const store = this.#resolve();
     const buckets = loginBuckets(email, ip);
     const caps = await store.attempt(siteId, buckets, now);
     if (caps.limited) return { limited: true, retryAfterSec: caps.retryAfterSec, scope: caps.scope as LoginThrottleScope };
 
-    const delay = await store.attemptDelay(siteId, loginDelayKey(email), now);
+    const delay = await store.attemptDelay(siteId, delayKeyFor(email, options), now);
     if (delay.limited) {
       for (const bucket of buckets) await store.refund(siteId, bucket, now);
       return { limited: true, retryAfterSec: delay.retryAfterSec, scope: 'login.delay' };
@@ -82,13 +101,13 @@ export class LoginRateLimiter {
     return { limited: false };
   }
 
-  /** A correct password: clear the (email, IP) count, refund this attempt's IP reservation, forget the delay. */
-  async recordSuccess(siteId: string, email: string, ip: string, now: number = Date.now()): Promise<void> {
+  /** A correct password: clear the (email, IP) count, refund this attempt's IP reservation, forget the delay (the device's own key for a known device). */
+  async recordSuccess(siteId: string, email: string, ip: string, now: number = Date.now(), options: LoginAttemptOptions = {}): Promise<void> {
     const store = this.#resolve();
     const [pair, perIp] = loginBuckets(email, ip);
     if (pair) await store.clear(siteId, pair, now);
     if (perIp) await store.refund(siteId, perIp, now);
-    await store.clearDelay(siteId, loginDelayKey(email));
+    await store.clearDelay(siteId, delayKeyFor(email, options));
   }
 }
 

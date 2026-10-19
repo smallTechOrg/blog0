@@ -503,7 +503,7 @@ function migrationSuite(engine: Engine) {
         expect(await count(handle, 'newsletter_subscriber', `email = '${tomb}'`)).toBe(1);
 
         const applied = await runMigrations(handle);
-        expect(applied).toEqual(['0005_newsletter_erase_delete']);
+        expect(applied).toEqual(['0005_newsletter_erase_delete', '0006_known_device']);
         expect((await getMigrationStatus(handle)).pending).toEqual([]);
 
         // tombstones and everything hanging off them are gone

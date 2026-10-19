@@ -2,8 +2,8 @@
 # Idempotent Listmonk settings for the blog0 deploy (Stage B, spec/architecture.md §12.7).
 #
 #   deploy/listmonk-settings.sh [--env-file <file>] <listmonk-url>
-#     prod  (through the SSH tunnel to the VM's 127.0.0.1:9000):
-#           deploy/listmonk-settings.sh --env-file deploy/listmonk.env http://127.0.0.1:9000
+#     prod  (from the laptop, through the IAP SSH tunnel `-L 9000:localhost:9000` — the VM has no node;
+#           docs/deploy-gcp.md §9.4): deploy/listmonk-settings.sh --env-file deploy/listmonk.env http://localhost:9000
 #     local deploy/listmonk-settings.sh --env-file deploy/local/listmonk.env http://127.0.0.1:3491
 #
 # Values come from the environment; --env-file fills only variables the shell has not set (KEY=value

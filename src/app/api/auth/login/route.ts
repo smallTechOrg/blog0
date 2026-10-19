@@ -3,12 +3,14 @@ import { z } from 'zod';
 import type { LoginResponse } from '@/lib/api/dto';
 import { clientIpFromRequest, login } from '@/server/auth/login';
 import { PASSWORD_MAX_LENGTH } from '@/server/auth/password';
+import { readKnownDeviceCookie, serializeKnownDeviceCookie } from '@/server/auth/known-device';
 import { serializeSessionCookie } from '@/server/auth/session';
 import { apiResult, withApi } from '@/server/http/api';
 import { maskEmail } from '@/server/log';
 import { getCurrentSite } from '@/server/site/current';
 
-// POST /api/auth/login — { email, password } → { user } + Set-Cookie blog0_session (spec/api.md).
+// POST /api/auth/login — { email, password } → { user } + Set-Cookie blog0_session and the
+// known-device cookie blog0_device (spec/api.md; Stage C, auth/known-device.ts).
 // Errors: 400 VALIDATION_FAILED, 401 BAD_CREDENTIALS, 429 RATE_LIMITED (+ Retry-After),
 // 403 FORBIDDEN_ORIGIN (cross-site POST).
 
@@ -35,9 +37,15 @@ export const POST = withApi(
       password: body.password,
       ip: clientIpFromRequest(request),
       userAgent: request.headers.get('user-agent'),
+      deviceCookie: readKnownDeviceCookie(request.headers.get('cookie')),
       requestId,
     });
     const data: LoginResponse = { user: result.user };
-    return apiResult(data, { headers: [['set-cookie', serializeSessionCookie(result.token, result.expiresAt, result.issuedAt)]] });
+    return apiResult(data, {
+      headers: [
+        ['set-cookie', serializeSessionCookie(result.token, result.expiresAt, result.issuedAt)],
+        ['set-cookie', serializeKnownDeviceCookie(result.device.value, result.device.expiresAt, result.issuedAt)],
+      ],
+    });
   },
 );

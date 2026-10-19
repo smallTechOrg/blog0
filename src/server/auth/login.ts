@@ -10,6 +10,7 @@ import { getConfig } from '../config';
 import { ApiError } from '../http/api';
 import { log, maskEmail } from '../log';
 import { findUserByEmail, normalizeUserEmail, recordUserLogin, toUserDto } from '../users/repo';
+import { issueKnownDevice, isKnownDeviceFor, verifyKnownDevice, type IssuedKnownDevice } from './known-device';
 import { verifyAgainstDummy, verifyPassword } from './password';
 import { getLoginRateLimiter, rateLimitMessage, type LoginThrottleScope } from './rate-limit';
 import { createSession } from './session';
@@ -62,6 +63,8 @@ export interface LoginInput {
   password: string;
   ip: string;
   userAgent: string | null;
+  /** The raw `blog0_device` cookie value, if the browser sent one (Stage C known device). */
+  deviceCookie?: string | null;
   requestId?: string;
   now?: Date;
 }
@@ -72,14 +75,23 @@ export interface LoginSuccess {
   expiresAt: Date;
   /** The instant the session was issued (use it to compute the cookie Max-Age). */
   issuedAt: Date;
+  /** A fresh known-device cookie value for this browser (same device id when it was already known). */
+  device: IssuedKnownDevice;
 }
 
-function logAttempt(outcome: 'ok' | 'bad_credentials' | 'rate_limited', email: string, requestId?: string, scope?: LoginThrottleScope): void {
+function logAttempt(
+  outcome: 'ok' | 'bad_credentials' | 'rate_limited',
+  email: string,
+  requestId: string | undefined,
+  knownDevice: boolean,
+  scope?: LoginThrottleScope,
+): void {
   log.info('auth.login', {
     msg: `sign-in ${outcome}`,
     outcome,
     email_masked: maskEmail(email),
     request_id: requestId,
+    known_device: knownDevice,
     scope,
   });
 }
@@ -88,36 +100,43 @@ function logAttempt(outcome: 'ok' | 'bad_credentials' | 'rate_limited', email: s
  * Verifies credentials and opens a session. Throws ApiError RATE_LIMITED (429, Retry-After =
  * `error.details.retryAfterSec`) inside a hard cap (real IP only) or the email's progressive delay —
  * the password is then not checked — or BAD_CREDENTIALS (401). After the delay a correct password
- * signs in, so nobody can lock the owner out by knowing the email (Stage A).
+ * signs in, so nobody can lock the owner out by knowing the email (Stage A). Stage C: a valid
+ * known-device cookie of this account skips the shared per-email delay (auth/rate-limit.ts).
  */
 export async function login(input: LoginInput): Promise<LoginSuccess> {
   const now = input.now ?? new Date();
   const email = normalizeUserEmail(input.email);
   const limiter = getLoginRateLimiter();
 
+  // Known device: only a cookie whose signature verifies costs a user lookup before the throttle.
+  const device = verifyKnownDevice(input.deviceCookie, now);
+  let user = device ? await findUserByEmail(input.siteId, email) : undefined;
+  const knownDeviceId = user && isKnownDeviceFor(device, user) ? device!.deviceId : null;
+  const known = knownDeviceId !== null;
+
   // Check AND reserve this attempt atomically in the throttle store (one DB transaction with row
   // locks on the database store), so concurrent wrong attempts — on any instance — are all counted;
   // a correct password clears the reservation below. A store failure propagates (fail closed → 500).
-  const check = await limiter.attempt(input.siteId, email, input.ip, now.getTime());
+  const check = await limiter.attempt(input.siteId, email, input.ip, now.getTime(), { knownDeviceId });
   if (check.limited) {
-    logAttempt('rate_limited', email, input.requestId, check.scope);
+    logAttempt('rate_limited', email, input.requestId, known, check.scope);
     throw new ApiError('RATE_LIMITED', 429, rateLimitMessage(check.retryAfterSec), { retryAfterSec: check.retryAfterSec }, {
       'retry-after': String(check.retryAfterSec),
     });
   }
 
-  const user = await findUserByEmail(input.siteId, email);
+  if (user === undefined) user = await findUserByEmail(input.siteId, email);
   const ok =
     user !== null && user.disabledAt === null
       ? await verifyPassword(user.passwordHash, input.password)
       : await verifyAgainstDummy(input.password);
 
   if (!ok || user === null) {
-    logAttempt('bad_credentials', email, input.requestId);
+    logAttempt('bad_credentials', email, input.requestId, known);
     throw new ApiError('BAD_CREDENTIALS', 401, BAD_CREDENTIALS_MESSAGE);
   }
 
-  await limiter.recordSuccess(input.siteId, email, input.ip, now.getTime());
+  await limiter.recordSuccess(input.siteId, email, input.ip, now.getTime(), { knownDeviceId });
   const db = getDb();
   // Expired sessions are purged lazily at login (spec/data.md → Session).
   await db.delete(session).where(and(eq(session.siteId, input.siteId), lt(session.expiresAt, now)));
@@ -129,6 +148,7 @@ export async function login(input: LoginInput): Promise<LoginSuccess> {
     now,
   });
   await recordUserLogin(input.siteId, user.id, now);
-  logAttempt('ok', email, input.requestId);
-  return { user: toUserDto(user), token: created.token, expiresAt: created.expiresAt, issuedAt: now };
+  logAttempt('ok', email, input.requestId, known);
+  const issued = issueKnownDevice(user.id, now, undefined, knownDeviceId ?? undefined);
+  return { user: toUserDto(user), token: created.token, expiresAt: created.expiresAt, issuedAt: now, device: issued };
 }

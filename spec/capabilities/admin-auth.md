@@ -36,10 +36,17 @@ generation and publish is attributed to a distinct person.
   the previous one; an attempt inside the wait is refused with "Too many attempts — try again in N
   seconds." and a correct password after the wait signs in. Hard caps remain only per (email, real
   IP) — 5 per 15 min — and per real IP — 50 per 15 min (HOW: `spec/architecture.md` §6).
+- **Stage C — known device (Assumed):** a browser that has signed in to an account before carries
+  a signed `blog0_device` cookie (HttpOnly, 180 days). Signing in to **that** account from it skips
+  the shared per-email delay, so an attacker hammering the email (from unknown devices) cannot keep
+  the owner waiting; its own wrong passwords get their own delay and never lengthen the shared one.
+  The per-(email, real IP) and per-IP caps still apply. A tampered, expired, or other-account cookie
+  is ignored. Signing out keeps the cookie; a password reset invalidates every known device of that
+  user (HOW: `spec/architecture.md` §6, `app_user.devices_valid_after`).
 - **Stage A — password reset CLI:** `pnpm admin:reset-password --email <e>` (and `node
   reset-password.mjs --email <e>` in the production image) sets a new password (from
   `BLOG0_NEW_ADMIN_PASSWORD` or a hidden prompt, 12–200 chars), ends **all** of that user's
-  sessions, clears the email's login delay, and prints only the masked email and the number of
+  sessions, clears the email's login delay, invalidates that user's known devices (Stage C), and prints only the masked email and the number of
   sessions ended (HOW: `spec/architecture.md` §12.1; runbook `docs/deploy.md`).
 - Passwords are never stored or logged in clear; the seeded admin's password is only set when the
   admin is first created (unless an explicit reset flag is passed).
@@ -56,6 +63,7 @@ generation and publish is attributed to a distinct person.
 - [ ] Wrong password and unknown email both return 401 `BAD_CREDENTIALS` with the identical message.
 - [ ] ~~The 6th failure within 15 minutes returns 429 even for the right password~~ — superseded by Stage A: (injected `now`, `direct` IP, memory **and** DB store) 5 wrong passwords at t=0 → an attempt at t+0.5 s is 429 with `Retry-After: 1` and is not counted; the correct password at t+1 s → 200; then 7 wrong passwords spaced by their waits produce waits 1, 2, 4, 8, 16, 32, 60 s and the 8th wait is still 60; 20 wrong passwords never stop the correct password from succeeding once its wait has passed. With a real IP (`BLOG0_TRUSTED_PROXY_HOPS=1`): the 6th failure of one (email, IP) within 15 min → 429 while the same email from another IP is only delayed; the 51st failure from one IP across emails → 429. A new `DbRateLimitStore` instance (simulated restart) keeps the delay.
 - [ ] Stage A: `BLOG0_NEW_ADMIN_PASSWORD=<new> pnpm admin:reset-password --email <seeded>` prints `password reset for s***@… · 2 sessions ended` after two logins; both old cookies → 401; the old password → 401, the new one → 200; an unknown email exits 1 and changes nothing; an 11-char password exits 2; the output and the `auth.password_reset` line never contain the password. The container E2E runs `node reset-password.mjs` inside the image with the same result.
+- [ ] Stage C known device (memory **and** DB store, injected `now`): after an attacker without a device cookie fails 20 times, the right password from an unknown device is 429 (60 s) while the owner's browser with its `blog0_device` cookie signs in at once — and that success leaves the shared delay in place; a tampered, forged (other secret), > 180-day-old, other-account cookie is ignored (429); 5 wrong passwords from the known device delay only that device; the (email, real IP) cap still applies to it; after `admin:reset-password` an older device cookie is ignored and a newer one honoured; the login route sets `blog0_device=v1.…; Path=/; HttpOnly; SameSite=Lax; Max-Age=15552000` (+ `Secure` on https) after `blog0_session`; logout clears only `blog0_session`; a failed sign-in sets no cookie.
 - [ ] GET `/api/admin/articles` without a cookie → 401; GET `/admin` without a cookie → redirect to `/admin/login?next=%2Fadmin`.
 - [ ] POST to an admin API with `Origin: https://evil.example` → 403 `FORBIDDEN_ORIGIN`.
 - [ ] After logout the old cookie value is rejected (401) on a second request.

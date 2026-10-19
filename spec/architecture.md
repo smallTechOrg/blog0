@@ -367,6 +367,25 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   alone (and the newsletter per-IP bucket is skipped — next bullet); N > 0 takes the Nth entry from the
   right of `X-Forwarded-For` (fewer entries → `unknown`); `X-Real-IP` is never trusted. Sessions
   store the IP only when it is a real address.
+- **Known device (Stage C — an attacker who knows the admin email can't keep the owner inside the
+  delay; `src/server/auth/known-device.ts`).** Every successful sign-in also sets cookie
+  `blog0_device` (HttpOnly, SameSite=Lax, path `/`, `Secure` when `BLOG0_PUBLIC_BASE_URL` is https,
+  max-age 180 days) = `v1.<userId>.<deviceId>.<issuedAtMs>.<sig>`: `deviceId` = 16 random bytes
+  base64url (kept when the browser was already known), `sig` = base64url `HMAC-SHA256(K,
+  "v1.<userId>.<deviceId>.<issuedAtMs>")` with the domain-separated key `K = HMAC-SHA256(
+  BLOG0_SESSION_SECRET, "blog0/known-device/v1")`, compared in constant time as a string. At login
+  the cookie counts only when the signature verifies, it is < 180 days old (and not > 5 min in the
+  future), it names the user **of the email being tried**, that user is enabled, and `issuedAt >
+  app_user.devices_valid_after` (null = any; migration `0006_known_device`). A known device: the
+  hard caps (a) apply unchanged; the shared per-email delay (b) is **neither checked nor counted**
+  — the attempt uses its own `login.delay` key `<email>\0device\0<deviceId>` (same schedule, so a
+  stolen device cookie still cannot brute-force without waits) and a success clears only that key,
+  leaving the shared delay in place for unknown devices. `auth.login` gains `known_device: boolean`.
+  Logout keeps the device cookie (it ends the session, not the device). `admin:reset-password` sets
+  `devices_valid_after = now()` in its transaction, so every device cookie issued before the reset
+  stops counting. No UI copy changes. > **Assumed (Stage C):** 180-day lifetime; known-device
+  failures do not raise the shared delay; logout keeps the cookie; a reset invalidates all devices
+  of that user (no per-device revocation UI).
 - Newsletter throttling (same client-IP derivation): body validated first (invalid → 400, never
   counted); then 3 per lower-cased email per hour and 300 per site per hour, always; plus 10 per
   client IP per hour only when the IP is a real address — with `direct`/`unknown` the per-IP bucket
@@ -446,7 +465,7 @@ tests (`captureLogs()`).
 | `llm.cost_missing` | decisions adapter (`warn`) | `request_id, model, provider_generation_id` |
 | `jev.run` | `runJev` | `request_id, article_id, revision_id, sentence_count, k, batches, model, prompt_version, latency_ms, outcome ('ok'\|'error'), err_code?, missing_answers?, invalid_answers?, extra_answers?, top_relevance?, kth_relevance?` — `batches` = requests sent; counts and numbers only |
 | `jev.deadline` | `runJev` (`warn`) | `request_id, article_id, batches, deadline_ms` |
-| `auth.login` | login route | `outcome ('ok'|'bad_credentials'|'rate_limited'), email_masked` |
+| `auth.login` | login route | `outcome ('ok'|'bad_credentials'|'rate_limited'), email_masked, known_device (Stage C), scope? (on rate_limited)` |
 | `app.boot` | `instrumentation.ts` | `version, port, node, site_slug, db_engine, openrouter_key ('configured'\|'not configured (Jev disabled)')` (+ `db_dir`, `notice`, `session_secret` source on PGlite) |
 | `media.upload` | audio/image ingest (`logMediaUpload`) | `request_id, kind ('audio'\|'image'), mime, bytes, duration_ms?, width?, height?, article_id?, outcome ('ok'\|'rejected'), err_code?` |
 | `media.request` | `/media/[...key]` (not `withApi`; one line per request) | `request_id, key, status (200\|206\|304\|404\|416), range?, bytes_sent, latency_ms` |
@@ -921,7 +940,8 @@ password, slug, out })`: `loadDatabaseTarget(env)` (`pglite://` allowed — desi
 too) → find the `app_user` of site `slug` by lower-cased email (none → `ResetUsageError` "no admin
 with that email", exit 1) → password 12–200 chars (else exit 2) → one transaction: `password_hash
 = argon2id(password)` (the §6 parameters, same helper as `admin:create`), `delete from session
-where user_id = …`, and on `postgres://` delete that email's `login.delay` row (a memory store lives
+where user_id = …`, `devices_valid_after = now` (Stage C — the user's known-device cookies stop
+counting, §6), and on `postgres://` delete that email's `login.delay` row (a memory store lives
 in the server process and expires on its own) → log `auth.password_reset` →
 `out('password reset for <masked email> · <n> sessions ended')`. `scripts/reset-password.ts`
 (`pnpm admin:reset-password --email <e>`): loads `.env` like `scripts/release.ts` (and, like it,
@@ -1235,7 +1255,7 @@ changes the exit code; unset → no ping). `MEDIA_BACKUP_DEST` prod =
 | `release` | `blog0:${BLOG0_IMAGE_TAG}` (target `runtime`) | `command: [node, release.mjs]`, `env_file: blog0.env`, `restart: "no"`, depends on proxy healthy |
 | `blog0` | `blog0:${BLOG0_IMAGE_TAG}` (build `..`, target `runtime`) | `env_file: blog0.env`; depends on `release: service_completed_successfully`; volume `blog0-storage:/data/storage`; no host port; `restart: unless-stopped` |
 | `scheduler` | `blog0-scheduler:${BLOG0_IMAGE_TAG}` (target `scheduler`) | `env_file: blog0.env`, env `MEDIA_BACKUP_DEST`; `blog0-storage:/data/storage:ro`; depends on `release` completed |
-| `listmonk` | `listmonk/listmonk:v5.1.0` | §12.6 command (install idempotent → upgrade → serve); `env_file: listmonk.env`; `ports: ['127.0.0.1:9000:9000']` (admin via SSH tunnel only); `listmonk-uploads:/listmonk/uploads`; §12.6 healthcheck |
+| `listmonk` | `listmonk/listmonk:v5.1.0` | §12.6 command (install idempotent → upgrade → serve); `env_file: listmonk.env`; env `PUID`/`PGID` `1000` (Stage C: the entrypoint chowns `/listmonk` and drops root via su-exec; inherited by the local override — **Assumed (Stage C)**); `ports: ['127.0.0.1:9000:9000']` (admin via SSH tunnel only); `listmonk-uploads:/listmonk/uploads`; §12.6 healthcheck |
 | `caddy` | `caddy:2.11.7-alpine` | `ports: ['80:80','443:443','443:443/udp']`; `./Caddyfile:/etc/caddy/Caddyfile:ro`; `caddy-data:/data`, `caddy-config:/config`; env `BLOG0_DOMAIN`, `NEWS_DOMAIN`, `ACME_EMAIL`, `CADDY_LOCAL_CERTS` |
 
 Cross-service dependencies on `cloud-sql-proxy` use `required: false` so the local override can
@@ -1259,7 +1279,8 @@ SQL); Listmonk `LISTMONK_db__host=cloud-sql-proxy`, `ssl_mode=disable`, `max_ope
 `path_regexp` any of (UUID = `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 `^/link/U/U/U$` (click redirect), `^/campaign/U/U/px\.png$` (open pixel), `^/subscription/U/U$`
 (Listmonk's unsubscribe page + `List-Unsubscribe` one-click POST, §13.3 poll reads them), and
-`path /public/static/*` (that page's assets) → `reverse_proxy listmonk:9000`; everything else →
+`^/public/static/[A-Za-z0-9_-][A-Za-z0-9._-]*$` (that page's assets; Stage C: one segment that never
+starts with a dot) → `reverse_proxy listmonk:9000`; everything else →
 `header X-Blog0-Edge denied` + `respond 404`. Not exposed: `/admin*`, `/api/*` (incl.
 `/api/public/*`), `/subscription/form`, `/subscription/optin/*`, export/wipe, `/archive*`
 (archive disabled), `/uploads/*`, `/`.
@@ -1272,7 +1293,9 @@ SQL); Listmonk `LISTMONK_db__host=cloud-sql-proxy`, `ssl_mode=disable`, `max_ope
 > `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. The unsubscribe page loads
 > `/public/static/{style.css,logo.svg,favicon.png}` **and `/public/custom.css` + `/public/custom.js`**
 > and posts its form to its own URL. `@public` therefore also allows `^/campaign/U/U$` and
-> `^/public/custom\.(css|js)$` (`/public/static/` is one path segment: `[^/]+`).
+> `^/public/custom\.(css|js)$` (`/public/static/` is one path segment — Stage C tightened `[^/]+` to
+`[A-Za-z0-9_-][A-Za-z0-9._-]*`, so no dot-file / `..` name; deploy-smoke checks
+`/public/static/.env` is denied). > **Assumed (Stage C).**
 
 **`deploy/docker-compose.local.yml`** (`docker compose -f deploy/docker-compose.prod.yml -f
 deploy/docker-compose.local.yml --env-file deploy/local/compose.env …`): `cloud-sql-proxy:
@@ -1309,7 +1332,12 @@ Listmonk SMTP → `mailpit:1025`, never a real server.
 (`max_conns 2`), sliding window 1 800 messages / 24 h, bounces (`bounce.enabled`, POP mailbox from
 `LISTMONK_BOUNCE_POP_{HOST,PORT,USER,PASSWORD}`, scan 15 m, hard bounce → blocklist) when
 `LISTMONK_BOUNCE_POP_HOST` is set. Prints `listmonk-settings: ok` (no secret echoed); exit 1 on
-any API error.
+any API error. **Where it runs (Stage C):** from the operator's laptop checkout (it needs `curl` +
+`node`; the VM has no node) through the IAP SSH tunnel (`gcloud compute ssh <vm> --tunnel-through-iap
+-- -N -L 9000:localhost:9000`): `deploy/listmonk-settings.sh --env-file deploy/listmonk.env
+http://localhost:9000`, with a 0600 copy of the VM's `deploy/listmonk.env` deleted afterwards. Docker
+env files are read only by `--env-file` / compose — never `.`-sourced by a shell (values are not
+shell-quoted). > **Assumed (Stage C).**
 > **Assumed (B1):** v5's API takes no admin basic auth, so the script logs in like `listmonk-dev.sh`
 > (nonce + session cookie; the password reaches curl through a 0600 file, never argv); optional
 > `LISTMONK_FROM_EMAIL` → `app.from_email` (Gmail requires the authenticated mailbox or a verified
@@ -1332,7 +1360,7 @@ each line `deploy-smoke: <check> ok`, first failure `deploy-smoke: FAIL <check> 
 4. `GET <base>/newsletter/confirm?t=bogus` → 303, `Location` contains `status=invalid`; `GET <base>/newsletter/confirmed?status=invalid` → 404.
 5. `GET <base>/api/newsletter/unsubscribe?t=bogus` → 303 to `/newsletter/unsubscribe?t=bogus`.
 6. `GET <news>/link/<nil-uuid>/<nil-uuid>/<nil-uuid>` and `/campaign/<nil>/<nil>/px.png` → status < 500 and **no** `X-Blog0-Edge` header (Listmonk answered, not Caddy).
-7. `GET <news>/`, `/admin`, `/admin/login`, `/api/settings`, `/subscription/form` → 404 **with** `X-Blog0-Edge: denied`.
+7. `GET <news>/`, `/admin`, `/admin/login`, `/api/settings`, `/subscription/form`, `/public/static/.env` → 404 **with** `X-Blog0-Edge: denied`.
 
 **`deploy/local/verify.sh [--keep]`** (exit 3 + `PENDING DOCKER` when `docker info` fails; each step
 `deploy-local: <step>`; trap tears the stack down with `down -v` unless `--keep`): 1. `compose
@@ -1348,7 +1376,8 @@ and `{{ TrackView }}`, start it, poll Mailpit's API for the message, extract the
 pixel → 200 `image/png`; 7. `docker compose exec scheduler node /app/newsletter-tick.mjs` → exit 0,
 `digest:` line; `exec scheduler /app/scheduler/media-backup.sh` → exit 0 and `/backup/media/verify-media.txt` = `ok`; `exec scheduler supercronic -test /app/scheduler/crontab` → exit 0;
 8. `BLOG0_SMOKE_RESOLVE=127.0.0.1 scripts/deploy-smoke.sh --insecure https://blog.localtest.me:8443
-https://news.localtest.me:8443` → PASS; 9. `docker compose exec blog0 id -u` = `1000`; print
+https://news.localtest.me:8443` → PASS; 9. `docker compose exec blog0 id -u` = `1000` (and the scheduler; Stage C: the running
+`listmonk` process and `/listmonk/uploads` are uid `1000` — PUID); print
 `deploy-local: PASS`.
 
 **`scripts/pg-compat.sh <major>`**: `docker run -d --rm --name blog0-pg-compat -e
@@ -1858,7 +1887,7 @@ blog0/
 │   │   └── share-links.ts  share-surface.ts                    # share texts/URLs; native-sheet decision
 │   ├── server/                  # server-only (each file starts with `import 'server-only'`)
 │   │   ├── config.ts  log.ts  rate-window.ts  rate-window-store.ts
-│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql, 0004_newsletter_erasure.sql, 0005_newsletter_erase_delete.sql + meta/)
+│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql, 0004_newsletter_erasure.sql, 0005_newsletter_erase_delete.sql, 0006_known_device.sql + meta/)
 │   │   ├── ops/{release,readiness,lifecycle,pg-tools,backup-manifest,backup,restore}.ts   # Phase 5 (§12)
 │   │   ├── designer/{secret,admin,setup}.ts
 │   │   ├── http/api.ts

@@ -107,10 +107,10 @@ describe('migration 0002_newsletter on a Phase 2 database', () => {
       await pg`insert into newsletter_subscriber (site_id, email, status) values (${site.id}, 'old-gone@example.com', 'unsubscribed')`;
 
       const applied = await runMigrations(url);
-      expect(applied).toEqual(['0002_newsletter', '0003_newsletter_prune_fix', '0004_newsletter_erasure', '0005_newsletter_erase_delete']);
+      expect(applied).toEqual(['0002_newsletter', '0003_newsletter_prune_fix', '0004_newsletter_erasure', '0005_newsletter_erase_delete', '0006_known_device']);
       const status = await getMigrationStatus(url);
-      expect(status.applied).toHaveLength(6);
-      expect(status.latestApplied).toBe('0005_newsletter_erase_delete');
+      expect(status.applied).toHaveLength(7);
+      expect(status.latestApplied).toBe('0006_known_device');
       expect(status.pending).toEqual([]);
     } finally {
       await pg.end({ timeout: 5 });

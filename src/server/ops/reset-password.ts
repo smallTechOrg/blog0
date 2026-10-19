@@ -16,7 +16,7 @@ import { normalizeUserEmail } from '../users/repo';
 // (scripts/reset-password.ts, bundled by scripts/build-release.mjs). One transaction: the new argon2id
 // hash (the §6 parameters — the same helper as admin:create), every session of that user deleted, and
 // that email's `login.delay` row deleted (a memory store lives in the server process and expires on
-// its own). Prints only the masked email and the number of sessions ended; never the password.
+// its own), and Stage C: `devices_valid_after` = now, so the user's known-device cookies stop counting. Prints only the masked email and the number of sessions ended; never the password.
 // pglite:// is allowed with tsx (designer mode has admins too); the bundle carries no PGlite.
 
 type Env = Record<string, string | undefined>;
@@ -66,7 +66,9 @@ export async function runResetPassword({ env, email, password, slug, out }: Rese
         .for('update');
       if (!user) throw new ResetPasswordError('no admin with that email', 1);
 
-      await tx.update(appUser).set({ passwordHash, updatedAt: new Date() }).where(eq(appUser.id, user.id));
+      // Stage C: every known-device cookie of this user issued up to now stops skipping the login delay.
+      const now = new Date();
+      await tx.update(appUser).set({ passwordHash, devicesValidAfter: now, updatedAt: now }).where(eq(appUser.id, user.id));
       const ended = await tx.delete(session).where(eq(session.userId, user.id)).returning({ id: session.id });
       await tx
         .delete(rateLimitBucket)

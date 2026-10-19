@@ -377,16 +377,22 @@ gcloud compute ssh "$VM" --zone="$ZONE" --tunnel-through-iap -- -N -L 9000:local
 ```
 
 1. <http://localhost:9000/admin> → sign in as `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD`.
-2. Settings (root URL, privacy, SMTP, sending window, POP bounces) — on the VM, idempotent:
+2. Settings (root URL, privacy, SMTP, sending window, POP bounces) — from the **laptop**, through
+   the tunnel above, in your blog0 checkout (`pnpm install` done: the script needs `curl` + `node`,
+   which the VM does not have). It reads the VM's `deploy/listmonk.env` through `--env-file` (a
+   plain parser — the file is never sourced by a shell); copy it over for the run and delete it:
 
    ```bash
-   (set -a; . deploy/listmonk.env; set +a; deploy/listmonk-settings.sh http://127.0.0.1:9000)
+   # laptop, a second terminal, in the blog0 checkout — idempotent
+   umask 077
+   gcloud compute ssh "$VM" --zone="$ZONE" --tunnel-through-iap \
+     --command='cat /srv/blog0/deploy/listmonk.env' > deploy/listmonk.env   # git-ignored, 0600
+   deploy/listmonk-settings.sh --env-file deploy/listmonk.env http://localhost:9000
    # listmonk-settings: ok
+   rm deploy/listmonk.env
    ```
 
-   (Equivalent through the tunnel from a laptop checkout: `deploy/listmonk-settings.sh
-   http://localhost:9000` with the same `LISTMONK_*` variables exported.) Then Settings → SMTP →
-   **Test connection**.
+   Then Settings → SMTP → **Test connection**.
 3. Users → New → type **API user**, username `blog0`, role Super Admin (or one that manages
    subscribers, lists, campaigns, templates, bounces and reads settings) → the token is shown
    **once** → `BLOG0_LISTMONK_API_TOKEN`.
@@ -478,6 +484,7 @@ then `gcloud storage cp "gs://${BUCKET}/media/<key>#<generation>" …` into the 
 
 ```bash
 # VM, /srv/blog0
+git checkout main            # back on the branch (a rollback, section 13, left a detached checkout)
 grep '^BLOG0_IMAGE_TAG=' deploy/compose.env >> deploy/tag-history     # remember the running tag
 git pull --ff-only
 sed -i "s/^BLOG0_IMAGE_TAG=.*/BLOG0_IMAGE_TAG=$(git rev-parse --short HEAD)/" deploy/compose.env
@@ -489,19 +496,22 @@ docker image ls blog0        # keep the last 3 tags; `docker image rm blog0:<old
 
 A failed release (exit ≠ 0) leaves the old blog0 and scheduler containers running — fix and run
 `dc up -d --build --wait` again. Note the time of every upgrade that applied a migration (the
-release log says `N applied`): rollback may need it. Changes to `deploy/*.env.example` in a new
+release log has `applied <tag>` lines; no migration = `already up to date`): rollback may need it. Changes to `deploy/*.env.example` in a new
 version: `diff deploy/blog0.env.example deploy/blog0.env` and copy new variables over.
 
 ## 13. Rollback
 
-**No migration in the bad release** (its release log said `0 applied`):
+**No migration in the bad release** (its release log said `already up to date`, with no `applied <tag>` lines):
 
 ```bash
 PREV="$(tail -n 1 deploy/tag-history | cut -d= -f2)"
-git checkout "$PREV"    # the compose/Caddy files of that version (images are still local)
+git checkout "$PREV"    # the compose/Caddy files of that version (images are still local) — a detached checkout
 sed -i "s/^BLOG0_IMAGE_TAG=.*/BLOG0_IMAGE_TAG=${PREV}/" deploy/compose.env
 dc up -d --wait
 ```
+
+The checkout stays detached at `$PREV` until the fixed release: the next upgrade (section 12) starts
+with `git checkout main`, so `git pull --ff-only` runs on the branch again.
 
 **The bad release ran a migration.** Migrations only move forward; the previous image may not run
 on the new schema. Restore the database to just before that release with point-in-time recovery

@@ -15,7 +15,7 @@
 #                List-Unsubscribe page (+ its assets) → 200; Listmonk counts the view + click
 #   7 scheduler  node /app/newsletter-tick.mjs, media-backup.sh (file mirrored), supercronic -test
 #   8 smoke      BLOG0_SMOKE_RESOLVE=127.0.0.1 scripts/deploy-smoke.sh --insecure …  → PASS
-#   9 non-root   blog0 and scheduler run as uid 1000
+#   9 non-root   blog0 and scheduler run as uid 1000; the listmonk process + uploads volume are uid 1000 (PUID)
 # Exit 0 = `deploy-local: PASS`; 3 = PENDING DOCKER (never a pass); anything else = FAIL.
 # The stack is torn down (down -v) on exit unless --keep. Ports: 8080/8443 (Caddy), 127.0.0.1:3491
 # (Listmonk admin), :3494 (Postgres), :3495 (Mailpit UI/API).
@@ -265,12 +265,16 @@ step smoke "scripts/deploy-smoke.sh --insecure ${BLOG} ${NEWS}"
 BLOG0_SMOKE_RESOLVE=127.0.0.1 bash scripts/deploy-smoke.sh --insecure "$BLOG" "$NEWS" || fail "deploy-smoke"
 
 # --- 9. non-root ------------------------------------------------------------------------------------
-step non-root "uid of blog0 and scheduler"
+step non-root "uid of blog0, scheduler and listmonk"
 for s in blog0 scheduler; do
   uid="$(dc exec -T "$s" id -u | tr -d '\r')"
   [[ "$uid" == 1000 ]] || fail "${s} runs as uid ${uid}, expected 1000"
 done
-say "  blog0 1000, scheduler 1000"
+# Listmonk: the image entrypoint starts as root and drops to PUID:PGID (1000) via su-exec — check the
+# running `listmonk` process and the uploads volume, not `exec id` (which is root by design).
+lm="$(dc exec -T listmonk sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = listmonk ] && stat -c %u "$p"; done; stat -c %u /listmonk/uploads' | tr -d '\r' | sort -u | tr '\n' ' ')"
+[[ "$lm" == "1000 " ]] || fail "listmonk process / uploads owned by uid(s) '${lm}', expected 1000"
+say "  blog0 1000, scheduler 1000, listmonk 1000 (process + uploads)"
 
 STEP=done
 say PASS

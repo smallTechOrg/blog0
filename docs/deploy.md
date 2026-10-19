@@ -88,8 +88,8 @@ Not read by the web server: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST
    # <db>: applied 0002_newsletter
    # <db>: applied 0003_newsletter_prune_fix
    # <db>: applied 0004_newsletter_erasure
-   # <db>: applied 0005_newsletter_erase_delete
-   # release: blog0 @ PostgreSQL 18.x — 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK
+   # <db>: applied 0006_known_device
+   # release: blog0 @ PostgreSQL 18.x — 7 applied (latest 0006_known_device), 0 pending: OK
    # site blog0 ok (created), admin <masked email> ok (created)
    ```
 
@@ -258,7 +258,8 @@ BLOG0_NEW_ADMIN_PASSWORD='<new password>' pnpm admin:reset-password --email you@
 ```
 
 What it does, in one transaction: sets the new password (argon2id), **ends every session of that
-admin** (all their browsers are signed out) and clears the email's sign-in delay (below). It prints
+admin** (all their browsers are signed out), forgets that admin's known devices and clears the
+email's sign-in delay (below). It prints
 only the masked email and the number of sessions ended — never the password — and logs
 `auth.password_reset`. Exit 1: no admin with that email in `BLOG0_SITE_SLUG`'s site (nothing
 changes); exit 2: a password outside 12–200 characters, no `--email`, or no password source (set
@@ -277,6 +278,14 @@ and 50 per IP within 15 minutes. The delay is stored in Postgres (`rate_limit_bu
 `login.delay`), so it holds across restarts and instances; `auth.login` log lines carry the
 `scope` of every refusal. A reset (above) clears the email's delay immediately.
 
+**Known devices (Stage C).** Every successful sign-in also leaves a signed `blog0_device` cookie
+(HttpOnly, 180 days). From that browser, signing in to the **same** account skips the shared delay
+above — so someone hammering your email from elsewhere cannot keep you waiting; that browser's own
+wrong passwords get their own delay, and the hard caps still apply. Signing out keeps the cookie; a
+password reset (above) makes every earlier device cookie of that admin count for nothing, and
+rotating `BLOG0_SESSION_SECRET` (below) invalidates all of them. `auth.login` lines carry
+`known_device`.
+
 ## Rotating `BLOG0_SESSION_SECRET`
 
 (Two secrets matter here: `BLOG0_SESSION_SECRET` and the optional `BLOG0_UNSUBSCRIBE_SECRET`; the
@@ -284,7 +293,8 @@ last step below and [Rotating `BLOG0_UNSUBSCRIBE_SECRET`](#rotating-blog0_unsubs
 what each one breaks.)
 
 The database stores only `HMAC-SHA256(secret, token)` of each session, so a new secret
-invalidates **every** session: all admins must sign in again. No data is lost (articles, media,
+invalidates **every** session: all admins must sign in again. Known-device cookies (`blog0_device`)
+are signed with a key derived from it, so they stop counting too until the next sign-in. No data is lost (articles, media,
 subscribers and accounts are untouched; passwords are argon2 hashes, independent of the secret).
 Rotate on a schedule or at once if the secret may have leaked:
 

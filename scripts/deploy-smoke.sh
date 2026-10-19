@@ -15,7 +15,7 @@
 #   4 confirm        /newsletter/confirm?t=bogus → 303 to …status=invalid; /newsletter/confirmed?status=invalid → 404
 #   5 unsubscribe    /api/newsletter/unsubscribe?t=bogus → 303 to /newsletter/unsubscribe?t=bogus
 #   6 news-public    <news>/link/<nil>/<nil>/<nil> and /campaign/<nil>/<nil>/px.png → < 500, no X-Blog0-Edge
-#   7 news-denied    <news>/ /admin /admin/login /api/settings /subscription/form → 404 + X-Blog0-Edge: denied
+#   7 news-denied    <news>/ /admin /admin/login /api/settings /subscription/form /public/static/.env → 404 + X-Blog0-Edge: denied
 # Exit 2 = usage.
 set -euo pipefail
 
@@ -127,7 +127,7 @@ say "news-public ok"
 
 # 7. everything else on the news host is denied at the edge
 CHECK=news-denied
-for p in / /admin /admin/login /api/settings /subscription/form; do
+for p in / /admin /admin/login /api/settings /subscription/form /public/static/.env; do
   fetch "${NEWS}${p}"
   [[ "$CODE" == 404 ]] || fail "GET ${NEWS}${p} → ${CODE}, expected 404"
   [[ "$(header x-blog0-edge)" == denied ]] || fail "GET ${NEWS}${p} lacks X-Blog0-Edge: denied"

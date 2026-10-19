@@ -139,7 +139,7 @@ level otherwise (`spec/architecture.md` §7); DTOs live in the health section of
 
 | Method & path | Auth | Request | Response `data` / notes |
 |---|---|---|---|
-| POST `/api/auth/login` | none | `{ email: string, password: string }` | `{ user: UserDto }` + `Set-Cookie: blog0_session`. Errors: `BAD_CREDENTIALS`, `RATE_LIMITED` (429 + `Retry-After` seconds; Stage A: also the progressive per-email delay — `spec/architecture.md` §6; the body's `error.details.retryAfterSec` equals the header). |
+| POST `/api/auth/login` | none | `{ email: string, password: string }` | `{ user: UserDto }` + `Set-Cookie: blog0_session` and (Stage C) `Set-Cookie: blog0_device` (known device — a valid one sent with the request skips the shared per-email delay; `spec/architecture.md` §6). Errors: `BAD_CREDENTIALS`, `RATE_LIMITED` (429 + `Retry-After` seconds; Stage A: also the progressive per-email delay — `spec/architecture.md` §6; the body's `error.details.retryAfterSec` equals the header). |
 | POST `/api/auth/logout` | admin | — | `{ signedOut: true }`, cookie cleared (also succeeds with no session). |
 | GET `/api/auth/me` | admin | — | `{ user: UserDto }` |
 | POST `/api/admin/preview` | admin | `{ title: string, dek: string, bodyMd: string }` (body ≤ 200 000 chars) | `PreviewResultDto` |
