@@ -111,10 +111,19 @@ blog0 keeps the issue, its send log and its stats.
 > in-process timer, so a container restart can never fire a send.
 > **Assumed:** Listmonk ≥ v4 with an **API user** (token auth), one list named `blog0` (id from
 > `BLOG0_LISTMONK_LIST_ID`) and a blog0-managed template `blog0-issue` whose body is exactly
-> `{{ template "content" . }}` so Listmonk adds no chrome; the unsubscribe link and consent line
+> `{{ template "content" . }}` + `{{ TrackView }}` so Listmonk adds no chrome; the unsubscribe link and consent line
 > inside the HTML are Listmonk template expressions over subscriber attributes
 > (`{{ .Subscriber.Attribs.blog0_unsubscribe_url }}`, `{{ .Subscriber.Attribs.blog0_consent_line }}`)
 > that blog0 sets on every sync, so every unsubscribe lands in blog0 first.
+> **Assumed (owner, tracking):** open + click tracking via Listmonk, aggregate only (Listmonk's
+> individual tracking stays off): the campaign body sent to Listmonk wraps every absolute http(s)
+> content link as `{{ TrackLink "<url>" }}` and the `blog0-issue` template ends with
+> `{{ TrackView }}` (an existing template with another body is updated on the next send). The
+> unsubscribe and privacy links, `mailto:`, List-Unsubscribe headers and the plain-text part are
+> never tracked; the stored / previewed issue and the stub sender stay untracked. Views / clicks reach
+> the issue page via `fetchStats` (**Refresh stats** and `newsletter:tick`). Opens don't register
+> while Listmonk's root URL isn't publicly reachable (e.g. `localhost`): mail clients fetch images
+> through their own proxies.
 > **Assumed:** issues go only through the sender adapter — blog0 never bulk-sends via SMTP
 > (deliverability, rate limits and bounce handling are the provider's job); the stub sender exists
 > so the whole admin flow is real without a provider.

@@ -30,7 +30,9 @@ import { providerOptOutWins } from './opt-out';
 // blog0's consent / confirmation is newer (sender/opt-out.ts).
 
 export const BLOG0_TEMPLATE_NAME = 'blog0-issue';
-export const BLOG0_TEMPLATE_BODY = '{{ template "content" . }}';
+/** The issue HTML verbatim, then Listmonk's open-tracking pixel (`{{ TrackView }}` prints the `<img>`;
+ *  verified v5.1.0). `#ensureTemplate` rewrites an existing `blog0-issue` template whose body differs. */
+export const BLOG0_TEMPLATE_BODY = '{{ template "content" . }}\n{{ TrackView }}';
 export const UNSUBSCRIBE_EXPRESSION = '{{ .Subscriber.Attribs.blog0_unsubscribe_url }}';
 export const CONSENT_EXPRESSION = '{{ .Subscriber.Attribs.blog0_consent_line }}';
 /** Attribute blog0 stamps on every blocklist IT makes (mirror of a blog0 suppression). Such a
@@ -56,6 +58,58 @@ export function escapeGoTemplate(text: string): string {
  *  escaping every literal template delimiter already in the body. */
 export function toListmonkExpressions(body: string): string {
   return escapeGoTemplate(body).split(UNSUBSCRIBE_PLACEHOLDER).join(UNSUBSCRIBE_EXPRESSION).split(CONSENT_PLACEHOLDER).join(CONSENT_EXPRESSION);
+}
+
+/** Paths whose links are never click-tracked: the unsubscribe page / one-click endpoint (links.ts) and
+ *  the privacy page. A path ending in one of these also matches under a base path. */
+const UNTRACKED_PATH = /(?:\/newsletter\/unsubscribe|\/api\/newsletter\/unsubscribe|\/privacy)\/?$/i;
+const TRACK_SUFFIX = '@TrackLink';
+
+function decodeHtmlAttr(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|#39|#x27);/gi, (_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", '#x27': "'" })[e.toLowerCase()] ?? _);
+}
+
+/** True for an absolute http(s) URL that is a content link (not unsubscribe / privacy). */
+function isTrackable(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  try {
+    return !UNTRACKED_PATH.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Click tracking for the body sent to Listmonk only (the stored / previewed issue and the stub stay
+ * untracked): every `href` holding an absolute http(s) content link becomes `{{ TrackLink "<url>" }}`
+ * (the URL HTML-decoded and written as a Go string literal, so `&amp;`, quotes and braces survive —
+ * the `url@TrackLink` shorthand would keep `&amp;` in the redirect target). Unsubscribe and privacy
+ * links, `mailto:`, relative / anchor hrefs and template expressions are left alone. Idempotent: a
+ * TrackLink expression is not an http URL, and a `url@TrackLink` href is normalised once.
+ */
+export function trackLinks(html: string, action: (url: string) => string = trackLinkAction): string {
+  return html.replace(/\bhref=(["'])(.*?)\1/gi, (whole, quote: string, raw: string) => {
+    let url = decodeHtmlAttr(raw.trim());
+    if (url.endsWith(TRACK_SUFFIX)) url = url.slice(0, -TRACK_SUFFIX.length);
+    if (!isTrackable(url)) return whole;
+    return `href=${quote}${action(url)}${quote}`;
+  });
+}
+
+function trackLinkAction(url: string): string {
+  return `{{ TrackLink ${JSON.stringify(url)} }}`;
+}
+
+/** The campaign HTML for Listmonk: content links tracked, author braces escaped, placeholders →
+ *  expressions. Tracked hrefs are tokens during the escape pass so their TrackLink actions are never
+ *  escaped (and author text that merely looks like one is). */
+export function toListmonkCampaignBody(html: string): string {
+  const actions: string[] = [];
+  const tokenised = trackLinks(html, (url) => {
+    actions.push(trackLinkAction(url));
+    return `%%BLOG0_TRACK_${actions.length - 1}%%`;
+  });
+  return toListmonkExpressions(tokenised).replace(/%%BLOG0_TRACK_(\d+)%%/g, (token, n: string) => actions[Number(n)] ?? token);
 }
 
 /** Address-shaped runs, plain or percent-encoded (`a%40b.c`). */
@@ -118,6 +172,7 @@ interface ListmonkTemplate {
   id: number;
   name: string;
   type: string;
+  body?: string;
 }
 
 interface Paged<T> {
@@ -412,6 +467,11 @@ export class ListmonkSender implements NewsletterSender {
     const { data } = await this.#call<ListmonkTemplate[]>({ method: 'GET', path: '/api/templates' });
     const found = (data ?? []).find((t) => t.name === BLOG0_TEMPLATE_NAME && t.type === 'campaign');
     if (found) {
+      if (found.body !== BLOG0_TEMPLATE_BODY) {
+        // An older blog0 template (pre-tracking body) or a hand edit: bring it back to blog0's body.
+        await this.#call({ method: 'PUT', path: `/api/templates/${found.id}`, body: { name: BLOG0_TEMPLATE_NAME, type: 'campaign', body: BLOG0_TEMPLATE_BODY } });
+        log.info('newsletter.provider', { provider: 'listmonk', action: 'template', templateId: found.id, outcome: 'updated' });
+      }
       this.#templateId = found.id;
       return found.id;
     }
@@ -435,7 +495,7 @@ export class ListmonkSender implements NewsletterSender {
         lists: [this.#listId],
         type: 'regular',
         content_type: 'html',
-        body: toListmonkExpressions(i.html),
+        body: toListmonkCampaignBody(i.html),
         altbody: toListmonkExpressions(i.text),
         template_id: templateId,
         tags: ['blog0', `issue:${i.issueId}`],

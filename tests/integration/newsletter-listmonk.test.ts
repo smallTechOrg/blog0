@@ -336,6 +336,82 @@ describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker
     expect(back.lists).toEqual([expect.objectContaining({ id: env.listId, subscription_status: 'confirmed' })]);
   });
 
+  it('open + click tracking: content links go out as TrackLink (unsubscribe / privacy untracked), an outdated blog0-issue template is updated with TrackView, and a hit on the tracked link / pixel shows up in fetchStats', async () => {
+    // An existing template with the pre-tracking body (what installs before this fix carry) is brought up to date.
+    const templates = await raw.call<Array<{ id: number; name: string; type: string; body: string }>>('GET', '/api/templates');
+    const existing = templates.find((t) => t.name === BLOG0_TEMPLATE_NAME && t.type === 'campaign');
+    if (existing) await raw.call('PUT', `/api/templates/${existing.id}`, { name: BLOG0_TEMPLATE_NAME, type: 'campaign', body: '{{ template "content" . }}' });
+    const fresh = new ListmonkSender({ url: env.url, apiUser: env.apiUser, apiToken: new Secret(env.apiToken), listId: env.listId });
+
+    const t = subscriber('t');
+    createdEmails.add(t.email);
+    await fresh.syncSubscriber(t);
+
+    const target = `https://example.test/p/tracked-${run}?a=1&b=2`;
+    const issue = {
+      issueId: `33333333-2222-4333-8444-${run.padStart(12, '0').slice(-12)}`,
+      number: 91,
+      subject: `tracking probe ${run}`,
+      html: `<p><a href="${target.replace(/&/g, '&amp;')}">Read</a></p><p><a href="${UNSUBSCRIBE_PLACEHOLDER}">Unsubscribe</a> · <a href="https://example.test/privacy">Privacy</a> · <a href="mailto:hi@example.test">Mail</a></p><p>${CONSENT_PLACEHOLDER}</p>`,
+      text: `Read: ${target}\nUnsubscribe: ${UNSUBSCRIBE_PLACEHOLDER}\n${CONSENT_PLACEHOLDER}\n`,
+    };
+    const { campaignId } = await fresh.createIssue(issue);
+    createdCampaigns.add(campaignId);
+
+    const created = await raw.call<{ uuid: string; body: string; altbody: string; template_id: number }>('GET', `/api/campaigns/${campaignId}`);
+    expect(created.body).toContain(`href="{{ TrackLink "${target}" }}"`);
+    expect(created.body).toContain('href="{{ .Subscriber.Attribs.blog0_unsubscribe_url }}"');
+    expect(created.body).toContain('href="https://example.test/privacy"');
+    expect(created.body).toContain('href="mailto:hi@example.test"');
+    expect(created.body.match(/TrackLink/g)).toHaveLength(1);
+    expect(created.altbody).not.toContain('TrackLink');
+    const tpl = (await raw.call<Array<{ id: number; name: string; body: string }>>('GET', '/api/templates')).find((x) => x.id === created.template_id);
+    expect(tpl).toMatchObject({ name: BLOG0_TEMPLATE_NAME, body: BLOG0_TEMPLATE_BODY });
+    expect(tpl!.body).toContain('{{ TrackView }}');
+    if (existing) expect(created.template_id).toBe(existing.id);
+
+    // Listmonk's rendering: the content link points at its /link/ redirector, the privacy link does not, the pixel is there.
+    const preview = await raw.previewCampaign(campaignId);
+    const linkMatch = new RegExp(`href="${env.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/link/([0-9a-f-]{36})/`).exec(preview);
+    expect(linkMatch).not.toBeNull();
+    expect(preview).toContain('href="https://example.test/privacy"');
+    expect(preview).toMatch(/<img[^>]+\/campaign\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/px\.png/);
+
+    await fresh.sendIssue(campaignId);
+    const deadline = Date.now() + 60_000;
+    while (!['running', 'finished'].includes((await raw.campaign(campaignId)).status) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 1000));
+    const before = await fresh.fetchStats(campaignId);
+
+    const subUuid = (await raw.call<{ results: Array<{ uuid: string }> }>('GET', `/api/subscribers?query=${encodeURIComponent(`subscribers.email='${t.email}'`)}&per_page=1`)).results[0]!.uuid;
+    const click = await fetch(`${env.url}/link/${linkMatch![1]}/${created.uuid}/${subUuid}`, { redirect: 'manual' });
+    expect(click.status).toBeGreaterThanOrEqual(300);
+    expect(click.status).toBeLessThan(400);
+    expect(click.headers.get('location')).toBe(target);
+    const pixel = await fetch(`${env.url}/campaign/${created.uuid}/${subUuid}/px.png`);
+    expect(pixel.status).toBe(200);
+    expect(pixel.headers.get('content-type')).toContain('image/png');
+
+    let after = await fresh.fetchStats(campaignId);
+    const statsDeadline = Date.now() + 15_000;
+    while ((after.clicks! <= before.clicks! || after.opens! <= before.opens!) && Date.now() < statsDeadline) {
+      await new Promise((r) => setTimeout(r, 500));
+      after = await fresh.fetchStats(campaignId);
+    }
+    expect(after.clicks).toBe(before.clicks! + 1);
+    expect(after.opens).toBe(before.opens! + 1);
+
+    // idempotent ensure: a second sender finds the template up to date and leaves it alone
+    const logs = captureLogs();
+    try {
+      const again = new ListmonkSender({ url: env.url, apiUser: env.apiUser, apiToken: new Secret(env.apiToken), listId: env.listId });
+      const second = await again.createIssue({ ...issue, number: 92 });
+      createdCampaigns.add(second.campaignId);
+      expect(logs.find('newsletter.provider').filter((l) => l.method === 'PUT')).toEqual([]);
+    } finally {
+      logs.stop();
+    }
+  });
+
   it('error paths: bad token → SenderError HTTP 403, unknown campaign → HTTP 400, closed port → UNAVAILABLE after one retry', async () => {
     const badToken = new ListmonkSender({ url: env.url, apiUser: env.apiUser, apiToken: new Secret('not-the-token'), listId: env.listId });
     await expect(badToken.fetchStats('1')).rejects.toMatchObject({ name: 'SenderError', code: 'HTTP', httpStatus: 403 });
