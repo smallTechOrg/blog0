@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useRef, useState, type FormEvent } from 'react';
 
 import type { AdminUnsubscribeResponse, SendConfirmationResponse, SubscriberDetailDto, SubscriberDetailResponse } from '@/lib/api/dto';
@@ -12,8 +13,9 @@ import { runExclusive } from '../editor/tldr-generate';
 import { EraseDialog } from './EraseDialog';
 import { SubscriberTimeline } from './SubscriberTimeline';
 import {
-  canErase,
   canUnsubscribe,
+  ERASE_BUTTON,
+  ERASE_NOTICE_KEY,
   eraseNotice,
   confirmationAction,
   dateTimeLabel,
@@ -30,7 +32,8 @@ import {
 
 // Admin → Subscriber /admin/subscribers/[id] (spec/ui.md §4 "Subscriber"; capability
 // newsletter-list): head, Send confirmation (legacy one-time / pending under the cap), Unsubscribe
-// (permanent suppression, confirmed in a dialog), proof of consent, the event ledger, suppression
+// (permanent suppression, confirmed in a dialog), Delete subscriber and personal data (typed address;
+// on success back to the list with a confirmation), proof of consent, the event ledger, suppression
 // entries and messages. States: loading, error + Retry / Sign in again, 404, ready.
 
 export const UNSUBSCRIBE_CONFIRM = (email: string): string => `Unsubscribe ${email}? This writes a permanent suppression entry.`;
@@ -94,6 +97,7 @@ function SubscriberBody({
   const [sending, setSending] = useState(false);
   const [dialog, setDialog] = useState(false);
   const [eraseDialog, setEraseDialog] = useState(false);
+  const router = useRouter();
   const sendFlight = useRef(false);
   const action = confirmationAction(s, timeZone);
   const src = sourceCells(s);
@@ -155,11 +159,9 @@ function SubscriberBody({
             Unsubscribe
           </button>
         ) : null}
-        {canErase(s.email) ? (
-          <button type="button" className="admin-btn admin-btn--danger" onClick={() => setEraseDialog(true)}>
-            Erase personal data
-          </button>
-        ) : null}
+        <button type="button" className="admin-btn admin-btn--danger" onClick={() => setEraseDialog(true)}>
+          {ERASE_BUTTON}
+        </button>
       </div>
       {action?.disabled && action.title ? <p className="admin-hint">{action.title}</p> : null}
       <div aria-live="polite">
@@ -194,12 +196,13 @@ function SubscriberBody({
           subscriber={s}
           onCancel={() => setEraseDialog(false)}
           onDone={(result) => {
-            setEraseDialog(false);
-            setNotice({ kind: 'ok', text: eraseNotice(result.providerRemoved) });
-            // Reload in place (a full loading state would drop the notice): the tombstone + erased entry.
-            void apiRequest<SubscriberDetailResponse>(subscriberApi(s.id)).then((res) => {
-              if (res.ok) onChange(res.data.subscriber);
-            });
+            // The subscriber no longer exists: back to the list, which shows the confirmation once.
+            try {
+              window.sessionStorage.setItem(ERASE_NOTICE_KEY, JSON.stringify(eraseNotice(result)));
+            } catch {
+              // storage unavailable (private mode): the list still loads, just without the line
+            }
+            router.push(LIST_PAGE);
           }}
         />
       ) : null}

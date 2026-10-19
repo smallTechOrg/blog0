@@ -12,6 +12,8 @@ import { consentLine, unsubscribeUrl } from '../links';
 import {
   SenderError,
   type NewsletterSender,
+  type ProviderDeleteOutcome,
+  type ProviderDeleteTarget,
   type SenderHealth,
   type SenderIssue,
   type SenderStats,
@@ -80,6 +82,26 @@ export class StubNewsletterSender implements NewsletterSender {
     return { changed: false };
   }
 
+  async findSubscriberId(email: string): Promise<string | null> {
+    const key = email.toLowerCase();
+    for (const [providerId, s] of this.subscribers) if (s.email.toLowerCase() === key) return providerId;
+    return null;
+  }
+
+  async deleteSubscriber(target: ProviderDeleteTarget): Promise<{ outcome: ProviderDeleteOutcome; providerId: string | null }> {
+    let providerId: string | null = null;
+    if (target.providerId !== null && this.subscribers.has(target.providerId)) {
+      const s = this.subscribers.get(target.providerId)!;
+      if (target.email === null || s.email.toLowerCase() === target.email.toLowerCase()) providerId = target.providerId;
+    }
+    if (providerId === null && target.email !== null) providerId = await this.findSubscriberId(target.email);
+    if (providerId === null) return { outcome: 'not_found', providerId: target.providerId };
+    const owner = this.subscribers.get(providerId)!.attribs.blog0_subscriber_id;
+    if (target.keep !== undefined && (await target.keep(owner))) return { outcome: 'kept', providerId };
+    this.subscribers.delete(providerId);
+    return { outcome: 'deleted', providerId };
+  }
+
   async createIssue(i: SenderIssue): Promise<{ campaignId: string }> {
     const campaignId = `stub-${i.issueId}`;
     const existing = this.campaigns.get(campaignId);
@@ -118,7 +140,8 @@ export class StubNewsletterSender implements NewsletterSender {
         .select({ n: count() })
         .from(newsletterMessage)
         .where(and(eq(newsletterMessage.issueId, issue.id), eq(newsletterMessage.kind, 'issue')));
-      const n = Number(row?.n ?? 0);
+      // Deliveries deleted by an erasure (0005) still count: the issue keeps their number.
+      const n = Number(row?.n ?? 0) + issue.erasedMessageCount;
       return { recipients: n, sent: n, delivered: null, opens: null, clicks: null, bounces: null, unsubscribes: null };
     }
     const c = this.#campaign(campaignId);
@@ -145,12 +168,13 @@ export class StubNewsletterSender implements NewsletterSender {
 
     const recipients = await getDb().transaction(async (tx) => {
       // Serialise concurrent starts of the same campaign on the issue row.
-      await tx.select({ id: newsletterIssue.id }).from(newsletterIssue).where(eq(newsletterIssue.id, issue.id)).for('update');
+      const [locked] = await tx.select({ erased: newsletterIssue.erasedMessageCount }).from(newsletterIssue).where(eq(newsletterIssue.id, issue.id)).for('update');
       const [already] = await tx
         .select({ n: count() })
         .from(newsletterMessage)
         .where(and(eq(newsletterMessage.issueId, issue.id), eq(newsletterMessage.kind, 'issue')));
-      if (Number(already?.n ?? 0) > 0) return null;
+      // Delivered already (rows, or rows an erasure has since deleted) → never a second delivery.
+      if (Number(already?.n ?? 0) + (locked?.erased ?? 0) > 0) return null;
       const [siteRow] = await tx.select().from(site).where(eq(site.id, issue.siteId)).limit(1);
       const confirmed = await tx
         .select()

@@ -439,14 +439,18 @@ via `useAdminLoad` keyed on the filter + query.
   "Confirmation sent to <email> (<smtp|stub>)" and the timeline refreshes; **Unsubscribe** (not
   for `unsubscribed`/`bounced`) → `.admin-dialog` "Unsubscribe <email>? This writes a permanent
   suppression entry." with an optional note → `POST …/unsubscribe`.
-- > **Assumed (fix pass):** **Erase personal data** (`.admin-btn` danger, any status except an
-  already-erased row) → `.admin-dialog` "Erase <email>? This permanently redacts the address, IP,
-  user agent and source page in the subscriber, event and message records and removes the address
-  from Listmonk. A tombstone and an `erased` entry remain. This cannot be undone." with an input
-  "Type the address to confirm" and **Erase** (disabled until the input equals the address,
-  case-insensitive) → `POST …/erase` → notice "Erased. Listmonk copy removed." / "Erased. Listmonk
-  removal failed — see the log." and the page reloads showing the tombstone address and the
-  `erased` timeline entry ("Personal data erased").
+- > **Owner decision 2026-10-19:** **Delete subscriber and personal data** (`.admin-btn` danger, any
+  status) → `.admin-dialog` "Delete <email> and all personal data? This permanently deletes the
+  subscriber, its history, suppression entries and stored messages, and the Listmonk copy. Only an
+  anonymous marker stays so the address is never emailed again without a fresh sign-up and
+  confirmation. This cannot be undone." with an input "Type the address to confirm" and **Delete**
+  (disabled until the input equals the address, case-insensitive) → `POST …/erase` → back to
+  **Subscribers** with a one-time confirmation "Subscriber and personal data deleted." + the Listmonk
+  outcome ("The Listmonk copy was deleted too." / "Listmonk held no copy." / "No Listmonk is
+  configured…" / a warning naming why the Listmonk delete failed and whether the tick retries it);
+  the person no longer appears in the list, the CSV or the audit export (which lists the erasure,
+  PII-free). An error keeps the dialog open and names it (e.g. "The database refused the deletion
+  (…). Nothing was deleted…"; "This subscriber was already deleted").
 - **Proof of consent** card (definition list): consent text (verbatim, quoted), consent version,
   consented at, signup IP (or "pruned <date>" / "not recorded — no trusted proxy"), signup user
   agent, source page, confirmation IP + user agent + time, token expiry (pending only, with

@@ -126,6 +126,12 @@ class FlakySender implements NewsletterSender {
   removeSubscriber(email: string) {
     return this.inner.removeSubscriber(email);
   }
+  findSubscriberId(email: string) {
+    return this.inner.findSubscriberId(email);
+  }
+  deleteSubscriber(...a: Parameters<NewsletterSender['deleteSubscriber']>) {
+    return this.inner.deleteSubscriber(...a);
+  }
   async createIssue(i: SenderIssue) {
     this.createCalls += 1;
     if (this.failCreate) throw new SenderError('HTTP', 'provider said 500 on create', 500);

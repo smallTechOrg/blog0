@@ -84,7 +84,8 @@ Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_
    # <db>: applied 0002_newsletter
    # <db>: applied 0003_newsletter_prune_fix
    # <db>: applied 0004_newsletter_erasure
-   # release: blog0 @ PostgreSQL 18.x — 5 applied (latest 0004_newsletter_erasure), 0 pending: OK
+   # <db>: applied 0005_newsletter_erase_delete
+   # release: blog0 @ PostgreSQL 18.x — 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK
    # site blog0 ok (created), admin <masked email> ok (created)
    ```
 
@@ -429,7 +430,7 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
 
   ```cron
   7 * * * * cd /srv/blog0-repo && pnpm -s newsletter:tick >> /var/log/blog0-newsletter-tick.log 2>&1
-  # digest: not due; suppressions pulled 0; stats refreshed 1; ips pruned 0
+  # digest: not due; suppressions pulled 0; stats refreshed 1; ips pruned 0; erasures retried 0
   ```
 
   Exit 1 = a step failed (the others still ran; the error lines follow) — alert on it.
@@ -470,35 +471,48 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
 ### Handling an erasure request
 
 A reader asks (by mail to the contact address shown on `/privacy`) to have their data erased.
+**Owner decision (2026-10-19): erasing personal data deletes the subscriber.** blog0 keeps only a
+non-reversible "never email this address" marker (a keyed hash) and a PII-free audit row.
 
 1. **Verify the requester** — reply from, or ask them to confirm from, the address in question;
    never erase on an unverified claim.
-2. Admin → **Subscribers** → open the address → **Erase personal data**. Type the address to confirm
-   and press **Erase**. The page says whether the Listmonk copy was removed.
-3. What it does, in one transaction (`newsletter_erase_subscriber`, migration `0004`): the address,
-   name, IPs, user agents and source page are removed from the subscriber, its events, its
-   suppression entries and its stored messages; the address becomes a tombstone
-   `erased+<hash>@erased.invalid`, the row is `unsubscribed`, and a suppression entry
-   (`erased`, keyed by a salted hash — never the address) plus one `erased` event stay as the proof
-   that an erasure happened. If the same address signs up again it is **not** a clean slate: it still
-   needs a fresh double opt-in and its signup event says `erasedBefore`.
-4. **Confirm the log line**: `newsletter.erase` with `outcome: "erased"` and `provider:`
-   `removed` (Listmonk contacted), `skipped` (stub sender) or `failed` (a `warn` — the erase
-   still happened; blocklist/delete the address in the Listmonk admin by hand). The line never
-   contains the address.
-5. **Listmonk:** blog0 *blocklists* the address there (never a delete — Listmonk keeps the row so a
-   provider-side import cannot re-mail it). If the requester wants the address gone from Listmonk
-   too, delete the subscriber in Listmonk's admin (Subscribers → select → Delete) after the erase.
+2. Admin → **Subscribers** → open the address → **Delete subscriber and personal data**. Type the
+   address to confirm and press **Delete**. You land back on the Subscribers list with a
+   confirmation that names what happened to the Listmonk copy; the person is no longer in the list,
+   the CSV or the audit export. If something fails, the dialog stays open and names the failure
+   (a database refusal deletes nothing — try again).
+3. What it does, in one transaction (`newsletter_erase_subscriber`, migration `0005`): the
+   subscriber row, its events, its suppression entries and its stored messages are **deleted**
+   (and any older erased record of the same address). What stays: a marker in
+   `newsletter_erasure_marker` — `sha256(site salt : address)`, never the address — and one row in
+   `newsletter_erasure_log` (when, which admin, which marker, how many rows were deleted, the Listmonk
+   outcome) as proof the request was honoured; the audit export lists it without the hash. Issue
+   statistics keep their counts. If the same address signs up again it is **not** a clean slate: it
+   needs a fresh double opt-in (its signup event says `erasedBefore`), and an import or script can
+   never re-add it as confirmed — the database refuses. Deleting it again works the same way.
+4. **Confirm the log line**: `newsletter.erase` with `outcome: "deleted"` and `provider:` `deleted`
+   (removed from Listmonk), `not_found` (Listmonk held no copy — done), `skipped` (stub sender) or
+   `failed` (a `warn`). The line never contains the address.
+5. **Listmonk:** blog0 deletes the subscriber there after its own erase has committed, so a Listmonk
+   outage never leaves blog0 half-done. On `failed` with `provider_retry: true`, the hourly
+   `pnpm newsletter:tick` retries the delete by the remembered Listmonk id (`erasures retried N`);
+   with `provider_retry: false` (Listmonk was unreachable and blog0 never knew its id) delete the
+   subscriber in Listmonk's admin by hand (Subscribers → search → Delete).
 6. **Backups made before the erasure still hold the data** until they expire — delete or rotate
    them per your backup policy (see [Backups](#backups)); a restore of such a backup brings the
-   address back, so redo the erase after any restore and keep a note of erasures made.
+   address back, so redo the erase after any restore and keep a note of erasures made (the
+   `newsletter_erasure_log` rows of a newer backup are the record).
 7. Reply to the requester. The seeded `/privacy` text is a plain-language **draft**: review and
    edit it in Admin → Site → Privacy text, and set Admin → Site → Newsletter postal address (issues
    and confirmation mail print it; sending without one only warns).
 
+Upgrading from `0004`: migration `0005` converts every earlier erasure (the old
+`erased+<hash>@erased.invalid` rows) into this state — rows deleted, marker kept, an audit row with
+`source: migration` dated at the original erasure.
+
 Residue by design: the throttle table `rate_limit_bucket` keeps only SHA-256 hashes of IPs and
 addresses for up to an hour (fixed windows; excluded from backups), and `site.newsletter_erase_salt`
-(in the `site` row, inside every backup) must survive restores — erasure matching depends on it.
+(in the `site` row, inside every backup) must survive restores — marker matching depends on it.
 
 ### Newsletter backups
 

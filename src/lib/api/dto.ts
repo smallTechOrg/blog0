@@ -362,9 +362,30 @@ export interface SendConfirmationResponse { subscriber: SubscriberDetailDto; sen
 /** POST /api/admin/subscribers/send-legacy-confirmations. */
 export interface SendLegacyConfirmationsRequest { confirm: true }
 export interface SendLegacyConfirmationsResponse { sent: number; skipped: number }
-/** POST /api/admin/subscribers/:id/erase (fix pass): `confirmEmail` must equal the subscriber's address (case-insensitive) → 400 VALIDATION_FAILED otherwise; already erased → 409 SUBSCRIBER_NOT_ELIGIBLE. */
+/**
+ * POST /api/admin/subscribers/:id/erase (owner decision 2026-10-19, migration 0005): DELETES the subscriber and every
+ * row holding its data, keeping only the hashed "never email" marker + a PII-free audit row (`erasureId`).
+ * `confirmEmail` must equal the subscriber's address (case-insensitive) → 400 VALIDATION_FAILED otherwise;
+ * unknown / already deleted → 404 NOT_FOUND; the database refusing → 500 ERASE_FAILED (nothing deleted).
+ */
 export interface SubscriberEraseRequest { confirmEmail: string }
-export interface SubscriberEraseResponse { erased: true; providerRemoved: boolean }
+/** Provider (Listmonk) copy: `deleted`, `not_found` (nothing there — done), `skipped` (stub sender), `failed` (blog0 is already erased; retried by the tick when the Listmonk id is known). */
+export type ErasureProviderOutcome = 'deleted' | 'not_found' | 'skipped' | 'failed';
+export interface SubscriberEraseResponse {
+  deleted: true;
+  erasureId: string;
+  provider: ErasureProviderOutcome;
+  /** Set when `provider === 'failed'`: why (no address in it). */
+  providerError: string | null;
+  /** `failed` with a known Listmonk id → `pnpm newsletter:tick` retries the delete. */
+  providerRetry: boolean;
+}
+/** One honoured erasure request in the audit export — no address, no hash. */
+export interface ErasureAuditDto {
+  id: string; erasedAt: string; erasedBy: string | null; source: 'admin' | 'migration';
+  providerOutcome: 'pending' | 'deleted' | 'not_found' | 'kept' | 'skipped' | 'failed';
+  deleted: { subscribers: number; events: number; messages: number; suppressions: number };
+}
 /** POST /api/admin/subscribers/:id/unsubscribe. */
 export interface AdminUnsubscribeRequest { note?: string }
 export interface AdminUnsubscribeResponse { subscriber: SubscriberDetailDto }
@@ -375,6 +396,8 @@ export interface NewsletterAuditBundle {
   settings: NewsletterSettingsDto;
   subscribers: Array<Omit<SubscriberDetailDto, 'messages' | 'canSendConfirmation' | 'pendingExpired'>>;
   suppressions: Array<SuppressionDto & { email: string; subscriberId: string }>;
+  /** 0005: proof that erasure requests were honoured (PII-free). */
+  erasures: ErasureAuditDto[];
 }
 
 export type NewsletterMode = 'per_post' | 'digest' | 'manual';

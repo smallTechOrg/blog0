@@ -625,7 +625,9 @@ link pages (GET renders a button, POST changes state; *the confirm link confirms
 owner decision of 2026-10-19 — `newsletter-list.md`*), optional `BLOG0_UNSUBSCRIBE_SECRET`,
 `/privacy` + `privacyText` + `newsletterPostalAddress` + `newsletter_erase_subscriber` /
 `POST /api/admin/subscribers/:id/erase`, and redacted confirmation tokens (migration
-`0004_newsletter_erasure`; `pnpm db:verify` → `5 applied (latest 0004_newsletter_erasure)`) —
+`0004_newsletter_erasure`; erasure then switched to delete + hashed marker + PII-free audit log by
+owner decision 2026-10-19, migration `0005_newsletter_erase_delete`; `pnpm db:verify` → `6 applied
+(latest 0005_newsletter_erase_delete)`) —
 specified in `newsletter-list.md` (Assumed fix pass + criteria). **Tests first:** write the
 fix-pass criteria as failing integration/unit/E2E tests (PG 18 and PGlite for the erasure
 function) before any code; gate = the Phase 7 gate commands above, with the E2E and designer E2E

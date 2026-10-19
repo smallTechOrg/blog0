@@ -37,6 +37,12 @@ class RecordingSender implements NewsletterSender {
     this.removed.push(email);
     return { changed: true };
   }
+  findSubscriberId(email: string) {
+    return this.inner.findSubscriberId(email);
+  }
+  deleteSubscriber(...a: Parameters<NewsletterSender['deleteSubscriber']>) {
+    return this.inner.deleteSubscriber(...a);
+  }
   createIssue(...a: Parameters<NewsletterSender['createIssue']>) {
     return this.inner.createIssue(...a);
   }

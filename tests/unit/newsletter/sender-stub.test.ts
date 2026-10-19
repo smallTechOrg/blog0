@@ -77,6 +77,18 @@ describe('stub newsletter sender', () => {
     expect(stub.subscribers.get('stub-id-b')?.status).toBe('enabled');
   });
 
+  it('deleteSubscriber (erasure) removes the copy by id or address; unknown → not_found; the keep guard holds a live one', async () => {
+    await stub.syncSubscriber(sub('d'));
+    await stub.syncSubscriber(sub('e'));
+    expect(await stub.findSubscriberId('D@example.test')).toBe('stub-id-d');
+    expect(await stub.deleteSubscriber({ providerId: 'stub-id-d', email: 'd@example.test' })).toEqual({ outcome: 'deleted', providerId: 'stub-id-d' });
+    expect(stub.subscribers.has('stub-id-d')).toBe(false);
+    expect(await stub.deleteSubscriber({ providerId: 'stub-id-d', email: null })).toEqual({ outcome: 'not_found', providerId: 'stub-id-d' });
+    expect(await stub.deleteSubscriber({ providerId: null, email: 'E@example.test', keep: async (id) => id === 'id-e' })).toEqual({ outcome: 'kept', providerId: 'stub-id-e' });
+    expect(await stub.deleteSubscriber({ providerId: null, email: 'e@example.test' })).toEqual({ outcome: 'deleted', providerId: 'stub-id-e' });
+    expect(stub.subscribers.size).toBe(0);
+  });
+
   it('createIssue → stub-<issueId>; sendIssue freezes the enabled recipients once and logs newsletter.issue; fetchStats counts them', async () => {
     await stub.syncSubscriber(sub('c1'));
     await stub.syncSubscriber(sub('c2'));

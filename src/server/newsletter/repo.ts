@@ -1,15 +1,18 @@
 import 'server-only';
 
-import { and, asc, count, desc, eq, gte, ilike, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, lt, or, sql } from 'drizzle-orm';
 
 import type { SubscriberCounts, SubscriberStatus } from '@/lib/api/dto';
 
 import type { Executor } from '../db/client';
 import {
+  newsletterErasureLog,
+  newsletterErasureMarker,
   newsletterMessage,
   newsletterSubscriber,
   newsletterSubscriberEvent,
   newsletterSuppression,
+  type NewsletterErasureLogRow,
   type NewsletterMessageRow,
   type NewsletterSubscriberEventRow,
   type NewsletterSubscriberRow,
@@ -237,11 +240,59 @@ export async function pruneCandidates(db: Executor, siteId: string, bar: Date): 
     .orderBy(asc(newsletterSubscriber.createdAt));
 }
 
-/** True when an `erased` suppression keyed by this `erasureHash` exists (fix pass: a re-signup of an erased address). */
+/** True when this `erasureHash` has a "never email this address" marker (0005: an erased address signing up again). */
 export async function hasErasureHash(db: Executor, siteId: string, hash: string): Promise<boolean> {
   const [row] = await db
     .select({ n: count() })
-    .from(newsletterSuppression)
-    .where(and(eq(newsletterSuppression.siteId, siteId), eq(newsletterSuppression.reason, 'erased'), eq(newsletterSuppression.emailHash, hash)));
+    .from(newsletterErasureMarker)
+    .where(and(eq(newsletterErasureMarker.siteId, siteId), eq(newsletterErasureMarker.emailHash, hash)));
   return Number(row?.n ?? 0) > 0;
+}
+
+export type ErasureProviderOutcome = NewsletterErasureLogRow['providerOutcome'];
+
+/** Records what happened to the provider copy (the only columns of an audit row that may change). */
+export async function setErasureProvider(
+  db: Executor,
+  erasureId: string,
+  set: { outcome?: ErasureProviderOutcome; providerRef?: string | null; checkedAt?: Date },
+): Promise<void> {
+  await db
+    .update(newsletterErasureLog)
+    .set({
+      ...(set.outcome !== undefined ? { providerOutcome: set.outcome } : {}),
+      ...(set.providerRef !== undefined ? { providerRef: set.providerRef } : {}),
+      ...(set.checkedAt !== undefined ? { providerCheckedAt: set.checkedAt } : {}),
+    })
+    .where(eq(newsletterErasureLog.id, erasureId));
+}
+
+/** Audit rows whose provider copy still needs deleting: `failed`, or `pending` older than `pendingBefore` (a crash mid-erase), with a known provider id. */
+export async function erasuresToRetry(db: Executor, siteId: string, pendingBefore: Date): Promise<NewsletterErasureLogRow[]> {
+  return db
+    .select()
+    .from(newsletterErasureLog)
+    .where(
+      and(
+        eq(newsletterErasureLog.siteId, siteId),
+        isNotNull(newsletterErasureLog.providerRef),
+        or(eq(newsletterErasureLog.providerOutcome, 'failed'), and(eq(newsletterErasureLog.providerOutcome, 'pending'), lt(newsletterErasureLog.erasedAt, pendingBefore))),
+      ),
+    )
+    .orderBy(asc(newsletterErasureLog.erasedAt));
+}
+
+export async function erasuresOf(db: Executor, siteId: string): Promise<NewsletterErasureLogRow[]> {
+  return db.select().from(newsletterErasureLog).where(eq(newsletterErasureLog.siteId, siteId)).orderBy(asc(newsletterErasureLog.erasedAt), asc(newsletterErasureLog.id));
+}
+
+/** Which of these ids are live subscribers of the site (the retry guard: never delete a re-signed-up reader's provider copy). */
+export async function existingSubscriberIds(db: Executor, siteId: string, ids: string[]): Promise<Set<string>> {
+  const valid = ids.filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+  if (valid.length === 0) return new Set();
+  const rows = await db
+    .select({ id: newsletterSubscriber.id })
+    .from(newsletterSubscriber)
+    .where(and(eq(newsletterSubscriber.siteId, siteId), inArray(newsletterSubscriber.id, valid)));
+  return new Set(rows.map((r) => r.id));
 }

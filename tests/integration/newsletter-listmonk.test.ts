@@ -149,6 +149,54 @@ describe.skipIf(stack === null)(`Listmonk adapter against the test stack (listmo
     expect(await sender.syncSubscriber(reconfirmed)).toEqual({ providerId: again.providerId, changed: false });
   });
 
+  it('deleteSubscriber (erasure): by id → the record is DELETED (not blocklisted); by address when the id is unknown or stale; nothing there → not_found (done); a live re-signup is kept', async () => {
+    const logs = captureLogs();
+    try {
+      // by the id blog0 remembered
+      const a = subscriber('del-a');
+      createdEmails.add(a.email);
+      const { providerId } = await sender.syncSubscriber(a);
+      expect(await sender.findSubscriberId(a.email)).toBe(providerId);
+      expect(await sender.deleteSubscriber({ providerId, email: a.email })).toEqual({ outcome: 'deleted', providerId });
+      expect(await raw.subscriberByEmail(a.email)).toBeNull(); // gone, not blocklisted
+      expect(await sender.findSubscriberId(a.email)).toBeNull();
+      // a retry of the same delete: Listmonk has nothing → not_found counts as done
+      expect(await sender.deleteSubscriber({ providerId, email: null })).toEqual({ outcome: 'not_found', providerId });
+      expect(await sender.deleteSubscriber({ providerId: null, email: a.email })).toEqual({ outcome: 'not_found', providerId: null });
+
+      // no id known (never synced by blog0) → found by address; a blocklisted record is deleted too
+      const b = subscriber('del-b', { status: 'blocklisted' });
+      createdEmails.add(b.email);
+      await sender.syncSubscriber(b);
+      const byAddress = await sender.deleteSubscriber({ providerId: null, email: b.email });
+      expect(byAddress.outcome).toBe('deleted');
+      expect(await raw.subscriberByEmail(b.email)).toBeNull();
+
+      // a stale id that now carries ANOTHER address is never deleted during an erase; the address wins
+      const c = subscriber('del-c');
+      const bystander = subscriber('del-bystander');
+      createdEmails.add(c.email);
+      createdEmails.add(bystander.email);
+      await sender.syncSubscriber(c);
+      const other = await sender.syncSubscriber(bystander);
+      expect((await sender.deleteSubscriber({ providerId: other.providerId, email: c.email })).outcome).toBe('deleted');
+      expect(await raw.subscriberByEmail(c.email)).toBeNull();
+      expect(await raw.subscriberByEmail(bystander.email)).not.toBeNull();
+
+      // the retry guard: the record belongs to a live blog0 subscriber → kept
+      const kept = await sender.deleteSubscriber({ providerId: other.providerId, email: null, keep: async (id) => id === bystander.subscriberId });
+      expect(kept).toEqual({ outcome: 'kept', providerId: other.providerId });
+      expect(await raw.subscriberByEmail(bystander.email)).not.toBeNull();
+
+      // the outcome is logged per call, never with an address
+      const lines = logs.find('newsletter.provider').filter((l) => l.action === 'delete');
+      expect(lines.map((l) => l.outcome)).toEqual(['deleted', 'not_found', 'not_found', 'deleted', 'deleted', 'kept']);
+      expect(JSON.stringify(logs.lines)).not.toContain('@example.test');
+    } finally {
+      logs.stop();
+    }
+  });
+
   it('a list-level unsubscribe at Listmonk (subscriber stays enabled) → fetchSuppressions reports it; syncSubscriber never re-adds over it unless blog0 re-confirmed later', async () => {
     const f = subscriber('f', { attribs: { ...subscriber('f').attribs, consented_at: new Date(Date.now() - 3_600_000).toISOString(), confirmed_at: new Date(Date.now() - 3_600_000).toISOString() } });
     createdEmails.add(f.email);

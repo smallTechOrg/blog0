@@ -185,7 +185,7 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 5 applied (latest 0004_newsletter_erasure), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK
    ```
 
 6. **Prove the OpenRouter key and Jev** (the decisions model `typesafe/jev-1.13`) with one real
@@ -417,10 +417,10 @@ and the E2E suites always use both stubs — no SMTP, no Listmonk, no Docker.
 **Privacy and erasure.** `/privacy` shows the site's **privacy text** (a seeded plain-language
 *draft* — review it in **Site**; it is not legal advice), and the issue footer and confirmation mail
 link to it and print the **newsletter postal address** (also set in **Site**; sending without one
-only warns). **Erase personal data** on a subscriber redacts the address, IPs, user agents and
-source from the subscriber, its events, suppressions and messages (migration
-`0004_newsletter_erasure`, `newsletter_erase_subscriber`) and keeps only a salted-hash tombstone —
-steps in `docs/deploy.md` → *Handling an erasure request*. `BLOG0_UNSUBSCRIBE_SECRET` (optional)
+only warns). **Delete subscriber and personal data** on a subscriber deletes the subscriber, its
+events, suppressions and stored messages and its Listmonk copy (owner decision 2026-10-19; migration
+`0005_newsletter_erase_delete`, `newsletter_erase_subscriber`), keeping only a keyed-hash "never
+email" marker and a PII-free audit row — steps in `docs/deploy.md` → *Handling an erasure request*. `BLOG0_UNSUBSCRIBE_SECRET` (optional)
 signs new unsubscribe links so rotating the session secret does not break mailed ones.
 
 **Admin pages.** `/admin/subscribers` (list, filters, CSV + audit export, per-subscriber proof of
@@ -488,7 +488,7 @@ Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g
 
 ```bash
 BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
-# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 5 applied (latest 0004_newsletter_erasure), 0 pending: OK
+# pglite:./var/pglite @ PostgreSQL 17.5 (PGlite) — 6 applied (latest 0005_newsletter_erase_delete), 0 pending: OK
 ```
 
 Run them only while no dev server has that directory open. `drizzle-kit` commands

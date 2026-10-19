@@ -2,6 +2,7 @@ import 'server-only';
 
 import { getDb } from '../../db/client';
 import { log, maskEmail } from '../../log';
+import { retryProviderErasures } from '../erase';
 import { pruneIps } from '../prune';
 import * as listRepo from '../repo';
 import { getNewsletterSender } from '../sender';
@@ -15,7 +16,8 @@ import { runDigestTick } from './triggers';
 
 // `pnpm newsletter:tick` (spec/architecture.md §13.3; run hourly by an external scheduler — blog0
 // has no in-process timer): digest days rule → provider suppressions into blog0 → stats for issues
-// sent in the last 30 days → the 12-month IP prune → one `newsletter.tick` line.
+// sent in the last 30 days → the 12-month IP prune → provider deletes of erasures that failed earlier
+// (0005, by remembered provider id) → one `newsletter.tick` line.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How far back provider suppressions are read each run (idempotent: known ones are skipped). */
@@ -29,6 +31,8 @@ export interface TickResult {
   statsRefreshed: number;
   statsFailed: number;
   ipsPruned: number;
+  /** Erasures whose provider (Listmonk) copy was deleted / found gone on this run (0005 retry). */
+  erasuresRetried: number;
   errors: string[];
 }
 
@@ -62,7 +66,7 @@ export async function runTick(siteId: string, options: { now?: Date; sender?: Ne
   const started = performance.now();
   const now = options.now ?? new Date();
   const sender = options.sender ?? getNewsletterSender();
-  const result: TickResult = { digestCreated: false, digestIssueNumber: null, suppressionsPulled: 0, statsRefreshed: 0, statsFailed: 0, ipsPruned: 0, errors: [] };
+  const result: TickResult = { digestCreated: false, digestIssueNumber: null, suppressionsPulled: 0, statsRefreshed: 0, statsFailed: 0, ipsPruned: 0, erasuresRetried: 0, errors: [] };
 
   try {
     const issue = await runDigestTick(siteId, now, { sender });
@@ -99,11 +103,20 @@ export async function runTick(siteId: string, options: { now?: Date; sender?: Ne
     result.errors.push(`prune: ${errorText(err)}`);
   }
 
+  try {
+    const r = await retryProviderErasures(siteId, sender, now);
+    result.erasuresRetried = r.done;
+    if (r.failed > 0) result.errors.push(`erasures: ${r.failed} provider delete(s) still failing`);
+  } catch (err) {
+    result.errors.push(`erasures: ${errorText(err)}`);
+  }
+
   const fields = {
     digest_created: result.digestCreated,
     suppressions_pulled: result.suppressionsPulled,
     stats_refreshed: result.statsRefreshed,
     ips_pruned: result.ipsPruned,
+    erasures_retried: result.erasuresRetried,
     errors: result.errors.length,
     latency_ms: Math.round(performance.now() - started),
   };

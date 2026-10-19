@@ -5,6 +5,7 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -23,7 +24,10 @@ import {
 // hand-written SQL: the ledger-guard trigger, `newsletter_prune_event_ips` and the legacy backfill),
 // 0003_newsletter_prune_fix.sql (custom, no DDL diff: `newsletter_prune_event_ips(subscriber, before)`),
 // 0004_newsletter_erasure.sql (fix pass: site privacy text / postal address / erase salt, suppression
-// `email_hash`, the `erased` kinds, the widened ledger guard and `newsletter_erase_subscriber`).
+// `email_hash`, the `erased` kinds, the widened ledger guard and `newsletter_erase_subscriber`),
+// 0005_newsletter_erase_delete.sql (owner decision 2026-10-19: erasure DELETES the subscriber; the
+// hashed `newsletter_erasure_marker`, the PII-free `newsletter_erasure_log`, `newsletter_issue.erased_message_count`,
+// the replaced `newsletter_erase_subscriber`, the erased-address insert guard and the 0004 tombstone repair).
 
 const id = () => uuid('id').primaryKey().defaultRandom();
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -74,6 +78,10 @@ export const SUBSCRIBER_EVENT_KINDS = [
 export const NEWSLETTER_SOURCES = ['footer', 'email_link', 'one_click', 'admin', 'provider', 'webhook', 'migration', 'system'] as const;
 export const SUPPRESSION_REASONS = ['unsubscribed', 'bounced', 'complaint', 'admin', 'erased'] as const;
 export const MESSAGE_KINDS = ['confirmation', 'test_issue', 'issue'] as const;
+/** Who asked for an erasure (`admin` = the Subscribers screen; `migration` = 0005's repair of 0004 tombstones). */
+export const ERASURE_SOURCES = ['admin', 'migration'] as const;
+/** What happened to the provider (Listmonk) copy of an erased subscriber. */
+export const ERASURE_PROVIDER_OUTCOMES = ['pending', 'deleted', 'not_found', 'kept', 'skipped', 'failed'] as const;
 export const MESSAGE_STATUSES = ['sent', 'failed', 'stubbed'] as const;
 export const ISSUE_STATUSES = ['draft', 'sending', 'sent', 'failed'] as const;
 export const ISSUE_EVENT_KINDS = [
@@ -413,6 +421,48 @@ export const newsletterSuppression = pgTable(
   ],
 );
 
+/**
+ * 0005 (owner decision 2026-10-19): "never email this address" — the only trace an erased address leaves.
+ * `email_hash = erasureHash(site.newsletter_erase_salt, email)` (keyed, non-reversible). Insert-only (trigger guard).
+ */
+export const newsletterErasureMarker = pgTable(
+  'newsletter_erasure_marker',
+  {
+    siteId: siteId(),
+    emailHash: text('email_hash').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ name: 'newsletter_erasure_marker_pk', columns: [t.siteId, t.emailHash] })],
+);
+
+/**
+ * 0005: one PII-free row per honoured erasure request — when, by whom, which marker, how many rows went,
+ * and the provider outcome (the only columns that may change afterwards; trigger guard).
+ */
+export const newsletterErasureLog = pgTable(
+  'newsletter_erasure_log',
+  {
+    id: id(),
+    siteId: siteId(),
+    emailHash: text('email_hash').notNull(),
+    source: text('source', { enum: ERASURE_SOURCES }).notNull(),
+    erasedBy: uuid('erased_by').references(() => appUser.id),
+    /** Row counts deleted: `{ subscribers, events, messages, suppressions }`. */
+    details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+    providerOutcome: text('provider_outcome', { enum: ERASURE_PROVIDER_OUTCOMES }).notNull().default('pending'),
+    /** The provider's own subscriber id (Listmonk numeric id) — lets a retry delete it without the address. */
+    providerRef: text('provider_ref'),
+    providerCheckedAt: timestamp('provider_checked_at', { withTimezone: true }),
+    erasedAt: timestamp('erased_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('newsletter_erasure_log_site_erased_idx').on(t.siteId, t.erasedAt.desc()),
+    foreignKey({ name: 'newsletter_erasure_log_marker_fk', columns: [t.siteId, t.emailHash], foreignColumns: [newsletterErasureMarker.siteId, newsletterErasureMarker.emailHash] }),
+    check('newsletter_erasure_log_source_check', sql`${t.source} in ('admin', 'migration')`),
+    check('newsletter_erasure_log_provider_outcome_check', sql`${t.providerOutcome} in ('pending', 'deleted', 'not_found', 'kept', 'skipped', 'failed')`),
+  ],
+);
+
 /** One issue (spec/capabilities/newsletter-issues.md). */
 export const newsletterIssue = pgTable(
   'newsletter_issue',
@@ -430,6 +480,8 @@ export const newsletterIssue = pgTable(
     renderedText: text('rendered_text'),
     providerCampaignId: text('provider_campaign_id'),
     recipientCount: integer('recipient_count'),
+    /** 0005: `kind 'issue'` messages deleted by an erasure — the stub sender's stats add them back so counts stay intact. */
+    erasedMessageCount: integer('erased_message_count').notNull().default(0),
     stats: jsonb('stats'),
     lastError: text('last_error'),
     createdBy: uuid('created_by').references(() => appUser.id),
@@ -564,12 +616,16 @@ export type NewsletterSuppressionRow = typeof newsletterSuppression.$inferSelect
 export type NewsletterMessageRow = typeof newsletterMessage.$inferSelect;
 export type NewsletterIssueRow = typeof newsletterIssue.$inferSelect;
 export type NewsletterIssueEventRow = typeof newsletterIssueEvent.$inferSelect;
+export type NewsletterErasureMarkerRow = typeof newsletterErasureMarker.$inferSelect;
+export type NewsletterErasureLogRow = typeof newsletterErasureLog.$inferSelect;
 export type MediaAssetRow = typeof mediaAsset.$inferSelect;
 export type RateLimitBucketRow = typeof rateLimitBucket.$inferSelect;
 
 /** Every table, children first — the order resetDb() truncates in. */
 export const ALL_TABLE_NAMES = [
   'rate_limit_bucket',
+  'newsletter_erasure_log',
+  'newsletter_erasure_marker',
   'newsletter_message',
   'newsletter_issue_event',
   'newsletter_issue',

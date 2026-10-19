@@ -97,3 +97,46 @@ describe('ListmonkSender error messages carry no subscriber address', () => {
     expect(redactEmails('plain text')).toBe('plain text');
   });
 });
+
+describe('ListmonkSender.deleteSubscriber (erasure): a 404 from Listmonk counts as done', () => {
+  const record = { id: 41, email: EMAIL.toLowerCase(), name: 'R', status: 'enabled', attribs: { blog0_subscriber_id: 'gone-id' }, lists: [], updated_at: '2026-10-01T00:00:00Z' };
+
+  it('the record vanishes between the lookup and the DELETE (404) → not_found, no throw', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${new URL(url).pathname}`);
+        return init.method === 'DELETE' ? jsonResponse(404, { message: 'not found' }) : jsonResponse(200, { data: record });
+      }),
+    );
+    expect(await sender().deleteSubscriber({ providerId: '41', email: EMAIL })).toEqual({ outcome: 'not_found', providerId: '41' });
+    expect(calls).toEqual(['GET /api/subscribers/41', 'DELETE /api/subscribers/41']);
+  });
+
+  it('a retry by id that Listmonk no longer knows (404 or v5.1.0’s 400 "not found") → not_found without a DELETE', async () => {
+    for (const status of [404, 400]) {
+      const calls: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init: RequestInit) => {
+          calls.push(`${init.method} ${new URL(url).pathname}`);
+          return jsonResponse(status, { message: 'Subscriber (41: ) not found' });
+        }),
+      );
+      expect(await sender().deleteSubscriber({ providerId: '41', email: null })).toEqual({ outcome: 'not_found', providerId: '41' });
+      expect(calls).toEqual(['GET /api/subscribers/41']);
+    }
+  });
+
+  it('a 5xx on the DELETE (after its retry) throws a SenderError without the address — the caller records `failed`', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => (init.method === 'DELETE' ? jsonResponse(503, { message: `cannot delete ${EMAIL}` }) : jsonResponse(200, { data: record }))),
+    );
+    const e = await caught(sender().deleteSubscriber({ providerId: '41', email: EMAIL }));
+    expect(e.httpStatus).toBe(503);
+    assertNoAddress(e.message);
+    for (const l of lines) assertNoAddress(JSON.stringify(l.fields));
+  });
+});

@@ -1162,15 +1162,20 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   update of an event row; it touches `ip` only, and only where `created_at < p_before`; returns
   the row count). Migration `0003_newsletter_prune_fix` replaces the one-argument version of
   `0002_newsletter` (drop + create; hand-written SQL, no schema change) — `spec/data.md`.
-- `erase.ts` (fix pass): `eraseSubscriber(id, { confirmEmail, actor })` → check `confirmEmail` equals
-  the row's email (else `VALIDATION_FAILED`) → `select newsletter_erase_subscriber($1)` in one
-  transaction (`0004`, `spec/data.md`) → after commit `sender.removeSubscriber(email)` best-effort
-  (the email is read **before** erasing) and log `newsletter.erase` (`subscriber_id, outcome
-  ('erased'|'already'), provider ('removed'|'skipped'|'failed'), user_id`; never the email).
-  `erasureHash(salt, email)` (pure, in `tokens.ts`) = `sha256hex(salt + ':' + trim(lower(email)))`,
-  the twin of the SQL; `subscribe()` computes it and, on a matching `suppression.email_hash`, appends
-  `details.erasedBefore = true` to the `signup` event (the new row is still `pending` and needs a
-  fresh double opt-in). `mail/` redacts the token before inserting a `confirmation` row:
+- `erase.ts` (owner decision 2026-10-19, `0005`): `eraseSubscriber(id, { confirmEmail, actor })` → check
+  `confirmEmail` equals the row's email (else `VALIDATION_FAILED`) → read the provider id
+  (`provider_id`, else `sender.findSubscriberId(email)`; read-only) → `select
+  newsletter_erase_subscriber($1, $actor)` in one transaction (deletes the subscriber and its data,
+  keeps the marker + audit row; the audit row gets `provider_ref`) → after commit
+  `sender.deleteSubscriber({ providerId, email })` (DELETE at Listmonk; not found / 404 = done) and the
+  outcome on the audit row; log `newsletter.erase` (`subscriber_id, erasure_id, outcome, provider
+  ('deleted'|'not_found'|'skipped'|'failed'), deleted counts, user_id`; never the email). A database
+  failure → 500 `ERASE_FAILED` naming the driver message (address-redacted). `retryProviderErasures`
+  (run by the tick) re-deletes by `provider_ref` for `failed` / stale `pending` rows, keeping a record
+  whose `blog0_subscriber_id` is a live subscriber. `erasureHash(salt, email)` (pure, in `tokens.ts`)
+  = `sha256hex(salt + ':' + trim(lower(email)))`, the twin of the SQL; `subscribe()` computes it and,
+  on a matching `newsletter_erasure_marker`, appends `details.erasedBefore = true` to the `signup`
+  event (the new row is still `pending` and needs a fresh double opt-in). `mail/` redacts the token before inserting a `confirmation` row:
   `redactConfirmUrl(body)` replaces the `t` value of `/newsletter/confirm?t=…` with `[redacted]`
   in the stored `html`/`text` only — the transport sends the real message. Issue and confirmation
   footers render `newsletterPostalAddress` when non-empty and link `<publicBaseUrl>/privacy`
@@ -1389,8 +1394,9 @@ via `@media (prefers-color-scheme: dark)` in a `<style>` block plus explicit lig
 > secret remains a verification fallback, so a rotation of the session secret only breaks links
 > signed with it; rotating the unsubscribe secret itself still breaks its links. `docs/deploy.md`
 > (code-owned) gets: the rotation section naming both secrets, and **"Handling an erasure
-> request"** (verify the requester, Admin → Subscribers → the address → **Erase personal data**,
-> type the address, confirm the `newsletter.erase` log line, reply to the requester; backups made
+> request"** (verify the requester, Admin → Subscribers → the address → **Delete subscriber and
+> personal data** (2026-10-19: deletes; hashed marker + PII-free audit row stay), type the address,
+> confirm the `newsletter.erase` log line, reply to the requester; backups made
 > before the erasure still hold the data until they expire — delete or rotate them per the backup
 > policy).
 > **Assumed:** one secret (`BLOG0_SESSION_SECRET`) signs unsubscribe tokens; rotating it (runbook)
@@ -1554,7 +1560,7 @@ blog0/
 │   │   └── share-links.ts  share-surface.ts                    # share texts/URLs; native-sheet decision
 │   ├── server/                  # server-only (each file starts with `import 'server-only'`)
 │   │   ├── config.ts  log.ts  rate-window.ts  rate-window-store.ts
-│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql, 0004_newsletter_erasure.sql + meta/)
+│   │   ├── db/{client,schema,migrate,url,postgres,pglite}.ts  db/migrations/ (0000_init.sql, 0001_rate_limit_bucket.sql, 0002_newsletter.sql, 0003_newsletter_prune_fix.sql, 0004_newsletter_erasure.sql, 0005_newsletter_erase_delete.sql + meta/)
 │   │   ├── ops/{release,readiness,lifecycle,pg-tools,backup-manifest,backup,restore}.ts   # Phase 5 (§12)
 │   │   ├── designer/{secret,admin,setup}.ts
 │   │   ├── http/api.ts

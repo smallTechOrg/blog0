@@ -14,6 +14,7 @@ import {
   AUDIT_HREF,
   adminListHref,
   csvHref,
+  ERASE_NOTICE_KEY,
   emptyMessage,
   legacySentence,
   listPath,
@@ -28,7 +29,8 @@ import {
 // Admin → Subscribers /admin/subscribers (spec/ui.md §4 "Subscribers"; capability newsletter-list):
 // counts per status as filter pills, search by email (debounced), the table with links to the
 // per-subscriber audit view, the legacy banner, Export CSV (active filter) and Export audit (JSON).
-// States: loading, error + Retry (or Sign in again), empty (per filter/search), populated.
+// States: loading, error + Retry (or Sign in again), empty (per filter/search), populated; plus the
+// one-time confirmation after "Delete subscriber and personal data".
 
 const SEARCH_DEBOUNCE_MS = 300;
 const Q_MAX = 100;
@@ -43,6 +45,20 @@ export function SubscribersView({ timeZone, initialStatus = 'all', initialQuery 
   const [filter, setFilter] = useState<StatusFilterValue>(initialStatus);
   const [query, setQuery] = useState(initialQuery);
   const [q, setQ] = useState(initialQuery.trim());
+  // The one-time confirmation a deletion leaves for the list (SubscriberDetail → sessionStorage).
+  const [notice, setNotice] = useState<{ kind: 'ok' | 'warn'; text: string } | null>(null);
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(ERASE_NOTICE_KEY);
+      if (raw === null) return;
+      window.sessionStorage.removeItem(ERASE_NOTICE_KEY);
+      const parsed = JSON.parse(raw) as { kind?: unknown; text?: unknown };
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from storage after mount (not available during SSR)
+      if (typeof parsed.text === 'string') setNotice({ kind: parsed.kind === 'warn' ? 'warn' : 'ok', text: parsed.text });
+    } catch {
+      // storage unavailable or a malformed entry: no line
+    }
+  }, []);
 
   // Search is debounced 300 ms before it reaches the request key.
   useEffect(() => {
@@ -86,6 +102,20 @@ export function SubscribersView({ timeZone, initialStatus = 'all', initialQuery 
             </div>
           ) : null}
         </div>
+
+        {notice ? (
+          <div aria-live="polite">
+            {notice.kind === 'ok' ? (
+              <p className="admin-ok" role="status">
+                {notice.text}
+              </p>
+            ) : (
+              <p className="admin-alert is-warn" role="alert">
+                {notice.text}
+              </p>
+            )}
+          </div>
+        ) : null}
 
         <div className="subs-tools">
           <StatusFilter counts={counts} value={filter} onChange={setFilter} />

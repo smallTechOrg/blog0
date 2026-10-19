@@ -14,6 +14,8 @@ import {
   type SenderSubscriber,
   type SenderSuppression,
   type SenderSyncResult,
+  type ProviderDeleteOutcome,
+  type ProviderDeleteTarget,
 } from './types';
 import { providerOptOutWins } from './opt-out';
 
@@ -458,6 +460,47 @@ export class ListmonkSender implements NewsletterSender {
     await this.#blocklist(existing);
     log.info('newsletter.provider', { provider: 'listmonk', action: 'blocklist', email: maskEmail(email), providerId: String(existing.id), outcome: 'blocklisted' });
     return { changed: true };
+  }
+
+  async findSubscriberId(email: string): Promise<string | null> {
+    const row = await this.#findByEmail(email);
+    return row === null ? null : String(row.id);
+  }
+
+  /** GET /api/subscribers/:id; Listmonk v5.1.0 answers an unknown id with 400 "… not found" (404 tolerated too). */
+  async #getById(providerId: string): Promise<ListmonkSubscriber | null> {
+    if (!/^\d+$/.test(providerId)) return null;
+    const { status, data } = await this.#call<ListmonkSubscriber | null>({ method: 'GET', path: `/api/subscribers/${providerId}`, tolerate: [400, 404] });
+    return status === 200 && data ? data : null;
+  }
+
+  /**
+   * Erasure: DELETE /api/subscribers/:id (Listmonk removes its list memberships too; campaign counters
+   * stay). The record is found by id when blog0 knows it — and, during the erase itself, only if it
+   * still carries that address — else by address. Nothing found / a 404 on the DELETE → `not_found`,
+   * which counts as done (verified v5.1.0: a DELETE of an unknown id answers 200).
+   */
+  async deleteSubscriber(target: ProviderDeleteTarget): Promise<{ outcome: ProviderDeleteOutcome; providerId: string | null }> {
+    let found: ListmonkSubscriber | null = null;
+    if (target.providerId !== null) {
+      const byId = await this.#getById(target.providerId);
+      if (byId !== null && (target.email === null || byId.email.toLowerCase() === target.email.toLowerCase())) found = byId;
+    }
+    if (found === null && target.email !== null) found = await this.#findByEmail(target.email);
+    if (found === null) {
+      log.info('newsletter.provider', { provider: 'listmonk', action: 'delete', providerId: target.providerId, outcome: 'not_found' });
+      return { outcome: 'not_found', providerId: target.providerId };
+    }
+    const providerId = String(found.id);
+    const owner = found.attribs?.blog0_subscriber_id;
+    if (target.keep !== undefined && typeof owner === 'string' && owner !== '' && (await target.keep(owner))) {
+      log.info('newsletter.provider', { provider: 'listmonk', action: 'delete', providerId, outcome: 'kept' });
+      return { outcome: 'kept', providerId };
+    }
+    const { status } = await this.#call({ method: 'DELETE', path: `/api/subscribers/${providerId}`, tolerate: [404] });
+    const outcome = status === 404 ? 'not_found' : 'deleted';
+    log.info('newsletter.provider', { provider: 'listmonk', action: 'delete', providerId, outcome });
+    return { outcome, providerId };
   }
 
   // --- campaigns ---------------------------------------------------------------------------------

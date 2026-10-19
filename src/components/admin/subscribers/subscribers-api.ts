@@ -2,7 +2,7 @@
 // status pill, the empty lines, the per-event labels of the audit timeline and the proof-of-consent
 // lines (spec/ui.md §4 "Subscribers", "Subscriber"; spec/api.md GET /api/admin/subscribers).
 
-import type { SubscriberDetailDto, SubscriberDto, SubscriberEventDto, SubscriberStatus } from '@/lib/api/dto';
+import type { SubscriberDetailDto, SubscriberDto, SubscriberEraseResponse, SubscriberEventDto, SubscriberStatus } from '@/lib/api/dto';
 import { fmtDate } from '@/lib/format-date';
 
 export type StatusFilterValue = 'all' | SubscriberStatus;
@@ -217,26 +217,45 @@ export function canUnsubscribe(status: SubscriberStatus): boolean {
   return status !== 'unsubscribed' && status !== 'bounced';
 }
 
-// ---- Erase personal data (fix pass; spec/ui.md §4 "Subscriber") ----
+// ---- Delete subscriber and personal data (owner decision 2026-10-19; spec/ui.md §4 "Subscriber") ----
+
+export const ERASE_BUTTON = 'Delete subscriber and personal data';
 
 export const ERASE_CONFIRM = (email: string): string =>
-  `Erase ${email}? This permanently redacts the address, IP, user agent and source page in the subscriber, event and message records and removes the address from Listmonk. A tombstone and an erased entry remain. This cannot be undone.`;
+  `Delete ${email} and all personal data? This permanently deletes the subscriber, its history, suppression entries and stored messages, and the Listmonk copy. Only an anonymous marker stays so the address is never emailed again without a fresh sign-up and confirmation. This cannot be undone.`;
 
-/** The Erase button is enabled only when the typed text equals the address (case-insensitive). */
+/** The Delete button is enabled only when the typed text equals the address (case-insensitive). */
 export function eraseConfirmMatches(typed: string, email: string): boolean {
   const t = typed.trim().toLowerCase();
   return t !== '' && t === email.trim().toLowerCase();
 }
 
-export function eraseNotice(providerRemoved: boolean): string {
-  return providerRemoved ? 'Erased. Listmonk copy removed.' : 'Erased. Listmonk removal failed — see the log.';
+/** The confirmation shown on the Subscribers list after a deletion (names the Listmonk outcome). */
+export function eraseNotice(result: Pick<SubscriberEraseResponse, 'provider' | 'providerError' | 'providerRetry'>): { kind: 'ok' | 'warn'; text: string } {
+  const head = 'Subscriber and personal data deleted.';
+  switch (result.provider) {
+    case 'deleted':
+      return { kind: 'ok', text: `${head} The Listmonk copy was deleted too.` };
+    case 'not_found':
+      return { kind: 'ok', text: `${head} Listmonk held no copy.` };
+    case 'skipped':
+      return { kind: 'ok', text: `${head} No Listmonk is configured, so there was no copy to delete.` };
+    case 'failed':
+      return {
+        kind: 'warn',
+        text:
+          `${head} The Listmonk copy could not be deleted (${result.providerError ?? 'unknown error'}) — ` +
+          (result.providerRetry ? 'the hourly newsletter tick retries it.' : 'delete it in Listmonk’s admin (Subscribers → search → Delete).'),
+      };
+  }
 }
 
-/** The tombstone address an erased subscriber carries (`erased+<hash>@erased.invalid`). */
-export function isErasedEmail(email: string): boolean {
-  return /^erased\+[^@]+@erased\.invalid$/i.test(email);
-}
+/** Carries the confirmation from the subscriber page to the list across the client navigation (no URL, no address). */
+export const ERASE_NOTICE_KEY = 'blog0.subscribers.notice';
 
-export function canErase(email: string): boolean {
-  return !isErasedEmail(email);
+/** The error line of the Delete dialog: the server's message names the failure; a few codes get a clearer one. */
+export function eraseErrorMessage(error: { code: string; message: string }): string {
+  if (error.code === 'NOT_FOUND') return 'This subscriber was already deleted — go back to the list.';
+  if (error.code === 'NETWORK') return 'The server could not be reached — nothing was deleted. Check the connection and try again.';
+  return error.message;
 }

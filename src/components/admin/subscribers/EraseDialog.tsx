@@ -7,11 +7,11 @@ import type { SubscriberEraseResponse } from '@/lib/api/dto';
 import { apiRequest } from '../api';
 import { runExclusive } from '../editor/tldr-generate';
 
-import { ERASE_CONFIRM, eraseConfirmMatches, subscriberApi } from './subscribers-api';
+import { ERASE_CONFIRM, eraseConfirmMatches, eraseErrorMessage, subscriberApi } from './subscribers-api';
 
-// Erase personal data (fix pass; spec/ui.md §4 "Subscriber"): a typed-confirmation dialog — Erase
-// stays disabled until the input equals the subscriber's address (case-insensitive) — then
-// POST …/erase { confirmEmail }.
+// Delete subscriber and personal data (owner decision 2026-10-19; spec/ui.md §4 "Subscriber"): a
+// typed-confirmation dialog — Delete stays disabled until the input equals the subscriber's address
+// (case-insensitive) — then POST …/erase { confirmEmail }. A failure keeps the dialog open and names it.
 
 export function EraseDialog({
   subscriber,
@@ -40,7 +40,7 @@ export function EraseDialog({
       });
       setPending(false);
       if (res.ok) onDone(res.data);
-      else setError(res.error.message);
+      else setError(eraseErrorMessage(res.error));
     });
   }
 
@@ -81,7 +81,7 @@ export function EraseDialog({
         ) : null}
         <div className="admin-dialog__actions">
           <button type="submit" className="admin-btn admin-btn--danger" disabled={!matches || pending} aria-busy={pending}>
-            {pending ? 'Erasing…' : 'Erase'}
+            {pending ? 'Deleting…' : 'Delete'}
           </button>
           <button type="button" className="admin-btn admin-btn--ghost" onClick={onCancel} disabled={pending}>
             Cancel

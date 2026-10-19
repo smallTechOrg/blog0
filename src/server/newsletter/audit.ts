@@ -12,7 +12,8 @@ import { subscriberDtoFrom } from './service';
 import { newsletterSettingsFrom } from './settings';
 
 // Exports (capability newsletter-list.md): the CSV of every (filtered) subscriber and the audit
-// bundle — the settings snapshot, every subscriber with its events, every suppression row — enough
+// bundle — the settings snapshot, every subscriber with its events, every suppression row, every
+// honoured erasure request (PII-free, 0005) — enough
 // to prove consent for any address without database access. < 10 k subscribers assumed (no streaming).
 
 /* CSV (RFC 4180) with spreadsheet-formula neutralising: a cell starting with = + - @ or a
@@ -38,8 +39,13 @@ export function subscribersToCsv(subscribers: SubscriberDto[]): string {
 
 export async function buildAuditBundle(site: SiteRow, actor: { email: string }, now = new Date()): Promise<NewsletterAuditBundle> {
   const db = getDb();
-  const [rows, events, suppressions] = await Promise.all([repo.listRows(db, site.id), repo.allEvents(db, site.id), repo.allSuppressions(db, site.id)]);
-  const actorIds = [...new Set(events.map((e) => e.actorUserId).filter((v): v is string => v !== null))];
+  const [rows, events, suppressions, erasures] = await Promise.all([
+    repo.listRows(db, site.id),
+    repo.allEvents(db, site.id),
+    repo.allSuppressions(db, site.id),
+    repo.erasuresOf(db, site.id),
+  ]);
+  const actorIds = [...new Set([...events.map((e) => e.actorUserId), ...erasures.map((e) => e.erasedBy)].filter((v): v is string => v !== null))];
   const actors = actorIds.length
     ? await db.select({ id: appUser.id, displayName: appUser.displayName }).from(appUser).where(inArray(appUser.id, actorIds))
     : [];
@@ -104,5 +110,17 @@ export async function buildAuditBundle(site: SiteRow, actor: { email: string }, 
       email: s.email,
       subscriberId: s.subscriberId,
     })),
+    // Erasure requests honoured (0005): when, by whom, what went — no address, no hash.
+    erasures: erasures.map((e) => {
+      const n = (k: string) => (typeof e.details[k] === 'number' ? (e.details[k] as number) : 0);
+      return {
+        id: e.id,
+        erasedAt: e.erasedAt.toISOString(),
+        erasedBy: e.erasedBy ? (actorName.get(e.erasedBy) ?? null) : null,
+        source: e.source,
+        providerOutcome: e.providerOutcome,
+        deleted: { subscribers: n('subscribers'), events: n('events'), messages: n('messages'), suppressions: n('suppressions') },
+      };
+    }),
   };
 }

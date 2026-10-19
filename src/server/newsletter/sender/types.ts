@@ -65,6 +65,18 @@ export interface SenderHealth {
   listName?: string;
 }
 
+/** What a provider-side delete did: `kept` = the record now belongs to a live blog0 subscriber (a retry after a re-signup). */
+export type ProviderDeleteOutcome = 'deleted' | 'not_found' | 'kept';
+
+export interface ProviderDeleteTarget {
+  /** The provider's own subscriber id when known (blog0's `provider_id`, or the erasure log's `provider_ref` on a retry). */
+  providerId: string | null;
+  /** The address — known only during the erase request itself (blog0 has deleted it afterwards); null on a retry. */
+  email: string | null;
+  /** Retry guard: called with the record's `blog0_subscriber_id` attribute; true ⇒ keep the record (it is someone live). */
+  keep?: (blog0SubscriberId: string) => Promise<boolean>;
+}
+
 export interface NewsletterSender {
   readonly kind: 'listmonk' | 'stub';
   healthcheck(): Promise<SenderHealth>;
@@ -74,6 +86,10 @@ export interface NewsletterSender {
   syncSubscriber(s: SenderSubscriber): Promise<SenderSyncResult>;
   /** Blocklist — never delete; an address unknown to the provider → `changed: false`. */
   removeSubscriber(email: string): Promise<{ changed: boolean }>;
+  /** The provider's id for an address, or null when it holds none (read-only; used before an erasure). */
+  findSubscriberId(email: string): Promise<string | null>;
+  /** Erasure (0005): DELETE the provider's record — by id when known, else by address. Unknown → `not_found` (done). */
+  deleteSubscriber(target: ProviderDeleteTarget): Promise<{ outcome: ProviderDeleteOutcome; providerId: string | null }>;
   createIssue(i: SenderIssue): Promise<{ campaignId: string }>;
   /** Start; idempotent for a campaign that is already running/finished. */
   sendIssue(campaignId: string): Promise<void>;

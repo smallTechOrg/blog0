@@ -473,43 +473,50 @@ test('a legacy_unconfirmed subscriber gets the one-time confirmation once; the b
   expect(await messagesTo(LEGACY_EMAIL, 'confirmation')).toHaveLength(1);
 });
 
-test('Erase personal data: wrong address keeps Erase disabled; the right one erases, the admin shows the tombstone, a re-signup is Pending again', async ({ page }) => {
+/** Admin → the subscriber → Delete subscriber and personal data → typed address → back on the list with the confirmation. */
+async function deleteSubscriberInAdmin(page: Page, id: string, email: string): Promise<void> {
+  const main = await openSubscriber(page, id, email);
+  await main.getByRole('button', { name: 'Delete subscriber and personal data' }).click();
+  const dialog = page.getByRole('dialog', { name: new RegExp(`^Delete ${email.replace(/[.+]/g, '\\$&')} and all personal data\\?`) });
+  const del = dialog.getByRole('button', { name: 'Delete', exact: true });
+  await expect(del).toBeDisabled();
+  await dialog.getByLabel('Type the address to confirm').fill('someone-else@example.test');
+  await expect(del).toBeDisabled();
+  await dialog.getByLabel('Type the address to confirm').fill(email.toUpperCase());
+  await expect(del).toBeEnabled();
+  await del.click();
+  await page.waitForURL(/\/admin\/subscribers$/);
+  await expect(page.getByRole('status').filter({ hasText: /^Subscriber and personal data deleted\./ })).toBeVisible();
+  await expect(page.locator('.admin-table tbody tr', { hasText: email })).toHaveCount(0);
+}
+
+test('Delete subscriber and personal data: wrong address keeps Delete disabled; the right one deletes and returns to the list; erase → re-signup → confirm → erase again works', async ({ page }) => {
   await signupInFooter(page, ERASE_EMAIL, 'Erase Me');
-  const url = await latestConfirmUrl(ERASE_EMAIL);
-  await page.goto(pathOf(url));
+  await page.goto(pathOf(await latestConfirmUrl(ERASE_EMAIL)));
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
   const row = await subscriberByEmail(ERASE_EMAIL);
   expect(row.status).toBe('confirmed');
 
   await signIn(page);
-  const main = await openSubscriber(page, row.id, ERASE_EMAIL);
-  await main.getByRole('button', { name: 'Erase personal data' }).click();
-  const dialog = page.getByRole('dialog', { name: new RegExp(`^Erase ${ERASE_EMAIL}\\?`) });
-  const erase = dialog.getByRole('button', { name: 'Erase', exact: true });
-  await expect(erase).toBeDisabled();
-  await dialog.getByLabel('Type the address to confirm').fill('someone-else@example.test');
-  await expect(erase).toBeDisabled();
-  await dialog.getByLabel('Type the address to confirm').fill(ERASE_EMAIL.toUpperCase());
-  await expect(erase).toBeEnabled();
-  await erase.click();
-  await expect(dialog).toHaveCount(0);
+  await deleteSubscriberInAdmin(page, row.id, ERASE_EMAIL);
 
-  await expect(main.getByText(/^Erased\. Listmonk /)).toBeVisible();
-  await expect(main.getByRole('heading', { level: 1 })).toHaveText(/^erased\+[0-9a-f]+@erased\.invalid$/);
-  await expect(main.locator('.timeline__label').last()).toHaveText('Personal data erased');
-  await expect(main.getByRole('button', { name: 'Erase personal data' })).toHaveCount(0);
-  await expect(main).not.toContainText(ERASE_EMAIL);
-
-  // Reloading shows the same tombstone; no row keeps the address.
+  // The confirmation shows once; the detail page of the deleted subscriber is a 404; no row keeps the address.
   await page.reload();
-  await expect(main.getByRole('heading', { level: 1 })).toHaveText(/^erased\+[0-9a-f]+@erased\.invalid$/);
+  await expect(page.getByText(/^Subscriber and personal data deleted\./)).toHaveCount(0);
+  await page.goto(`/admin/subscribers/${row.id}`);
+  await expect(page.getByText('That subscriber isn’t here.')).toBeVisible();
   const left = await withTestDb((sql) => sql`select id from newsletter_subscriber where lower(email) = ${ERASE_EMAIL.toLowerCase()}`);
   expect(left).toHaveLength(0);
+  const csv = await page.request.get('/api/admin/subscribers?format=csv');
+  expect((await csv.text()).toLowerCase()).not.toContain(ERASE_EMAIL.toLowerCase());
 
-  // The same address signing up again needs a fresh double opt-in.
+  // The same address signing up again needs a fresh double opt-in — and can be deleted again (the 0004 bug).
   await signupInFooter(page, ERASE_EMAIL.toUpperCase());
   const again = await subscriberByEmail(ERASE_EMAIL);
   expect(again.status).toBe('pending');
-  await page.goto('/admin/subscribers?status=pending');
-  await expect(page.locator('.admin-table tbody tr', { hasText: ERASE_EMAIL })).toBeVisible();
+  await page.goto(pathOf(await latestConfirmUrl(ERASE_EMAIL)));
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
+  await deleteSubscriberInAdmin(page, again.id, ERASE_EMAIL);
+  const audit = await withTestDb((sql) => sql`select source from newsletter_erasure_log`);
+  expect(audit.length).toBeGreaterThanOrEqual(2);
 });

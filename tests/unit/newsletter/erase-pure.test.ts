@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isErasedEmail, redactConfirmUrl, REDACTED_TOKEN } from '@/server/newsletter/erase';
+import { failureReason, isErasedEmail, redactConfirmUrl, REDACTED_TOKEN } from '@/server/newsletter/erase';
 import { confirmationEmail } from '@/server/newsletter/mail/templates';
 
 // Pure helpers of the fix pass: token redaction for stored confirmation messages and tombstone detection.
@@ -45,5 +45,16 @@ describe('isErasedEmail', () => {
     expect(isErasedEmail(`erased+${'a'.repeat(64)}@erased.invalid`)).toBe(true);
     expect(isErasedEmail('reader@example.com')).toBe(false);
     expect(isErasedEmail('erased+x@example.com')).toBe(false);
+  });
+});
+
+describe('failureReason (the named error of a refused deletion)', () => {
+  it('unwraps a drizzle "Failed query" error to the driver message, first line only, with no address', () => {
+    const driver = new Error('duplicate key value violates unique constraint "newsletter_subscriber_site_email_unique"\nDETAIL: Key (email)=(reader@example.com) exists.');
+    const wrapped = new Error("Failed query: select newsletter_erase_subscriber($1::uuid, $2::uuid) as r\nparams: 1,2", { cause: driver });
+    expect(failureReason(wrapped)).toBe('duplicate key value violates unique constraint "newsletter_subscriber_site_email_unique"');
+    expect(failureReason(new Error('could not reach reader@example.com'))).toBe('could not reach [email]');
+    expect(failureReason('plain')).toBe('plain');
+    expect(failureReason(new Error(''))).toBe('unknown error');
   });
 });

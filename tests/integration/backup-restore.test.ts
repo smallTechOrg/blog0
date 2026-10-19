@@ -201,7 +201,7 @@ describe('backup → restore round trip', () => {
     });
 
     expect(result.lines[0]).toBe(`backup: ${dir}`);
-    expect(result.lines[1]).toMatch(new RegExp(`^db: ${dbNameOf(SRC_URL)} — 14 tables, \\d+ rows, dump \\d+ bytes$`));
+    expect(result.lines[1]).toMatch(new RegExp(`^db: ${dbNameOf(SRC_URL)} — 16 tables, \\d+ rows, dump \\d+ bytes$`));
     expect(result.lines[2]).toBe(`storage: 2 files, ${manifest.storage.bytes} bytes`);
     expect(result.lines.at(-1)).toBe(dir);
     expect(result.lines.join('\n')).not.toMatch(/warning/);
@@ -212,7 +212,7 @@ describe('backup → restore round trip', () => {
     const { report, lines } = await restore(dir, storage);
 
     expect(report.ok).toBe(true);
-    expect(lines.at(-1)).toMatch(/^restore-check: OK \(14 tables, \d+ rows, 2 files\)$/);
+    expect(lines.at(-1)).toMatch(/^restore-check: OK \(16 tables, \d+ rows, 2 files\)$/);
     expect(lines).toContain(`db: ${dbNameOf(TARGET_URL)} created and restored from ${dbNameOf(SRC_URL)} (pg_restore ${(await findPgTool('pg_restore')).version})`);
     expect(await count(TARGET_URL, 'newsletter_subscriber')).toBe(4);
     expect(await count(TARGET_URL, 'rate_limit_bucket')).toBe(0); // schema restored, rows not
@@ -267,7 +267,7 @@ describe('backup → restore round trip', () => {
     expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/^bytes +15 \/ 21 MISMATCH$/)]));
     expect(lines.at(-1)).toBe('restore-check: FAILED (2 mismatches)');
     // tables still match
-    expect(lines.filter((l) => / ok$/.test(l))).toHaveLength(14);
+    expect(lines.filter((l) => / ok$/.test(l))).toHaveLength(16);
   });
 
   it('a one-byte tamper of db.dump → checksum mismatch before the target DB is created', async () => {
@@ -369,7 +369,7 @@ describe('CLI: pnpm backup / pnpm restore (exit codes, output, no password leaks
     const storage = path.join(WORK, 'cli-storage');
     const r = cli('restore', ['--in', dir, '--db', target, '--storage', storage, '--force'], env);
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/^restore-check: OK \(14 tables, \d+ rows, 2 files\)$/m);
+    expect(r.stdout).toMatch(/^restore-check: OK \(16 tables, \d+ rows, 2 files\)$/m);
 
     // again without --force → exit 1 "is not empty"
     const again = cli('restore', ['--in', dir, '--db', target, '--storage', path.join(WORK, 'cli-storage-2')], env);

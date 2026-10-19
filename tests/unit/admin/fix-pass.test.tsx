@@ -6,11 +6,11 @@ import { SendDialog } from '@/components/admin/newsletter/SendDialog';
 import { POSTAL_WARNING, postalAddressMissing } from '@/components/admin/newsletter/newsletter-api';
 import { SiteSettingsForm } from '@/components/admin/site/SiteSettingsView';
 import {
+  ERASE_BUTTON,
   ERASE_CONFIRM,
   eraseConfirmMatches,
+  eraseErrorMessage,
   eraseNotice,
-  isErasedEmail,
-  canErase,
   eventLabel,
 } from '@/components/admin/subscribers/subscribers-api';
 import { PrivacyView } from '@/components/site/privacy/PrivacyView';
@@ -24,32 +24,38 @@ vi.mock('@/components/admin/api', async (importOriginal) => {
 const noop = () => {};
 const STUB = { kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null } as const;
 
-describe('erase confirmation gating', () => {
+describe('delete-subscriber confirmation gating', () => {
   it('matches the typed address case-insensitively, ignoring surrounding spaces, and nothing else', () => {
     expect(eraseConfirmMatches('', 'Ann@Example.test')).toBe(false);
     expect(eraseConfirmMatches('ann@example.tes', 'Ann@Example.test')).toBe(false);
     expect(eraseConfirmMatches('  ann@example.test ', 'Ann@Example.test')).toBe(true);
   });
 
-  it('writes the dialog sentence, the result notices, tombstone detection and the timeline label', () => {
-    expect(ERASE_CONFIRM('a@b.test')).toContain('Erase a@b.test?');
+  it('writes the button, the dialog sentence, the list confirmations per Listmonk outcome, the named errors and the old timeline label', () => {
+    expect(ERASE_BUTTON).toBe('Delete subscriber and personal data');
+    expect(ERASE_CONFIRM('a@b.test')).toContain('Delete a@b.test and all personal data?');
     expect(ERASE_CONFIRM('a@b.test')).toContain('This cannot be undone.');
-    expect(eraseNotice(true)).toBe('Erased. Listmonk copy removed.');
-    expect(eraseNotice(false)).toBe('Erased. Listmonk removal failed — see the log.');
-    expect(isErasedEmail('erased+abc123@erased.invalid')).toBe(true);
-    expect(isErasedEmail('a@b.test')).toBe(false);
-    expect(canErase('a@b.test')).toBe(true);
-    expect(canErase('erased+abc123@erased.invalid')).toBe(false);
+    expect(eraseNotice({ provider: 'deleted', providerError: null, providerRetry: false })).toEqual({ kind: 'ok', text: 'Subscriber and personal data deleted. The Listmonk copy was deleted too.' });
+    expect(eraseNotice({ provider: 'not_found', providerError: null, providerRetry: false })).toEqual({ kind: 'ok', text: 'Subscriber and personal data deleted. Listmonk held no copy.' });
+    expect(eraseNotice({ provider: 'skipped', providerError: null, providerRetry: false }).text).toContain('No Listmonk is configured');
+    const retry = eraseNotice({ provider: 'failed', providerError: 'Listmonk unreachable at http://localhost:9000: fetch failed', providerRetry: true });
+    expect(retry.kind).toBe('warn');
+    expect(retry.text).toContain('(Listmonk unreachable at http://localhost:9000: fetch failed)');
+    expect(retry.text).toContain('the hourly newsletter tick retries it.');
+    expect(eraseNotice({ provider: 'failed', providerError: 'boom', providerRetry: false }).text).toContain('delete it in Listmonk’s admin');
+    expect(eraseErrorMessage({ code: 'NOT_FOUND', message: 'x' })).toBe('This subscriber was already deleted — go back to the list.');
+    expect(eraseErrorMessage({ code: 'NETWORK', message: 'x' })).toContain('nothing was deleted');
+    expect(eraseErrorMessage({ code: 'ERASE_FAILED', message: 'The database refused the deletion (deadlock detected). Nothing was deleted.' })).toContain('deadlock detected');
     const ev = { id: 'e', kind: 'erased', source: 'admin', actor: null, ip: null, userAgent: null, details: {}, createdAt: '2026-10-12T10:00:00Z' } as SubscriberEventDto;
     expect(eventLabel(ev)).toBe('Personal data erased');
   });
 
-  it('EraseDialog starts with Erase disabled and asks to type the address', () => {
+  it('EraseDialog starts with Delete disabled and asks to type the address', () => {
     const html = renderToStaticMarkup(<EraseDialog subscriber={{ id: 's1', email: 'ann@example.test' }} onCancel={noop} onDone={noop} />);
     expect(html).toContain('role="dialog"');
-    expect(html).toContain('Erase ann@example.test?');
+    expect(html).toContain('Delete ann@example.test and all personal data?');
     expect(html).toContain('Type the address to confirm');
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Erase<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Delete<\/button>/);
     expect(html).toContain('>Cancel</button>');
   });
 });

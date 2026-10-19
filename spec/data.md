@@ -41,7 +41,33 @@ Phase 7, `pnpm db:verify` reports `4 applied (latest 0003_newsletter_prune_fix)`
 > `confirmation` (`regexp_replace(html|text, '(/newsletter/confirm\?t=)[^"&\s<]+', '\1[redacted]',
 > 'g')`); new rows are redacted by the app before insert. The salt is per site so rotating any
 > secret never breaks erasure matching; losing it (a restore from before `0004`) would — it is
-> inside every backup. Conventions:
+> inside every backup.
+> **Owner decision 2026-10-19 — `0005_newsletter_erase_delete`** (Drizzle-generated DDL + hand-written
+> SQL; `6 applied (latest 0005_newsletter_erase_delete)`): erasing personal data **deletes** the
+> subscriber; the 0004 tombstone is retired (its deterministic address collided on
+> `newsletter_subscriber_site_email_unique` when an erased address re-subscribed and was erased again
+> → 23505 → a 500). It adds `newsletter_erasure_marker (site_id, email_hash, created_at; pk (site_id,
+> email_hash))` — the keyed hash above, "never email this address", the only trace an address leaves;
+> `newsletter_erasure_log (id, site_id, email_hash → marker, source 'admin'|'migration', erased_by →
+> app_user null, details jsonb {subscribers, events, messages, suppressions}, provider_outcome
+> 'pending'|'deleted'|'not_found'|'kept'|'skipped'|'failed', provider_ref text null (the Listmonk
+> id, never the address), provider_checked_at, erased_at)` — PII-free proof that a request was
+> honoured; both insert-only by trigger (`newsletter_erasure_guard`; only the log's provider columns
+> may change) — and `newsletter_issue.erased_message_count int not null default 0`. The ledger guard
+> loses the 0004 redaction exceptions and gains one: a DELETE of an event / suppression row whose
+> `subscriber_id` is listed in `blog0.newsletter_erase_ids` (set LOCAL by the function). The function
+> becomes `newsletter_erase_subscriber(p_subscriber_id uuid, p_erased_by uuid default null, p_source
+> text default 'admin') RETURNS jsonb` (SECURITY DEFINER, pinned search_path): ensures the marker
+> (idempotent); collects every subscriber row of the person on the site (the id, the same normalized
+> address, a 0004 tombstone of the same hash); adds their `kind 'issue'` messages to the issues'
+> `erased_message_count`; deletes their messages (and any addressed to them), events, suppressions
+> (and any addressed to them) and the rows; writes one audit row; returns `{ erased: true, erasureId,
+> subscribers, events, messages, suppressions }` or `{ erased: false }` for an unknown id. A BEFORE
+> INSERT trigger on `newsletter_subscriber` (`newsletter_subscriber_erased_guard`) refuses a marked
+> address in any status but `pending`, so only a fresh double opt-in signup brings it back. Repair: every
+> existing tombstone row is run through the function with `source 'migration'` (marker kept, audit
+> row dated by its `erased` event, provider `skipped`). Works identically on PG 18 and PGlite.
+> Conventions:
 snake_case, singular table names, `id uuid primary key default gen_random_uuid()`, timestamps
 `timestamptz not null default now()`, every table has `site_id uuid not null references site(id)`
 (except `site` itself) and every query filters by it. Foreign keys `on delete cascade` from child
@@ -79,7 +105,7 @@ One row per tenant; v0.1 has one (`slug = BLOG0_SITE_SLUG`, default `blog0`).
 | newsletter_mode_set_at | timestamptz null | Phase 7: when `newsletter_mode` last changed — the digest window's start when no digest issue exists yet |
 | privacy_text | text not null | fix pass (`0004`): body of `/privacy`, seeded draft — **the owner must review it (draft, not legal advice)**; editable in Admin → Site |
 | newsletter_postal_address | text not null default `''` | fix pass (`0004`): printed in the issue footer and confirmation email when non-empty |
-| newsletter_erase_salt | text not null | fix pass (`0004`): random per-site salt for the erasure tombstone hash; never in a DTO |
+| newsletter_erase_salt | text not null | fix pass (`0004`): random per-site salt for the erasure hash (`0005`: the marker key); never in a DTO |
 | created_at, updated_at | timestamptz | |
 
 ### app_user
