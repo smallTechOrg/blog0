@@ -49,7 +49,10 @@
     "listmonk:reset": "bash scripts/listmonk-dev.sh reset",
     "listmonk:test-up": "bash scripts/listmonk-dev.sh test-up",
     "listmonk:test-down": "bash scripts/listmonk-dev.sh test-down",
-    "admin:reset-password": "tsx scripts/reset-password.ts"
+    "admin:reset-password": "tsx scripts/reset-password.ts",
+    "deploy:local": "bash deploy/local/verify.sh",
+    "deploy:smoke": "bash scripts/deploy-smoke.sh",
+    "pg:compat": "bash scripts/pg-compat.sh"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.16",

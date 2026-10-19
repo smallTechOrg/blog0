@@ -1167,6 +1167,179 @@ its UI (runbook).
 > `blog0_dev`/`blog0_test`) stays the gate database; the compose `blog0`/`blog0_test` databases
 > exist only for the `--profile app` path.
 
+### 12.7 GCP deployment (VM + Docker + Cloud SQL) — Stage B kit
+
+**Owner decisions (binding, 2026-10-19):** one GCP Compute Engine VM running Docker (not Cloud
+Run); Postgres on Cloud SQL, blog0 and Listmonk in **separate databases on one instance**;
+Listmonk kept (open/click tracking + POP bounces); Google Workspace SMTP `smtp.gmail.com:587`
+(STARTTLS) with an **app password**; own domain. Stage B prepares and tests the kit **locally only** —
+no provisioning, no `gcloud` writes, no DNS, no deploy. Runbook: `docs/deploy-gcp.md`. The root
+`docker-compose.yml` (§12.6) stays the dev/test stack, unchanged.
+
+**Files.**
+```
+deploy/
+├── docker-compose.prod.yml      # the VM stack (below); `name: blog0-prod`
+├── docker-compose.local.yml     # local-verification override; `name: blog0-local`
+├── Caddyfile                    # one file, env-parameterised (prod + local)
+├── compose.env.example          # compose interpolation vars (--env-file)
+├── blog0.env.example            # blog0 runtime env (every var documented)
+├── listmonk.env.example         # Listmonk config + first-run admin
+├── listmonk-settings.sh         # idempotent Listmonk settings via its admin API (prod via tunnel, local)
+├── scheduler/{crontab,media-backup.sh}
+└── local/{init-db.sh,blog0.env,listmonk.env,compose.env,verify.sh}   # committed dev-only values
+scripts/deploy-smoke.sh  scripts/pg-compat.sh
+```
+
+**Image (§12.1 additions).** `scripts/build-release.mjs` bundles a third entry
+`scripts/newsletter-tick.ts` → `dist/newsletter-tick.mjs` with the identical options (fixes the
+review finding "the tick needs a repo checkout"). `scripts/newsletter-tick.ts` drops its
+`scripts/lib/cli.ts` import and uses the `scripts/release.ts` runner pattern (`@next/env` load,
+`newsletter:tick failed: <message>` on stderr, same output line and exit codes 0/1/2 — the existing
+tick tests keep passing). The Shiki/content pipeline it reaches through issue snapshots is
+**bundled** (not external). Runtime stage copies it to `/app/newsletter-tick.mjs`. New stage
+`scheduler` (`FROM runtime`): `USER root`; `apt-get install -y --no-install-recommends rclone curl
+ca-certificates` (Debian bookworm package); supercronic downloaded per `TARGETARCH`
+(amd64/arm64) and verified with a pinned `sha256sum -c`; `COPY deploy/scheduler/crontab
+deploy/scheduler/media-backup.sh /app/scheduler/`; `USER node`; `HEALTHCHECK NONE`;
+`CMD ["supercronic","-passthrough-logs","/app/scheduler/crontab"]`. The Dockerfile ends with
+`FROM runtime AS app` so a plain `docker build .` (CI `image` job, `pnpm test:container`) still
+produces the unchanged runtime image (size check unaffected).
+> **Assumed:** supercronic `v0.2.33` (newest at build time if newer; ARG + per-arch sha256 pinned).
+> **Assumed:** rclone over `gcloud storage rsync` — the Debian `rclone` package (~20 MB, single
+> binary, ADC/metadata auth via `env_auth=true`) vs the `google/cloud-sdk` slim image (hundreds
+> of MB plus Python); bookworm's rclone 1.60 is sufficient for GCS sync.
+
+**Crontab** (UTC; supercronic): `7 * * * * node /app/newsletter-tick.mjs` and
+`30 3 * * * /app/scheduler/media-backup.sh`. `media-backup.sh`: `set -euo pipefail`;
+`rclone sync /data/storage "$MEDIA_BACKUP_DEST" --config /dev/null --checksum --fast-list`
+(storage mounted read-only); one JSON log line `{"event":"ops.media_backup","outcome":…,"durationMs":…}`;
+then pings `BLOG0_HEARTBEAT_BACKUP_URL` (success) or `<url>/fail` with `curl -fsS -m 5` (never
+changes the exit code; unset → no ping). `MEDIA_BACKUP_DEST` prod =
+`:gcs,env_auth=true,bucket_policy_only=true:<bucket>/media`; local = `/backup/media`.
+> **Assumed:** `sync` (mirror) + bucket **object versioning** with a lifecycle rule deleting
+> noncurrent versions after 30 days — a deleted/overwritten file stays recoverable for 30 days.
+> **Assumed:** in production the media heartbeat reuses `BLOG0_HEARTBEAT_BACKUP_URL` (DB backups
+> are Cloud SQL's; `pnpm backup` stays the local/self-host tool).
+
+**`deploy/docker-compose.prod.yml`** (Compose ≥ 2.24; build context `..`; all images pinned):
+
+| Service | Image / build | Key settings |
+|---|---|---|
+| `cloud-sql-proxy` | `gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.26.2-alpine` | env `CSQL_PROXY_INSTANCE_CONNECTION_NAME=${CLOUD_SQL_INSTANCE}`, `CSQL_PROXY_ADDRESS=0.0.0.0`, `CSQL_PROXY_PORT=5432`, `CSQL_PROXY_HEALTH_CHECK=true`, `CSQL_PROXY_HTTP_ADDRESS=0.0.0.0`; auth = the VM's attached service account (ADC via metadata). Optional key file: set `CSQL_PROXY_CREDENTIALS_FILE=/secrets/sa.json` and mount `./secrets/sa.json:ro`. Healthcheck `wget -qO- http://127.0.0.1:9090/readiness`. No host port. |
+| `release` | `blog0:${BLOG0_IMAGE_TAG}` (target `runtime`) | `command: [node, release.mjs]`, `env_file: blog0.env`, `restart: "no"`, depends on proxy healthy |
+| `blog0` | `blog0:${BLOG0_IMAGE_TAG}` (build `..`, target `runtime`) | `env_file: blog0.env`; depends on `release: service_completed_successfully`; volume `blog0-storage:/data/storage`; no host port; `restart: unless-stopped` |
+| `scheduler` | `blog0-scheduler:${BLOG0_IMAGE_TAG}` (target `scheduler`) | `env_file: blog0.env`, env `MEDIA_BACKUP_DEST`; `blog0-storage:/data/storage:ro`; depends on `release` completed |
+| `listmonk` | `listmonk/listmonk:v5.1.0` | §12.6 command (install idempotent → upgrade → serve); `env_file: listmonk.env`; `ports: ['127.0.0.1:9000:9000']` (admin via SSH tunnel only); `listmonk-uploads:/listmonk/uploads`; §12.6 healthcheck |
+| `caddy` | `caddy:2.10-alpine` | `ports: ['80:80','443:443']`; `./Caddyfile:/etc/caddy/Caddyfile:ro`; `caddy-data:/data`, `caddy-config:/config`; env `BLOG0_DOMAIN`, `NEWS_DOMAIN`, `ACME_EMAIL`, `CADDY_LOCAL_CERTS` |
+
+Cross-service dependencies on `cloud-sql-proxy` use `required: false` so the local override can
+disable it. Volumes: `blog0-storage`, `caddy-data`, `caddy-config`, `listmonk-uploads`. Every
+service `restart: unless-stopped` except `release`. `BLOG0_DATABASE_URL =
+postgres://blog0:<pw>@cloud-sql-proxy:5432/blog0` (no TLS on the hop — the proxy encrypts to Cloud
+SQL); Listmonk `LISTMONK_db__host=cloud-sql-proxy`, `ssl_mode=disable`, `max_open=10`, `max_idle=5`.
+`BLOG0_TRUSTED_PROXY_HOPS=1` (Caddy). `BLOG0_PUBLIC_BASE_URL=https://<domain>`.
+> **Assumed:** `release` runs on every `up` (blog0 and scheduler wait for it) — idempotent, and a
+> failed migration keeps the old containers from being replaced by a new image that needs it.
+> **Assumed:** proxy `2.18.2` and Caddy `2.10` — the builder pins the newest 2.x patch of each
+> after verifying the tag exists (same rule as Listmonk, §12.6).
+
+**`deploy/Caddyfile`.** Global `{ email {$ACME_EMAIL} {$CADDY_LOCAL_CERTS} }`.
+`{$BLOG0_DOMAIN} { reverse_proxy blog0:3410 }`. `{$NEWS_DOMAIN}`: named matcher `@public` =
+`path_regexp` any of (UUID = `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+`^/link/U/U/U$` (click redirect), `^/campaign/U/U/px\.png$` (open pixel), `^/subscription/U/U$`
+(Listmonk's unsubscribe page + `List-Unsubscribe` one-click POST, §13.3 poll reads them), and
+`path /public/static/*` (that page's assets) → `reverse_proxy listmonk:9000`; everything else →
+`header X-Blog0-Edge denied` + `respond 404`. Not exposed: `/admin*`, `/api/*` (incl.
+`/api/public/*`), `/subscription/form`, `/subscription/optin/*`, export/wipe, `/archive*`
+(archive disabled), `/uploads/*`, `/`.
+> **Assumed:** the v5.1.0 public route shapes above; B1 proves them end-to-end (verify.sh step 6
+> curls the real tracking URLs from a Mailpit-captured message through Caddy).
+
+**`deploy/docker-compose.local.yml`** (`docker compose -f deploy/docker-compose.prod.yml -f
+deploy/docker-compose.local.yml --env-file deploy/local/compose.env …`): `cloud-sql-proxy:
+{ profiles: [gcp] }`; new `postgres: postgres:<CLOUD_SQL_MAJOR>` with network alias
+`cloud-sql-proxy` (so no URL changes), `deploy/local/init-db.sh` (creates roles `blog0`,
+`listmonk` — non-superusers owning their databases, the Cloud SQL shape), `127.0.0.1:5434:5432`,
+volume `pgdata-local`; every DB-dependent service gains `depends_on: postgres: service_healthy`;
+new `mailpit: axllent/mailpit:v1.27` (`127.0.0.1:8025` UI/API); `caddy.ports: !override
+['8080:80','8443:443']`, `CADDY_LOCAL_CERTS=local_certs`; `listmonk.ports: !override
+['127.0.0.1:9100:9000']`; env files → `deploy/local/*.env`; `MEDIA_BACKUP_DEST=/backup/media` on
+volume `media-backup-local`. Domains `blog.localtest.me` / `news.localtest.me` (public DNS →
+127.0.0.1). blog0 locally keeps SMTP unset (stub transport — its SMTP never disables STARTTLS);
+Listmonk SMTP → `mailpit:1025`, never a real server.
+> **Assumed:** `localtest.me` resolution; `deploy-smoke.sh` also honours `BLOG0_SMOKE_RESOLVE=127.0.0.1`
+> (adds curl `--resolve`) for offline runs, which verify.sh sets.
+
+**`deploy/listmonk-settings.sh <listmonk-url>`** (admin basic auth from `LISTMONK_ADMIN_USER`/
+`LISTMONK_ADMIN_PASSWORD`, like `listmonk-dev.sh`): GET then PUT `/api/settings` merging only —
+`app.root_url = $LISTMONK_ROOT_URL` (prod `https://news.<domain>`, local
+`https://news.localtest.me:8443`; opens/clicks resolve), `privacy.unsubscribe_header=true`,
+`privacy.allow_export=false`, `privacy.allow_wipe=false`, `app.enable_public_archive=false`,
+`app.enable_public_subscription_page=false`, one SMTP entry from `LISTMONK_SMTP_{HOST,PORT,USER,PASSWORD,TLS}`
+(`max_conns 2`), sliding window 1 800 messages / 24 h, bounces (`bounce.enabled`, POP mailbox from
+`LISTMONK_BOUNCE_POP_{HOST,PORT,USER,PASSWORD}`, scan 15 m, hard bounce → blocklist) when
+`LISTMONK_BOUNCE_POP_HOST` is set. Prints `listmonk-settings: ok` (no secret echoed); exit 1 on
+any API error.
+> **Assumed:** root URL is a DB setting in v5 (not config) — hence the script; Gmail's
+> 2 000/day per-user limit → the 1 800/day window; the sending mailbox (e.g. `newsletter@<domain>`)
+> is dedicated and is also the POP bounce mailbox (Gmail sets Return-Path to the authenticated
+> account), `pop.gmail.com:995` TLS with the same app password.
+
+All Stage B shell scripts ignore a leading `--` (from `pnpm <script> -- …`).
+
+**`scripts/deploy-smoke.sh [--insecure] <base-url> <news-url>`** (`set -euo pipefail`; both URLs
+`https://`, else usage exit 2; without `--insecure` curl verifies TLS — that **is** the TLS check;
+each line `deploy-smoke: <check> ok`, first failure `deploy-smoke: FAIL <check> (<detail>)` exit 1;
+`deploy-smoke: PASS` exit 0):
+1. `GET <base>/api/health/ready` 200 with `"status":"ready"`.
+2. `GET <base>/` 200; `GET <base>/privacy` 200.
+3. First `/p/<slug>` `<loc>` from `<base>/sitemap.xml` (none → FAIL "no published article"); it → 200; `/p/<slug>/tldr` → 200.
+4. `GET <base>/newsletter/confirm?t=bogus` → 303, `Location` contains `status=invalid`; `GET <base>/newsletter/confirmed?status=invalid` → 404.
+5. `GET <base>/api/newsletter/unsubscribe?t=bogus` → 303 to `/newsletter/unsubscribe?t=bogus`.
+6. `GET <news>/link/<nil-uuid>/<nil-uuid>/<nil-uuid>` and `/campaign/<nil>/<nil>/px.png` → status < 500 and **no** `X-Blog0-Edge` header (Listmonk answered, not Caddy).
+7. `GET <news>/`, `/admin`, `/admin/login`, `/api/settings`, `/subscription/form` → 404 **with** `X-Blog0-Edge: denied`.
+
+**`deploy/local/verify.sh [--keep]`** (exit 3 + `PENDING DOCKER` when `docker info` fails; each step
+`deploy-local: <step>`; trap tears the stack down with `down -v` unless `--keep`): 1. `compose
+config -q` for prod alone (with `compose.env.example`) and prod+local; 2. `up -d --build --wait`;
+3. `docker compose run --rm release` again → `0 pending: OK` (idempotent); 4. seed with
+`BLOG0_DATABASE_URL=postgres://blog0:blog0@127.0.0.1:5434/blog0`: `pnpm db:seed:posts` then
+`pnpm seed:tldr -- --source fixture` (committed decks, 0 AI calls) and `docker compose exec blog0 node -e
+"require('fs').writeFileSync('/data/storage/verify-media.txt','ok')"` (a file for step 7); 5.
+`listmonk-settings.sh http://127.0.0.1:9100` with Mailpit SMTP; 6. via the Listmonk API create a
+list + subscriber + campaign whose body has one `{{ TrackLink "https://blog.localtest.me:8443/" }}`
+and `{{ TrackView }}`, start it, poll Mailpit's API for the message, extract the `news…/link/…` and
+`…/px.png` URLs, curl them through Caddy (`--insecure --resolve`): link → 3xx to the target,
+pixel → 200 `image/png`; 7. `docker compose exec scheduler node /app/newsletter-tick.mjs` → exit 0,
+`digest:` line; `exec scheduler /app/scheduler/media-backup.sh` → exit 0 and `/backup/media/verify-media.txt` = `ok`; `exec scheduler supercronic -test /app/scheduler/crontab` → exit 0;
+8. `BLOG0_SMOKE_RESOLVE=127.0.0.1 scripts/deploy-smoke.sh --insecure https://blog.localtest.me:8443
+https://news.localtest.me:8443` → PASS; 9. `docker compose exec blog0 id -u` = `1000`; print
+`deploy-local: PASS`.
+
+**`scripts/pg-compat.sh <major>`**: `docker run -d --rm --name blog0-pg-compat -e
+POSTGRES_PASSWORD=postgres -p 127.0.0.1:5435:5432 postgres:<major>`, wait `pg_isready`, then
+`BLOG0_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5435/blog0_test pnpm test:integration`
+(Listmonk from `pnpm listmonk:up` as usual), always `docker rm -f`; prints `pg-compat: PostgreSQL
+<major> PASS|FAIL`; exit 3 `PENDING DOCKER`.
+
+**Cloud SQL choices** (runbook detail in `docs/deploy-gcp.md`): Enterprise edition, **PostgreSQL 18**
+if Cloud SQL lists `POSTGRES_18` as GA, else 17 (`CLOUD_SQL_MAJOR` drives the local override and
+`pg-compat.sh`); tier `db-g1-small` (1.7 GB; f1-micro's ~25 connections cannot hold blog0's pool +
+Listmonk's 10 + tick); public IP with **no** authorized networks (proxy-only, IAM-gated); automated
+daily backups (7 retained) + PITR (7 days of logs). Migrations need no extensions
+(`gen_random_uuid()` is core) and run as the non-superuser owner `blog0` (owner of database and
+`public` schema — the PG 15+ rule). VM: **e2-medium** (4 GB), Debian 12, Docker Engine + compose
+plugin, `--scopes=cloud-platform` (the default scopes would make GCS read-only), attached SA with
+`roles/cloudsql.client` + `roles/storage.objectAdmin` on the media bucket only.
+> **Assumed:** Cloud SQL offers PostgreSQL 18 GA (B2 confirms from Google's "database versions"
+> page and records the verdict in its report; the orchestrator writes it here). **Assumed:**
+> e2-medium over e2-small — the image is **built on the VM** (no registry in this stage) and
+> `next build` alone peaks above 2 GB; steady state (~1 GB: blog0 ~300 MB, Listmonk, Caddy, proxy,
+> hourly tick ~150 MB) would fit e2-small, which the runbook names as the downsize once a registry
+> exists. **Assumed:** VM image tags = short git SHA (`BLOG0_IMAGE_TAG`); rollback = previous tag,
+> plus a PITR clone when the bad release ran a migration.
+
 ## 13. Newsletter (Phase 7)
 
 Product rules: `spec/capabilities/newsletter-list.md`, `spec/capabilities/newsletter-issues.md`;
@@ -1564,7 +1737,7 @@ under standalone output. Phase 5 adds the static security `headers()` (§6).
 
 | Concern | Choice | Rationale |
 |---|---|---|
-| Transactional email | `nodemailer` 7 over env-configured SMTP (`BLOG0_SMTP_*`) + an in-DB stub transport | Confirmation/test mail is a handful of messages; any SMTP relay works (Google Workspace relay or Brevo are the documented options — the runbook never picks one); no vendor SDK. The stub keeps designer mode and every test SMTP-free. |
+| Transactional email | `nodemailer` 7 over env-configured SMTP (`BLOG0_SMTP_*`) + an in-DB stub transport | Confirmation/test mail is a handful of messages; any SMTP relay works (Google Workspace relay or Brevo are the documented options in `docs/deploy.md`; the GCP deploy uses the owner's choice, `smtp.gmail.com:587` + app password, §12.7); no vendor SDK. The stub keeps designer mode and every test SMTP-free. |
 | Bulk sending | Listmonk (self-hosted, own DB in the shared Postgres instance) behind `NewsletterSender`; REST via `fetch` | User decision ("Listmonk sends"); deliverability, bounces, throttling and campaign stats belong to a mailer, not to blog0; the adapter keeps blog0 the record and makes the provider swappable; the stub adapter makes the full admin flow testable without it. |
 | Consent proof | blog0 tables with append-only ledgers enforced by a DB trigger | A list you can prove is the point of owning it; the trigger makes "never deleted" a property of the database, not of code review. |
 | Compose | `docker-compose.yml` with `postgres:18` + `listmonk/listmonk:v5.1.0` | One command for the adapter integration test and the reference production shape (one Postgres instance, separate databases). |
@@ -1588,6 +1761,8 @@ blog0/
 ├── docker-compose.yml                                         # Phase 7: postgres + listmonk (+ blog0 under --profile app) (§12.6)
 ├── .github/workflows/ci.yml                                   # Phase 5 CI (§12.4); Phase 7 adds the listmonk compose step to `integration`
 ├── docs/deploy.md                                             # Phase 5 runbook; Phase 7 adds Newsletter (SMTP options, Listmonk, cron for newsletter:tick)
+├── docs/deploy-gcp.md                                         # Stage B: GCP VM + Cloud SQL runbook (§12.7)
+├── deploy/                                                    # Stage B kit: prod + local compose, Caddyfile, env templates, scheduler, local verify (§12.7)
 ├── dist/                        # gitignored build output: release.mjs (pnpm build:release)
 ├── spec/                                    # this spec + design reference (never edited by generators); spikes/pglite.md = spike verdict
 ├── scripts/
@@ -1596,6 +1771,7 @@ blog0/
 │   ├── check-openrouter.ts  eval-jev.ts  seed-tldr.ts  spike-pglite.ts
 │   ├── release.ts  build-release.mjs  backup.ts  restore.ts  container-e2e.sh    # Phase 5 (§12)
 │   ├── newsletter-sync.ts  newsletter-tick.ts  listmonk-dev.sh  compose/init-db.sh   # Phase 7 (§12.6, §13.3)
+│   ├── deploy-smoke.sh  pg-compat.sh                                                 # Stage B (§12.7)
 │   ├── dev-design.mjs           # `dev:design`: runDesignerSetup() in-process, then the hot-reload dev server
 │   ├── make-image-fixtures.ts  make-audio-fixture.sh     # regenerate tests/fixtures/{images,audio}
 │   └── lib/{cli,allow-server-only}.ts  lib/empty-module.mjs  lib/container-env.mjs   # CLI helpers; server-only shim; esbuild alias target; container env file

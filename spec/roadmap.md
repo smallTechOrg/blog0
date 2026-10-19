@@ -107,6 +107,8 @@ divergences (`spec/architecture.md` → `## Design divergences (ask user)` → O
 decisions with their defaults in force — they are decisions, not features.
 **Owner-approved exception (2026-10-19):** **Launch polish (Stage A)** — after Phase 8, below — is
 the one scheduled build on top of the freeze; it does not reopen anything in the Frozen table.
+A second owner-approved exception, **Production deployment kit (Stage B)**, follows it (deploy
+tooling only — no product change).
 
 ### Planning rules (as used by the built phases)
 
@@ -163,6 +165,9 @@ the one scheduled build on top of the freeze; it does not reopen anything in the
 | `listmonk:up` | `bash scripts/listmonk-dev.sh up` (Phase 7: compose `postgres` + `listmonk`, ensures the API user + test list, writes `var/listmonk-dev.env`; exit 3 = `PENDING DOCKER`) |
 | `listmonk:down` | `bash scripts/listmonk-dev.sh down` |
 | `listmonk:reset` | `bash scripts/listmonk-dev.sh reset` (fresh `listmonk` database) |
+| `deploy:local` | `bash deploy/local/verify.sh` (Stage B: the GCP kit end-to-end on this machine; exit 3 = `PENDING DOCKER`) |
+| `deploy:smoke` | `bash scripts/deploy-smoke.sh` (Stage B: `pnpm deploy:smoke -- [--insecure] <base-url> <news-url>`) |
+| `pg:compat` | `bash scripts/pg-compat.sh` (Stage B: `pnpm pg:compat -- <major>`; integration suite on `postgres:<major>`) |
 
 `check:openrouter` prints only booleans/numbers, never the key. Phase 8 (decisions models are not
 in the `/models` catalog, and there is no fallback chain): `key present: true`, `key valid: true`
@@ -833,6 +838,87 @@ No labelled stubs are introduced.
 
 ---
 
+### Production deployment kit (Stage B) — owner-approved exception to the freeze
+
+**Owner (2026-10-19):** one GCP VM running Docker, Cloud SQL Postgres (blog0 + Listmonk in
+separate databases on one instance), Listmonk kept, Google Workspace `smtp.gmail.com:587` with an
+app password, own domain. Autonomous run; every open choice is an `Assumed:` in
+`spec/architecture.md` §12.7, which owns every rule of the kit. **Goal:** a deploy kit proven on
+this machine. **Out of scope this stage:** any GCP provisioning, `gcloud` write, DNS change, image
+push or deploy — the owner confirms the project and domain later and follows `docs/deploy-gcp.md`.
+No product change, no migration, no new `BLOG0_*` app variable.
+
+**Before fan-out (orchestrator, one commit `stage-b: contracts`):** `package.json` scripts
+`deploy:local`, `deploy:smoke`, `pg:compat` (table above); verify the pinned tags exist
+(`cloud-sql-proxy:2.26.2-alpine`, `caddy:2.10-alpine`, `axllent/mailpit:v1.27`, supercronic
+`v0.2.33`) and pin the newest patch where not.
+
+**Slices** — two concurrent code-generators; disjoint files; neither edits `package.json` or `spec/`.
+
+| Slice | Owns | Depends on |
+|---|---|---|
+| **B1 Kit + local verification** | `deploy/**` (all files of §12.7 → Files); `Dockerfile` (newsletter-tick copy, `scheduler` stage, final `FROM runtime AS app`); `.dockerignore` (only if a `deploy/scheduler` path is excluded); `scripts/build-release.mjs` (third entry); `scripts/newsletter-tick.ts` (takes over: runner without `scripts/lib/cli.ts`); `scripts/deploy-smoke.sh` | contract commit |
+| **B2 Runbook + Postgres major** | `docs/deploy-gcp.md` (new, code-owned); `README.md` (one "Deploy to GCP → docs/deploy-gcp.md" pointer); `docs/deploy.md` (one pointer line at the top); `scripts/pg-compat.sh`; `.github/workflows/ci.yml` **only** if the verdict is 17 (adds an `integration-pg17` job = `integration` with `postgres:17`) | contract commit; reads B1's file names from §12.7 (no runtime dependency) |
+
+B2's report states the Cloud SQL major verdict (source URL + date) and the `pg:compat` result; the
+orchestrator records it in `spec/architecture.md` §12.7.
+
+`docs/deploy-gcp.md` outline (B2): 1 prerequisites (project id, billing, APIs `compute`,
+`sqladmin`, `storage`; region `europe-west1`-style choice + why one region for VM/SQL/bucket);
+2 VM (e2-medium vs e2-small with the memory reasoning of §12.7, Debian 12, Docker Engine + compose
+plugin, `--scopes=cloud-platform`, attached SA), static external IP, firewall 80/443 from anywhere,
+22 only from IAP `35.235.240.0/20`; 3 Cloud SQL (version per verdict, `db-g1-small`, Enterprise,
+public IP + no authorized networks, backups + PITR, databases `blog0` + `listmonk`, users `blog0` +
+`listmonk`, the `ALTER DATABASE … OWNER` / `ALTER SCHEMA public OWNER` statements); 4 service
+account (`roles/cloudsql.client`; `roles/storage.objectAdmin` on the bucket); 5 GCS bucket
+(uniform access, versioning, lifecycle: delete noncurrent after 30 days); 6 DNS (A `<domain>`,
+A `news.<domain>` → static IP; SPF `v=spf1 include:_spf.google.com ~all`; DKIM `google._domainkey`
+from Workspace Admin; DMARC `v=DMARC1; p=none; rua=mailto:…`); 7 Workspace (2-Step Verification on
+the sending mailbox, app password, POP enabled for the bounce mailbox, `BLOG0_SMTP_FROM` = that
+mailbox or a verified alias, 2 000/day limit); 8 checkout + env files from the three templates;
+9 first release (`docker compose -f deploy/docker-compose.prod.yml --env-file deploy/compose.env up -d
+--build --wait`), first admin, `listmonk-settings.sh` through the tunnel
+(`gcloud compute ssh <vm> --tunnel-through-iap -- -L 9000:localhost:9000`), Listmonk API user + a list named
+`blog0` created in the Listmonk UI (its id → `BLOG0_LISTMONK_LIST_ID`; the image carries no
+`newsletter:sync` CLI — Admin → Newsletter's sync action covers it), publish one article with a TLDR; 10 smoke
+(`scripts/deploy-smoke.sh https://<domain> https://news.<domain>`, no `--insecure`); 11 backups
+(Cloud SQL automated + PITR; media → GCS daily; heartbeats) and the **restore drill** (PITR clone
+to a new instance, point a scratch stack at it, `rclone copy` the bucket back to a scratch
+volume, smoke it); 12 upgrades (`git pull`, `BLOG0_IMAGE_TAG=$(git rev-parse --short HEAD)`, `up -d
+--build --wait` — release runs first); 13 rollback (previous tag; when the bad release migrated,
+PITR to before it); 14 Listmonk admin access only via the tunnel; 15 costs (VM + SQL + bucket,
+monthly estimate).
+
+**Gate (exact)** — `.env` as in the planning rules; Docker (Colima) running:
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck && pnpm lint && pnpm test:unit
+BLOG0_REQUIRE_REAL_KEY=1 pnpm test:integration                 # incl. the existing newsletter-tick tests
+pnpm build:release && ls dist/release.mjs dist/reset-password.mjs dist/newsletter-tick.mjs
+node dist/newsletter-tick.mjs                                   # against .env's blog0_dev: "digest: …" line, exit 0
+pnpm test:container                                             # unchanged runtime image: "container-e2e: PASS"
+docker build --target scheduler -t blog0-scheduler:gate . && docker run --rm blog0-scheduler:gate supercronic -test /app/scheduler/crontab
+pnpm deploy:local                                               # "deploy-local: PASS" (includes deploy-smoke PASS + Mailpit tracking proof)
+pnpm pg:compat -- 18                                            # "pg-compat: PostgreSQL 18 PASS" (17 if that is B2's verdict)
+bash -n scripts/deploy-smoke.sh scripts/pg-compat.sh deploy/local/verify.sh deploy/listmonk-settings.sh deploy/scheduler/media-backup.sh
+grep -c 'deploy-gcp.md' README.md                               # ≥ 1
+```
+Any exit 3 / `PENDING DOCKER` makes the gate "pending docker", not passed.
+
+**How the user tests it (locally):**
+1. `pnpm deploy:local -- --keep` → `deploy-local: PASS`.
+2. Open `https://blog.localtest.me:8443/` (accept the local certificate): the site with the five
+   seeded articles. `https://news.localtest.me:8443/admin` → plain 404.
+3. `http://127.0.0.1:9100/admin` → Listmonk login (the stand-in for the SSH tunnel); Mailpit at
+   `http://127.0.0.1:8025` shows the verification campaign; its link redirects through
+   `news.localtest.me`.
+4. Read `docs/deploy-gcp.md` end to end; when the GCP project and domain are confirmed, follow it.
+   Then `docker compose -f deploy/docker-compose.prod.yml -f deploy/docker-compose.local.yml
+   --env-file deploy/local/compose.env down -v`.
+No labelled stubs are introduced.
+
+---
+
 ## Frozen — not scheduled
 
 Nothing below is planned, specified for building, or assigned to a phase. Each item is recorded
@@ -848,11 +934,11 @@ so the gap is known; reopening any of them is a new user decision.
 | Revision history | deferred | Browse, view and restore revisions (`spec/capabilities/revision-history.md`; revisions are recorded on every save; History tab stays a labelled stub). |
 | Whisper alignment | Phase 6 | Exact Listen timing from a local Whisper aligner, then sentence-level highlight; the sync storage and aligner-facing `PUT /api/admin/articles/:id/listen` are kept for it (`spec/capabilities/listen-sync.md`). |
 | Jev coverage guard | Phase 8 option | "One line per third": swap an over-represented third's lowest pick for an empty third's best line (`spec/agent.md` §6; `eval:jev` prints per-third counts). |
-| Newsletter SMTP relay | deploy choice | Google Workspace relay (`smtp-relay.gmail.com:587`) vs Brevo (`smtp-relay.brevo.com:587`) — the user chooses at deploy time (`docs/deploy.md`); until `BLOG0_SMTP_HOST` is set, transactional mail uses the stub transport (nothing delivered; `spec/architecture.md` §10). |
 | Unsubscribe link-bucket exemption | Phase 7 known gap | Unsubscribe requests skip the site-wide `newsletter.link.site` cap and keep only the per-IP cap (`spec/architecture.md` §6). |
 | Abort at Jev run deadline (R1) | Phase 8 known gap | Abort in-flight decisions requests and their transport retries when the 110 s run deadline passes (`spec/agent.md` §3). |
 
 Not frozen, already settled: provider suppressions reach blog0 by **both** the hourly
 `newsletter:tick` poll and the secret-gated webhook (`spec/architecture.md` §13.3) — no open
-webhook-vs-poll decision. Open user decisions (not features) stay in `spec/architecture.md` →
+webhook-vs-poll decision. The SMTP relay is settled for the GCP deploy: Google Workspace
+`smtp.gmail.com:587` with an app password (owner, 2026-10-19; `spec/architecture.md` §12.7). Open user decisions (not features) stay in `spec/architecture.md` →
 `## Design divergences (ask user)` → Open, each with its default in force.
