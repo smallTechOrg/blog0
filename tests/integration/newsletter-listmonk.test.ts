@@ -5,17 +5,19 @@ import { BLOG0_TEMPLATE_BODY, BLOG0_TEMPLATE_NAME, ListmonkSender, SenderError, 
 import { CONSENT_PLACEHOLDER, UNSUBSCRIBE_PLACEHOLDER } from '@/server/newsletter/sender/types';
 
 import { captureLogs } from '../helpers/logs';
-import { dockerReachable, listmonkRaw, PENDING_DOCKER_REASON, readListmonkDevEnv, type ListmonkDevEnv } from '../helpers/listmonk';
+import { assertListmonkSmtpIsSink, LISTMONK_TEST_STACK_DOWN_REASON, listmonkRaw, mailpit, probeListmonkTestStack, type ListmonkTestEnv } from '../helpers/listmonk';
 
-// The Listmonk adapter against a REAL Listmonk v5.1.0 container (docker-compose.yml, spec/architecture.md
+// The Listmonk adapter against a REAL Listmonk v5.1.0 container — the TEST stack only
+// (docker-compose.yml profile `test`: listmonk-test on :9001, SMTP → Mailpit; spec/architecture.md
 // §12.6 + §13.3; newsletter-issues.md success criteria). Adapter-only: no blog0 tables are touched.
-// Skip rule (spec/roadmap.md Phase 7): no Docker daemon ⇒ the whole file SKIPS with a visible
-// `PENDING DOCKER` reason — never a pass; Docker up but var/listmonk-dev.env missing ⇒ FAIL
-// ("run pnpm listmonk:up"). Nothing is delivered: compose leaves Listmonk's SMTP unconfigured.
+// Skip rule: the test stack is not up (var/listmonk-test.env missing or its token does not answer)
+// ⇒ the whole file SKIPS with a visible reason naming `pnpm listmonk:test-up` — never a pass.
+// Sink guard: before anything else, the instance's /api/settings must show ONLY the Mailpit sink as
+// enabled SMTP — otherwise the suite FAILS loudly (campaigns started here are real sends).
 
-const docker = dockerReachable();
-// Visible in every reporter: the skipped file is "pending docker", never a pass.
-if (!docker) console.warn(`newsletter-listmonk.test.ts skipped — ${PENDING_DOCKER_REASON}`);
+const stack = await probeListmonkTestStack();
+// Visible in every reporter: the skipped file names the command that starts the stack.
+if (stack === null) console.warn(`newsletter-listmonk.test.ts skipped — ${LISTMONK_TEST_STACK_DOWN_REASON}`);
 const run = Date.now().toString(36);
 const emailOf = (tag: string) => `s72-${run}-${tag}@example.test`;
 
@@ -39,19 +41,16 @@ function subscriber(tag: string, overrides: Partial<SenderSubscriber> = {}): Sen
   };
 }
 
-describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker ? '' : ` — ${PENDING_DOCKER_REASON}`}`, () => {
-  let env: ListmonkDevEnv;
+describe.skipIf(stack === null)(`Listmonk adapter against the test stack (listmonk-test → Mailpit)${stack ? '' : ` — ${LISTMONK_TEST_STACK_DOWN_REASON}`}`, () => {
+  let env: ListmonkTestEnv;
   let sender: ListmonkSender;
   let raw: ReturnType<typeof listmonkRaw>;
   const createdEmails = new Set<string>();
   const createdCampaigns = new Set<string>();
 
   beforeAll(async () => {
-    const read = readListmonkDevEnv();
-    if (read === null) {
-      throw new Error('Docker is running but var/listmonk-dev.env is missing or incomplete — run pnpm listmonk:up');
-    }
-    env = read;
+    env = stack!;
+    await assertListmonkSmtpIsSink(env); // throws ⇒ every test fails; nothing below runs
     sender = new ListmonkSender({ url: env.url, apiUser: env.apiUser, apiToken: new Secret(env.apiToken), listId: env.listId });
     raw = listmonkRaw(env);
   });
@@ -241,6 +240,11 @@ describe.skipIf(!docker)(`Listmonk adapter against the compose container${docker
       status = (await raw.campaign(campaignId)).status;
     }
     expect(['running', 'finished']).toContain(status);
+
+    // Delivered — into Mailpit, the only SMTP the test stack has.
+    const delivered = await mailpit(env).waitForMessagesTo(d.email);
+    expect(delivered.map((m) => m.Subject)).toContain(issue.subject);
+    await mailpit(env).deleteMessages(delivered.map((m) => m.ID));
 
     await expect(sender.sendIssue(campaignId)).resolves.toBeUndefined(); // no-op: Listmonk would answer 400 otherwise
 

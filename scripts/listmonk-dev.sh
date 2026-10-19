@@ -9,6 +9,17 @@
 #   reset  drop + recreate the `listmonk` database (fresh state), then `up`.
 #   token  print var/listmonk-dev.env.
 #
+#   test-up    the TEST stack (compose profile `test`): mailpit (SMTP 127.0.0.1:1025, UI/API :8025) +
+#              listmonk-test on :9001 with its own database `listmonk_test` (created here when the
+#              Postgres volume predates it). Points listmonk-test's SMTP at mailpit:1025 (no auth/TLS,
+#              every other SMTP entry dropped), then the same list + API user steps, writing
+#              var/listmonk-test.env (+ BLOG0_MAILPIT_URL). Idempotent. The integration tests use ONLY this.
+#   test-down  stop listmonk-test + mailpit (volumes kept; the dev stack is never touched).
+#   test-token print var/listmonk-test.env.
+#
+# The dev stack (`up`) may carry the owner's REAL relay (configured in its admin UI); this script
+# never changes the dev instance's SMTP. Tests refuse any Listmonk whose enabled SMTP is not the sink.
+#
 # Listmonk v5 procedure (automated here; the admin password is used only for this):
 #   1. GET  /admin/login            → nonce cookie + hidden `nonce` field
 #   2. POST /admin/login            form {username,password,nonce,next} → session cookie (302)
@@ -26,6 +37,15 @@ cd "$(dirname "$0")/.."
 ENV_FILE=var/listmonk-dev.env
 PORT="${BLOG0_LISTMONK_PORT:-9000}"
 URL="http://localhost:${PORT}"
+MAILPIT_URL=""
+
+# The test stack: listmonk-test on :9001 → mailpit. Switches every global the steps below read.
+use_test_stack() {
+  ENV_FILE=var/listmonk-test.env
+  PORT=9001
+  URL="http://localhost:${PORT}"
+  MAILPIT_URL=http://127.0.0.1:8025
+}
 ADMIN_USER="${LISTMONK_ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${LISTMONK_ADMIN_PASSWORD:-listmonk-admin-dev-password}"
 API_USER=blog0
@@ -135,6 +155,7 @@ BLOG0_LISTMONK_API_USER=${API_USER}
 BLOG0_LISTMONK_API_TOKEN=$1
 BLOG0_LISTMONK_LIST_ID=$2
 EOF
+  if [[ -n "$MAILPIT_URL" ]]; then echo "BLOG0_MAILPIT_URL=${MAILPIT_URL}" >>"$ENV_FILE"; fi
   chmod 600 "$ENV_FILE"
 }
 
@@ -224,17 +245,104 @@ cmd_reset() {
 }
 
 cmd_token() {
-  [[ -f "$ENV_FILE" ]] || fail "${ENV_FILE} missing — run pnpm listmonk:up"
+  [[ -f "$ENV_FILE" ]] || fail "${ENV_FILE} missing — run pnpm listmonk:up (dev) or pnpm listmonk:test-up (test)"
   cat "$ENV_FILE"
 }
 
+# --- TEST stack ----------------------------------------------------------------------------------
+# listmonk-test's SMTP → mailpit:1025 + its root URL (settings live in Listmonk's database, not its
+# env; the install default root URL is :9000): GET the settings, keep the first SMTP entry's shape,
+# replace the list with one sink entry, PUT only when something differs. Listmonk reloads itself after a settings PUT; we wait for it to answer again.
+configure_sink_smtp() {
+  local tmp body
+  tmp="$(mktemp -t listmonk-settings.XXXXXX)"
+  admin_api GET /api/settings >"$tmp"
+  body="$(node -e '
+    const fs = require("fs");
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).data;
+    const s = Array.isArray(d.smtp) ? d.smtp : [];
+    const ok = s.length === 1 && s[0].enabled === true && s[0].host === "mailpit" && Number(s[0].port) === 1025 &&
+      s[0].auth_protocol === "none" && s[0].tls_type === "none" && d["app.root_url"] === process.argv[2];
+    if (ok) process.exit(0);
+    const base = s[0] || {};
+    d.smtp = [{ ...base, enabled: true, host: "mailpit", port: 1025, auth_protocol: "none", username: "", password: "",
+      tls_type: "none", tls_skip_verify: true, hello_hostname: "", email_headers: [], max_conns: base.max_conns || 10,
+      max_msg_retries: base.max_msg_retries ?? 2, idle_timeout: base.idle_timeout || "15s", wait_timeout: base.wait_timeout || "5s" }];
+    d["app.from_email"] = "blog0 test <listmonk-test@example.test>";
+    d["app.root_url"] = process.argv[2];
+    process.stdout.write(JSON.stringify(d));
+  ' "$tmp" "$URL")" || fail "could not build the sink SMTP settings"
+  rm -f "$tmp"
+  if [[ -z "$body" ]]; then
+    say "SMTP already → mailpit:1025 (no auth, no TLS); root URL ${URL}"
+    return 0
+  fi
+  admin_api PUT /api/settings "$body" >/dev/null
+  say "SMTP set → mailpit:1025 (no auth, no TLS), root URL ${URL}; waiting for Listmonk to reload"
+  sleep 3
+  wait_for_login_page
+}
+
+ensure_test_database() {
+  local exists
+  exists="$(compose exec -T postgres psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'listmonk_test'")" || fail "query pg_database"
+  if [[ "$exists" != "1" ]]; then
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c 'CREATE DATABASE listmonk_test OWNER listmonk' >/dev/null || fail "create database listmonk_test"
+    say "created database listmonk_test"
+  fi
+}
+
+cmd_test_up() {
+  use_test_stack
+  require_docker
+  local t0=$SECONDS
+  say "TEST stack: postgres + mailpit + listmonk-test (Listmonk on ${URL}, Mailpit on ${MAILPIT_URL}, SMTP sink 127.0.0.1:1025)"
+  compose up -d --wait postgres || fail "compose up postgres"
+  ensure_test_database
+  compose --profile test up -d --wait mailpit listmonk-test || {
+    compose --profile test logs --tail 30 listmonk-test 2>&1 | sed "s/${ADMIN_PASSWORD}/[redacted]/g" || true
+    fail "compose up the test stack (see the logs above)"
+  }
+  wait_for_login_page
+  say "containers healthy in $((SECONDS - t0)) s"
+  admin_login
+  configure_sink_smtp
+  admin_login # a settings reload may drop the session
+  local list_id
+  list_id="$(ensure_list)"
+  ensure_api_user "$list_id"
+  # Final proof with the API user itself: the only enabled SMTP is the sink (what the tests' guard checks).
+  local user token settings smtp
+  user="$(sed -n 's/^BLOG0_LISTMONK_API_USER=//p' "$ENV_FILE")"
+  token="$(sed -n 's/^BLOG0_LISTMONK_API_TOKEN=//p' "$ENV_FILE")"
+  settings="$(mktemp -t listmonk-settings.XXXXXX)"
+  curl -fsS -m 10 -H "Authorization: token ${user}:${token}" -o "$settings" "${URL}/api/settings" || fail "API user cannot read /api/settings"
+  smtp="$(json_field "$settings" 'd.data.smtp.filter(s=>s.enabled).map(s=>s.host+":"+s.port).join(",")')"
+  rm -f "$settings"
+  [[ "$smtp" == "mailpit:1025" ]] || fail "listmonk-test enabled SMTP is '${smtp}', expected exactly mailpit:1025"
+  curl -fsS -m 5 -o /dev/null "${MAILPIT_URL}/api/v1/messages" || fail "Mailpit API not reachable on ${MAILPIT_URL}"
+  say "TEST stack ready in $((SECONDS - t0)) s — ${ENV_FILE}; SMTP → mailpit:1025 only; stop: pnpm listmonk:test-down"
+}
+
+cmd_test_down() {
+  require_docker
+  compose --profile test stop listmonk-test mailpit
+  say "test stack stopped (volumes kept; the dev stack is untouched)"
+}
+
 case "${1:-}" in
+  test-up) cmd_test_up ;;
+  test-down) cmd_test_down ;;
+  test-token)
+    use_test_stack
+    cmd_token
+    ;;
   up) cmd_up ;;
   down) cmd_down "${2:-}" ;;
   reset) cmd_reset ;;
   token) cmd_token ;;
   *)
-    echo "usage: scripts/listmonk-dev.sh up|down [-v]|reset|token" >&2
+    echo "usage: scripts/listmonk-dev.sh up|down [-v]|reset|token|test-up|test-down|test-token" >&2
     exit 2
     ;;
 esac

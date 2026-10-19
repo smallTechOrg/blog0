@@ -46,7 +46,9 @@
     "newsletter:tick": "tsx scripts/newsletter-tick.ts",
     "listmonk:up": "bash scripts/listmonk-dev.sh up",
     "listmonk:down": "bash scripts/listmonk-dev.sh down",
-    "listmonk:reset": "bash scripts/listmonk-dev.sh reset"
+    "listmonk:reset": "bash scripts/listmonk-dev.sh reset",
+    "listmonk:test-up": "bash scripts/listmonk-dev.sh test-up",
+    "listmonk:test-down": "bash scripts/listmonk-dev.sh test-down"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.16",

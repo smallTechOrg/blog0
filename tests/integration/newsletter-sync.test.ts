@@ -4,8 +4,10 @@
 // no blog0 row), `pnpm newsletter:sync` itself, the live hooks after confirm / unsubscribe, a real
 // campaign sent from an issue, stats, and `pnpm newsletter:tick` pulling a provider blocklist into a
 // blog0 suppression.
-// Skip rule (spec/roadmap.md Phase 7): no Docker daemon ⇒ the file SKIPS with a visible
-// `PENDING DOCKER` reason — never a pass; Docker up but var/listmonk-dev.env missing ⇒ FAIL.
+// Runs ONLY against the TEST stack (docker-compose.yml profile `test`: listmonk-test on :9001,
+// SMTP → Mailpit). Stack not up ⇒ the file SKIPS visibly naming `pnpm listmonk:test-up` — never a
+// pass. Sink guard: unless every enabled SMTP server of the instance is the Mailpit sink the suite
+// FAILS loudly before any campaign is created (campaigns sent here are real sends).
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -32,12 +34,12 @@ import { confirmByToken, subscribe, unsubscribeByToken } from '@/server/newslett
 import { actAs, call, createArticle, data, publish } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { getTestDatabaseUrl } from '../helpers/env';
-import { dockerReachable, listmonkRaw, PENDING_DOCKER_REASON, readListmonkDevEnv, type ListmonkDevEnv } from '../helpers/listmonk';
+import { assertListmonkSmtpIsSink, LISTMONK_TEST_STACK_DOWN_REASON, listmonkRaw, mailpit, probeListmonkTestStack, type ListmonkTestEnv } from '../helpers/listmonk';
 import { captureLogs } from '../helpers/logs';
 import { loginAs } from '../helpers/session';
 
-const docker = dockerReachable();
-if (!docker) console.warn(`newsletter-sync.test.ts skipped — ${PENDING_DOCKER_REASON}`);
+const stack = await probeListmonkTestStack();
+if (stack === null) console.warn(`newsletter-sync.test.ts skipped — ${LISTMONK_TEST_STACK_DOWN_REASON}`);
 
 const run = Date.now().toString(36);
 const emailOf = (tag: string) => `s73-${run}-${tag}@example.test`;
@@ -45,8 +47,8 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const LISTMONK_VARS = ['BLOG0_NEWSLETTER_SENDER', 'BLOG0_LISTMONK_URL', 'BLOG0_LISTMONK_API_USER', 'BLOG0_LISTMONK_API_TOKEN', 'BLOG0_LISTMONK_LIST_ID'] as const;
 const BODY = 'Listmonk carries the issue. blog0 keeps the list, the consent and the send log.\n\nA second paragraph for the reader.';
 
-describe.skipIf(!docker)(`blog0 → Listmonk sync and sends against the compose container${docker ? '' : ` — ${PENDING_DOCKER_REASON}`}`, () => {
-  let env: ListmonkDevEnv;
+describe.skipIf(stack === null)(`blog0 → Listmonk sync and sends against the test stack (listmonk-test → Mailpit)${stack ? '' : ` — ${LISTMONK_TEST_STACK_DOWN_REASON}`}`, () => {
+  let env: ListmonkTestEnv;
   let raw: ReturnType<typeof listmonkRaw>;
   let currentSite: SiteRow;
   const saved = new Map<string, string | undefined>();
@@ -86,9 +88,8 @@ describe.skipIf(!docker)(`blog0 → Listmonk sync and sends against the compose 
   }
 
   beforeAll(async () => {
-    const read = readListmonkDevEnv();
-    if (read === null) throw new Error('Docker is running but var/listmonk-dev.env is missing or incomplete — run pnpm listmonk:up');
-    env = read;
+    env = stack!;
+    await assertListmonkSmtpIsSink(env); // throws ⇒ every test fails; nothing below runs
     raw = listmonkRaw(env);
     for (const k of LISTMONK_VARS) saved.set(k, process.env[k]);
     process.env.BLOG0_NEWSLETTER_SENDER = 'listmonk';
@@ -233,6 +234,11 @@ describe.skipIf(!docker)(`blog0 → Listmonk sync and sends against the compose 
     expect(campaign.body).toContain('{{ .Subscriber.Attribs.blog0_unsubscribe_url }}');
     expect(campaign.altbody).toContain('{{ .Subscriber.Attribs.blog0_consent_line }}');
     expect(campaign.tags).toEqual(expect.arrayContaining(['blog0', `issue:${issue.id}`]));
+
+    // Delivered — into Mailpit, the only SMTP the test stack has.
+    const delivered = await mailpit(env).waitForMessagesTo(emailOf('send1'));
+    expect(delivered.map((m) => m.Subject)).toContain(`S73 issue ${run}`);
+    await mailpit(env).deleteMessages(delivered.map((m) => m.ID));
 
     const withStats = data((await call<IssueDetailResponse>(statsRoute, 'POST', `/api/admin/newsletter/issues/${issue.id}/stats`, { id: issue.id, body: {} })).env).issue;
     expect(typeof withStats.stats?.recipients).toBe('number');

@@ -345,6 +345,13 @@ Gate run, without touching a dev/prod server's `.next` build:
 BLOG0_DIST_DIR=.next-gate pnpm build && BLOG0_DIST_DIR=.next-gate pnpm test:e2e
 ```
 
+**No test sends real mail.** The integration setup, both Playwright web servers and the
+`pnpm test:container` env file force the recording stub mail transport (`BLOG0_SMTP_HOST` empty) and
+the stub sender, whatever `.env` configures (guarded by `tests/integration/e2e-mail-stubs.test.ts`
+and `tests/integration/container-env.test.ts`); the Listmonk tests use the Mailpit-only test stack
+(see [Newsletter](#newsletter)). Dev stack (`pnpm listmonk:up`, :9000) = real relay allowed; test
+stack (`pnpm listmonk:test-up`, :9001) = Mailpit only.
+
 E2E server logs go to `test-results/e2e-server.log`; the HTML report to `playwright-report/`
 (`pnpm exec playwright show-report`).
 
@@ -436,8 +443,9 @@ pnpm listmonk:down                               # keeps the volumes; `pnpm list
 
 `pnpm listmonk:up` exits 0 when ready, **3** with `PENDING DOCKER` when no Docker daemon answers
 (never a pass), 1 otherwise. It is idempotent: it creates the API user `blog0` (token shown once,
-written only to `var/listmonk-dev.env`, mode 0600) and the list `blog0-test`. The compose Listmonk
-has no SMTP, so campaigns "finish" without delivering anything. To run the app against it, put
+written only to `var/listmonk-dev.env`, mode 0600) and the list `blog0-test`. The **dev** Listmonk
+may be given a **real relay** in its admin UI (Settings → SMTP) — campaigns started on it are real
+sends, which is why no test ever uses it. To run the app against it, put
 `BLOG0_NEWSLETTER_SENDER=listmonk` and the four values from `var/listmonk-dev.env` in `.env`.
 
 | Command | What it does |
@@ -445,16 +453,21 @@ has no SMTP, so campaigns "finish" without delivering anything. To run the app a
 | `pnpm listmonk:up` | compose `postgres` + `listmonk` (v5.1.0), wait for health, ensure API user + list, write `var/listmonk-dev.env`; exit 3 = `PENDING DOCKER` |
 | `pnpm listmonk:down [-- -v]` | stop them (`-v` also removes the volumes and the env file) |
 | `pnpm listmonk:reset` | drop and re-create the `listmonk` database, then `up` (fresh state) |
+| `pnpm listmonk:test-up` | the **test** stack (compose profile `test`): `mailpit` (SMTP `127.0.0.1:1025`, UI/API <http://127.0.0.1:8025>) + `listmonk-test` on <http://localhost:9001> (own database `listmonk_test`), SMTP set to `mailpit:1025` only; writes `var/listmonk-test.env`; idempotent |
+| `pnpm listmonk:test-down` | stop `listmonk-test` + `mailpit` (volumes kept; the dev stack is untouched) |
 | `pnpm newsletter:sync` | push every confirmed subscriber to the sender, blocklist the unsubscribed/bounced; prints `synced N, blocklisted N, skipped N, N changed`; idempotent; exit 1 on any error |
 | `pnpm newsletter:sync -- --create-list` | create (or find) the Listmonk list `blog0` and print its id for `BLOG0_LISTMONK_LIST_ID` |
 | `pnpm newsletter:tick` | the hourly housekeeping (run it from cron): create the digest draft when due (send only with auto-send on) → pull provider suppressions → refresh stats of recent issues → prune IPs older than 12 months; prints `digest: …; suppressions pulled N; stats refreshed N; ips pruned N` |
 
-**Tests and Docker.** `tests/integration/newsletter-listmonk.test.ts` and
-`tests/integration/newsletter-sync.test.ts` run against the compose Listmonk: run
-`pnpm listmonk:up` first. Without a Docker daemon they **skip** with the visible reason
-`PENDING DOCKER: start it with colima start, then pnpm listmonk:up` (pending, not a pass); with
-Docker up but no `var/listmonk-dev.env` they **fail** ("run pnpm listmonk:up"). CI runs
-`pnpm listmonk:up` before the integration suite.
+**Tests and Docker — test stack only, Mailpit only.** `tests/integration/newsletter-listmonk.test.ts`
+and `tests/integration/newsletter-sync.test.ts` start real campaigns, so they run **only** against the
+test stack: `pnpm listmonk:test-up` first (they read `var/listmonk-test.env`, never
+`var/listmonk-dev.env`). Before anything else they read the instance's `/api/settings` and **fail**
+(`REFUSING to run Listmonk tests …`) unless every enabled SMTP server is the Mailpit sink
+(`mailpit` / loopback, port 1025); delivered issues are asserted through Mailpit's API. When the
+test stack is not up they **skip** with the visible reason `LISTMONK TEST STACK DOWN: start it with
+pnpm listmonk:test-up` (pending, not a pass). CI runs `pnpm listmonk:test-up` before the integration
+suite.
 
 ## Database
 

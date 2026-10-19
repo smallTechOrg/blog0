@@ -19,7 +19,8 @@ process.env.BLOG0_STORAGE_DIR = 'var/storage-test';
 // (resetRateLimitStoreForTests(new DbRateLimitStore()) — tests/integration/rate-limit-db.test.ts).
 process.env.BLOG0_RATE_LIMIT_STORE = 'memory';
 // Phase 7: the stub sender + the recording stub mail transport — tests never need SMTP or Listmonk.
-// (The Listmonk adapter test sets BLOG0_NEWSLETTER_SENDER=listmonk itself from var/listmonk-dev.env.)
+// (The Listmonk tests set BLOG0_NEWSLETTER_SENDER=listmonk themselves from var/listmonk-test.env — the
+// test stack, whose only SMTP is Mailpit; they refuse any instance with a real relay.)
 process.env.BLOG0_NEWSLETTER_SENDER = 'stub';
 process.env.BLOG0_SMTP_HOST = '';
 // Keep test output readable: info lines still reach captureLogs() sinks, just not stdout.

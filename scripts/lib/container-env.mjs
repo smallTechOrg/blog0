@@ -6,7 +6,10 @@
 //       (mode 0600, one unquoted KEY=value per line) with every BLOG0_* value except the ones the
 //       script or the image sets itself, plus a fresh random BLOG0_SESSION_SECRET and — when no
 //       real OpenRouter key is configured — the boot-accepted placeholder `pending-placeholder`
-//       (the real-key E2E step then skips as PENDING KEY). Prints the container's database URL
+//       (the real-key E2E step then skips as PENDING KEY). Newsletter delivery is ALWAYS the stubs:
+//       BLOG0_SMTP_HOST is written empty and BLOG0_NEWSLETTER_SENDER=stub, and no BLOG0_SMTP_* /
+//       BLOG0_LISTMONK_* value is copied — the suite's newsletter walk must never reach a real relay
+//       or Listmonk configured in .env. CONTAINER_ENV_FILE overrides the output path (tests). Prints the container's database URL
 //       (BLOG0_TEST_DATABASE_URL with a loopback host replaced by host.docker.internal) on stdout,
 //       and `key: real` / `key: placeholder` on stderr.
 //   node scripts/lib/container-env.mjs reset-db
@@ -22,7 +25,7 @@ import path from 'node:path';
 import nextEnv from '@next/env';
 
 const ROOT = process.cwd();
-const ENV_FILE = path.join(ROOT, 'var', 'container-e2e.env');
+const ENV_FILE = (process.env.CONTAINER_ENV_FILE ?? '').trim() || path.join(ROOT, 'var', 'container-e2e.env');
 
 /** Set by the script / the image / the test harness — never copied into the container env file. */
 const EXCLUDED = new Set([
@@ -36,8 +39,10 @@ const EXCLUDED = new Set([
   'BLOG0_STANDALONE',
   'BLOG0_NEW_ADMIN_PASSWORD',
   'BLOG0_REQUIRE_REAL_KEY',
+  'BLOG0_NEWSLETTER_SENDER', // forced to `stub` below
 ]);
-const EXCLUDED_PREFIXES = ['BLOG0_E2E_', 'BLOG0_ADMIN_'];
+// SMTP + Listmonk: never copied — the container runs the E2E newsletter walk on the stubs only.
+const EXCLUDED_PREFIXES = ['BLOG0_E2E_', 'BLOG0_ADMIN_', 'BLOG0_SMTP_', 'BLOG0_LISTMONK_'];
 
 /** Mirrors src/server/llm/key.ts openRouterKeyStatus: empty or a placeholder ⇒ no real key. */
 const PLACEHOLDER_RE = /^(replace|pending|placeholder|changeme|change-me|your|xxx|todo|<)|placeholder|replace-with/i;
@@ -93,6 +98,9 @@ function writeEnvFile() {
     }
     values.set(name, value.trim());
   }
+  // The recording stub mail transport + the stub sender, explicitly (an empty host = no SMTP).
+  values.set('BLOG0_SMTP_HOST', '');
+  values.set('BLOG0_NEWSLETTER_SENDER', 'stub');
   // Generated in-process for this run only (every container session is throwaway).
   values.set('BLOG0_SESSION_SECRET', randomBytes(48).toString('base64'));
   const realKey = !isPlaceholderKey(values.get('BLOG0_OPENROUTER_API_KEY'));

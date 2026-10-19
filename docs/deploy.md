@@ -385,6 +385,13 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
    same domain as `BLOG0_SMTP_FROM`. Use Listmonk's **Test connection**, then send a campaign to
    yourself.
 
+   > **Dev vs test Listmonk.** Locally, the compose **dev** Listmonk (`pnpm listmonk:up`, :9000) may
+   > carry this real relay — anything sent from it is delivered. The automated tests never touch it:
+   > they run on the **test** stack (`pnpm listmonk:test-up`: `listmonk-test` on :9001, database
+   > `listmonk_test`, SMTP → **Mailpit** `mailpit:1025` only, inbox at <http://127.0.0.1:8025>) and
+   > refuse to start against any Listmonk whose enabled SMTP is not that sink. Never point
+   > `var/listmonk-test.env` or CI at a Listmonk with a real relay.
+
 8. **Point blog0 at it** — add to the web container's env and restart it:
 
    ```bash
