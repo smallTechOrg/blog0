@@ -95,6 +95,8 @@ export interface Config {
   rateLimitStore: RateLimitStoreSetting;
   /** BLOG0_SHUTDOWN_TIMEOUT_MS: drain deadline after SIGTERM/SIGINT (§12.2). */
   shutdownTimeoutMs: number;
+  /** BLOG0_DB_POOL_MAX: the app's postgres.js pool size (GCP deploy: 4 — Cloud SQL is shared, §12.7). */
+  dbPoolMax: number;
   /** Phase 7 (spec/architecture.md §10, §13): transactional mail transport, sender adapter, webhook. */
   newsletter: NewsletterConfig;
   /** Stage A (§10, §12.3): dead-man's-switch URLs pinged by `pnpm backup` / `pnpm newsletter:tick`. Secret — the URL is the credential. */
@@ -182,6 +184,7 @@ export const CONFIG_DEFAULTS = {
   trustedProxyHops: 0,
   rateLimitStore: 'auto' as RateLimitStoreSetting,
   shutdownTimeoutMs: 8000,
+  dbPoolMax: 10,
   smtpPort: 587,
   newsletterSender: 'stub' as NewsletterSenderSetting,
 } as const;
@@ -412,6 +415,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
   if (rateLimitStore === null) problems.push(`BLOG0_RATE_LIMIT_STORE must be one of ${RATE_LIMIT_STORES.join('|')}`);
 
   const shutdownTimeoutMs = int(problems, env, 'BLOG0_SHUTDOWN_TIMEOUT_MS', CONFIG_DEFAULTS.shutdownTimeoutMs, 1000, 120_000);
+  const dbPoolMax = int(problems, env, 'BLOG0_DB_POOL_MAX', CONFIG_DEFAULTS.dbPoolMax, 1, 50);
 
   const newsletter = loadNewsletter(problems, env);
 
@@ -456,6 +460,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     trustedProxyHops,
     rateLimitStore: rateLimitStore as RateLimitStoreSetting,
     shutdownTimeoutMs,
+    dbPoolMax,
     newsletter,
     heartbeats,
     isProduction,

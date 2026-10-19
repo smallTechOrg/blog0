@@ -470,3 +470,21 @@ describe('loadConfig — newsletter (Phase 7, spec/architecture.md §10)', () =>
     }
   });
 });
+
+describe('BLOG0_DB_POOL_MAX (GCP deploy: Cloud SQL is shared, so the app pool is kept tiny)', () => {
+  it('defaults to 10 connections', () => {
+    expect(loadConfig(baseEnv()).dbPoolMax).toBe(10);
+  });
+
+  it('accepts an integer between 1 and 50', () => {
+    expect(loadConfig(baseEnv({ BLOG0_DB_POOL_MAX: '4' })).dbPoolMax).toBe(4);
+    expect(loadConfig(baseEnv({ BLOG0_DB_POOL_MAX: '1' })).dbPoolMax).toBe(1);
+    expect(loadConfig(baseEnv({ BLOG0_DB_POOL_MAX: '50' })).dbPoolMax).toBe(50);
+  });
+
+  it('rejects 0, > 50 and non-integers with one problem naming the variable', () => {
+    for (const bad of ['0', '51', 'four', '2.5']) {
+      expect(problemsOf(baseEnv({ BLOG0_DB_POOL_MAX: bad }))).toEqual(['BLOG0_DB_POOL_MAX must be an integer between 1 and 50']);
+    }
+  });
+});

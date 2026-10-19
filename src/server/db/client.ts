@@ -60,7 +60,7 @@ function state(): DbState {
   if (existing) void existing.handle.close().catch(() => {});
   let next: DbState;
   if (target.engine === 'postgres') {
-    next = { key, handle: openPostgres(target.url), ready: Promise.resolve() };
+    next = { key, handle: openPostgres(target.url, { max: getConfig().dbPoolMax }), ready: Promise.resolve() };
   } else {
     const handle = openPgliteSync(target.dir);
     next = { key, handle, ready: handle.ready };

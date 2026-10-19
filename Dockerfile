@@ -4,6 +4,7 @@
 #   docker run … blog0:local node release.mjs    → the release step (migrate + verify + site/admin)
 #   docker exec -it <c> node reset-password.mjs --email <e>  → reset an admin's password (Stage A)
 #   docker run … blog0:local node newsletter-tick.mjs   → the hourly newsletter tick (Stage B)
+#   docker run … blog0:local node seed-content.mjs      → first-deploy content seed (GCP deploy; no-op once the site has articles)
 # Build: docker build -t blog0:local .   (no BLOG0_* runtime value exists at build time)
 # The default target is `app` (= runtime, the last stage). The Stage B `scheduler` stage (runtime +
 # supercronic + rclone, spec/architecture.md §12.7) is built only on request:
@@ -20,7 +21,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm fetch --frozen-lockfile
 
-# ---- 2. build: install offline, Next standalone build + the CLI bundles (release, reset-password, newsletter-tick)
+# ---- 2. build: install offline, Next standalone build + the CLI bundles (release, reset-password, newsletter-tick, seed-content)
 FROM deps AS build
 COPY . .
 RUN pnpm install --offline --frozen-lockfile
@@ -43,9 +44,13 @@ COPY --from=build /app/public/ ./public/
 # Read through process.cwd() paths at runtime (db/migrate.ts, jev/prompt.ts) — not traced by Next.
 COPY --from=build /app/src/server/db/migrations/ ./src/server/db/migrations/
 COPY --from=build /app/src/server/jev/prompts/ ./src/server/jev/prompts/
+# GCP deploy (§12.7): the first-deploy content seed reads the 5 posts + their committed deck fixtures.
+COPY --from=build /app/src/server/seed/posts/*.md ./src/server/seed/posts/
+COPY --from=build /app/src/server/seed/decks/*.json ./src/server/seed/decks/
 COPY --from=build /app/dist/release.mjs ./release.mjs
 COPY --from=build /app/dist/reset-password.mjs ./reset-password.mjs
 COPY --from=build /app/dist/newsletter-tick.mjs ./newsletter-tick.mjs
+COPY --from=build /app/dist/seed-content.mjs ./seed-content.mjs
 # Only the uploads volume and Next's cache are writable by the runtime user (uid 1000).
 RUN mkdir -p /data/storage /app/.next/cache && chown node:node /data/storage /app/.next/cache
 VOLUME /data/storage
