@@ -385,9 +385,12 @@ the hourly `pnpm newsletter:tick` cron): the runbook's **Newsletter** section.
 1. A reader enters an email in the footer form → a `pending` subscriber row with the consent text,
    time, IP (only behind a trusted proxy), user agent and source page → a confirmation email
    (transactional, sent by blog0 itself over SMTP — `BLOG0_SMTP_*`).
-2. The reader opens the link within 72 h and presses **Confirm my subscription** → `confirmed`
-   (double opt-in). Opening the confirm or unsubscribe link alone never changes anything (mail
-   scanners prefetch links): only the button's POST does, and that POST is rate-limited. Every step
+2. The reader opens the link within 72 h → `confirmed` (double opt-in; confirm-on-open by owner
+   decision 2026-10-19, like Mailchimp/Substack — a mail scanner that prefetches the link can
+   confirm too, and the audit records the IP/UA of the fetch that did). Opening it again shows
+   "You’re already confirmed." The unsubscribe link alone never changes anything: its page asks
+   **Yes, unsubscribe me** and only that POST (or the RFC 8058 one-click POST) does. Both link
+   paths are rate-limited. Every step
    is an append-only event; unsubscribes and bounces are append-only suppression entries. The
    stored confirmation message carries `…/confirm?t=[redacted]`, never the live token.
 3. Confirmed subscribers are mirrored to one Listmonk list (`BLOG0_NEWSLETTER_SENDER=listmonk`);

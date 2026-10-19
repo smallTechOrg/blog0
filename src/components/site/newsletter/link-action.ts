@@ -1,9 +1,8 @@
-// The newsletter link pages' button logic (pure, isomorphic; spec/ui.md §3 "Newsletter link pages",
-// fix pass): POST the token to the JSON route, map the response to an outcome, outcome → copy.
+// The unsubscribe link page's button logic (pure, isomorphic; spec/ui.md §3 "Newsletter link pages"):
+// POST the token to the JSON route, map the response to an outcome, outcome → copy. The confirm link
+// has no button any more — it confirms on open (owner decision 2026-10-19).
 
 import { LINK_COPY } from './LinkPage';
-
-export type LinkKind = 'confirm' | 'unsubscribe';
 
 export type LinkOutcome =
   | { kind: 'done' }
@@ -12,21 +11,17 @@ export type LinkOutcome =
   | { kind: 'rate_limited'; minutes: number }
   | { kind: 'failed' };
 
-export const LINK_ACTIONS = {
-  confirm: { api: '/api/newsletter/confirm', button: 'Confirm my subscription' },
-  unsubscribe: { api: '/api/newsletter/unsubscribe', button: 'Yes, unsubscribe me' },
-} as const;
+export const UNSUBSCRIBE_ACTION = { api: '/api/newsletter/unsubscribe', button: 'Yes, unsubscribe me' } as const;
 
 export const LINK_FAILED_TEXT = 'Something went wrong — try again.';
 
-export async function postLinkAction(kind: LinkKind, token: string, fetchImpl: typeof fetch = fetch): Promise<LinkOutcome> {
-  const body = kind === 'confirm' ? { token } : { token, source: 'email_link' };
+export async function postUnsubscribe(token: string, fetchImpl: typeof fetch = fetch): Promise<LinkOutcome> {
   let res: Response;
   try {
-    res = await fetchImpl(LINK_ACTIONS[kind].api, {
+    res = await fetchImpl(UNSUBSCRIBE_ACTION.api, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ token, source: 'email_link' }),
       credentials: 'same-origin',
       cache: 'no-store',
     });
@@ -43,12 +38,10 @@ export async function postLinkAction(kind: LinkKind, token: string, fetchImpl: t
   return { kind: 'failed' };
 }
 
-export function outcomeCopy(kind: LinkKind, outcome: LinkOutcome, brandName: string): { heading: string; body: string } {
+export function outcomeCopy(outcome: LinkOutcome): { heading: string; body: string } {
   switch (outcome.kind) {
     case 'done':
-      return kind === 'confirm'
-        ? { heading: LINK_COPY.confirmed.heading, body: LINK_COPY.confirmed.body(brandName) }
-        : { heading: LINK_COPY.unsubscribed.heading, body: LINK_COPY.unsubscribed.body() };
+      return { heading: LINK_COPY.unsubscribed.heading, body: LINK_COPY.unsubscribed.body() };
     case 'expired':
       return { heading: LINK_COPY.expired.heading, body: LINK_COPY.expired.body() };
     case 'invalid':

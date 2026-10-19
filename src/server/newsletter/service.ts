@@ -243,15 +243,6 @@ function tokenExpired(): ApiError {
 }
 
 /**
- * Page-side shape check of an emailed confirm link (fix pass, scanner-safe): true when `token` is a
- * well-formed confirm token. Pure — reads nothing, consumes nothing, counts toward no limit; the
- * state change is the POST (`confirmByToken`).
- */
-export function peekConfirmToken(token: unknown): token is string {
-  return isWellFormedConfirmToken(token);
-}
-
-/**
  * Page-side check of an unsubscribe link (fix pass, scanner-safe): true when `token` is well formed AND its
  * signature verifies against the unsubscribe / session secrets. Pure — no lookup, no write, no limit
  * counted; the state change is the POST (`unsubscribeByToken`).
@@ -260,8 +251,32 @@ export function peekUnsubscribeToken(token: unknown): token is string {
   return isWellFormedUnsubscribeToken(token) && verifyUnsubscribeToken(token, unsubscribeVerifySecrets()) !== null;
 }
 
-/** The emailed confirm link. 404 TOKEN_INVALID for an unknown token, 410 TOKEN_EXPIRED past 72 h or after use. */
-export async function confirmByToken(token: string, ctx: RequestContext, site?: SiteRow): Promise<ConfirmResult> {
+export interface ConfirmOptions {
+  /**
+   * How the confirmation arrived; recorded as `details.via` on the event. `link_open` = the emailed
+   * link's GET (confirm-on-open, owner decision 2026-10-19); absent = the JSON POST.
+   */
+  via?: 'link_open';
+  /**
+   * A token already spent whose subscriber is still `confirmed` answers `{ alreadyConfirmed: true }`
+   * (nothing written) instead of 410 TOKEN_EXPIRED. The GET link uses it; the POST keeps its 410.
+   */
+  usedAsAlready?: boolean;
+}
+
+/** The subscriber that spent `hash` when that subscriber is currently `confirmed`, else null. */
+async function confirmedByUsedToken(db: Executor, siteId: string, hash: string): Promise<NewsletterSubscriberRow | null> {
+  const id = await repo.subscriberIdByUsedToken(db, siteId, hash);
+  if (!id) return null;
+  const row = await repo.findById(db, siteId, id);
+  return row && row.status === 'confirmed' ? row : null;
+}
+
+/**
+ * The emailed confirm link. 404 TOKEN_INVALID for an unknown token, 410 TOKEN_EXPIRED past 72 h or
+ * after use (unless `opts.usedAsAlready` and the subscriber is confirmed → `alreadyConfirmed: true`).
+ */
+export async function confirmByToken(token: string, ctx: RequestContext, site?: SiteRow, opts: ConfirmOptions = {}): Promise<ConfirmResult> {
   if (!isWellFormedConfirmToken(token)) throw tokenInvalid();
   const current = site ?? (await getCurrentSite());
   const now = ctx.now ?? new Date();
@@ -269,7 +284,11 @@ export async function confirmByToken(token: string, ctx: RequestContext, site?: 
   const db = getDb();
   const found = await repo.findByTokenHash(db, current.id, hash);
   if (!found) {
-    if (await repo.wasTokenUsed(db, current.id, hash)) throw tokenExpired();
+    if (await repo.wasTokenUsed(db, current.id, hash)) {
+      const already = opts.usedAsAlready ? await confirmedByUsedToken(db, current.id, hash) : null;
+      if (already) return { alreadyConfirmed: true, subscriber: already };
+      throw tokenExpired();
+    }
     throw tokenInvalid();
   }
   if (!found.confirmTokenExpiresAt || found.confirmTokenExpiresAt.getTime() < now.getTime()) throw tokenExpired();
@@ -298,12 +317,17 @@ export async function confirmByToken(token: string, ctx: RequestContext, site?: 
       actorUserId: null,
       ip,
       userAgent: ua,
-      details: { tokenHash: hash, consentVersion: row.consentVersion, previousStatus: row.status },
+      details: { tokenHash: hash, consentVersion: row.consentVersion, previousStatus: row.status, ...(opts.via ? { via: opts.via } : {}) },
       createdAt: now,
     });
     return updated;
   });
-  if (!confirmed) throw tokenExpired(); // raced: the token was spent between the lookup and the lock
+  if (!confirmed) {
+    // Raced: the token was spent between the lookup and the lock (e.g. a scanner and the reader).
+    const already = opts.usedAsAlready ? await confirmedByUsedToken(db, current.id, hash) : null;
+    if (already) return { alreadyConfirmed: true, subscriber: already };
+    throw tokenExpired();
+  }
 
   await runHook(() => afterConfirm(confirmed), 'confirm', confirmed.id);
   return { alreadyConfirmed: false, subscriber: confirmed };

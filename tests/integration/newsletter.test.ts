@@ -170,6 +170,11 @@ describe('POST /api/newsletter — double opt-in signup (happy path)', () => {
 
     await expect(confirmByToken(token, { ip: 'direct', userAgent: null })).rejects.toMatchObject({ code: 'TOKEN_EXPIRED', status: 410 });
     expect((await eventsOf('c@example.com')).map((e) => e.kind)).toEqual(kinds);
+    // the link GET (usedAsAlready) treats the spent token of a still-confirmed subscriber as success, writing nothing
+    const again = await confirmByToken(token, { ip: 'direct', userAgent: null }, undefined, { via: 'link_open', usedAsAlready: true });
+    expect(again).toMatchObject({ alreadyConfirmed: true, subscriber: { id: row.id, status: 'confirmed' } });
+    expect((await eventsOf('c@example.com')).map((e) => e.kind)).toEqual(kinds);
+    expect((await eventsOf('c@example.com')).at(-1)!.details).not.toHaveProperty('via'); // the POST path records no via
   });
 
   it('a signup for a confirmed address answers the same success, writes no event and sends nothing', async () => {

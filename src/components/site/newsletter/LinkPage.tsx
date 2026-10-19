@@ -1,7 +1,8 @@
 import Link from 'next/link';
 
 /* The newsletter link pages' one card (spec/ui.md §3 "Newsletter link pages"): eyebrow tag, a plain
-   h1 and one paragraph, then Back to blog0. No typing animation; PrintIn still runs. */
+   h1 and one paragraph, then Back to blog0. No typing animation; PrintIn still runs. Used by the
+   confirm result page (/newsletter/confirmed) and the 404s; role=status so the outcome is announced. */
 
 export interface LinkPageProps {
   heading: string;
@@ -15,7 +16,7 @@ export function LinkPage({ heading, body, brand }: LinkPageProps) {
       <section className="nl-page" aria-labelledby="nl-page-h">
         <span className="tag">Newsletter</span>
         <h1 id="nl-page-h">{heading}</h1>
-        <p>{body}</p>
+        <p role="status">{body}</p>
         <Link className="btn-outline" href="/">
           Back to {brand}
         </Link>
@@ -26,8 +27,12 @@ export function LinkPage({ heading, body, brand }: LinkPageProps) {
 
 export const LINK_COPY = {
   confirmed: {
-    heading: 'You’re subscribed.',
+    heading: (brand: string) => `You’re confirmed — welcome to ${brand}.`,
     body: (brand: string) => `Thanks — ${brand} issues will land in this inbox. Unsubscribe any time from the link at the bottom of each one.`,
+  },
+  alreadyConfirmed: {
+    heading: 'You’re already confirmed.',
+    body: (brand: string) => `${brand} issues will keep landing in this inbox. Unsubscribe any time from the link at the bottom of each one.`,
   },
   expired: {
     heading: 'This link has expired or was already used.',

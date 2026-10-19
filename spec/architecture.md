@@ -344,9 +344,11 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `getNewsletterLinkThrottle()`: the confirm and unsubscribe routes (pages and JSON, one shared
   pair of buckets) count 30 per known client IP per hour (`newsletter.link.ip`, skipped for
   `direct`/`unknown` exactly like signup) and 1 000 per site per hour (`newsletter.link.site`).
-  > **Assumed (fix pass):** only the **POST** routes are throttled and count; the GET pages
-  (scanner-safe, no state change) never count and render the rate-limited copy only after a POSTed
-  button press is refused (`spec/api.md`).
+  > **Assumed (fix pass):** only the **POST** routes are throttled and count; the unsubscribe GET
+  page (scanner-safe, no state change) never counts and renders the rate-limited copy only after a
+  POSTed button press is refused (`spec/api.md`). **Owner decision (2026-10-19):** the confirm link
+  GET confirms on open, so it is throttled and counts exactly like the confirm POST (same buckets);
+  limited → 303 to `/newsletter/confirmed?status=limited&m=<minutes>`.
   The token is parsed and shape-checked first (a malformed token → 404 without counting); a
   well-formed token counts whether or not it turns out valid. The pages render the rate-limited
   copy in site chrome at HTTP 200 (a page cannot emit 429); the JSON routes answer `RATE_LIMITED`
@@ -1111,9 +1113,13 @@ tables `spec/data.md`; HTTP `spec/api.md` → newsletter; screens `spec/ui.md` �
   since confirmation clears the hash) → one transaction: status `confirmed`, `confirmed_*`, clear
   token, append `confirmed` or `resubscribed` (when a suppression exists for the row) → after
   commit `afterConfirm(subscriber)` (`sender-hook.ts`, below; failure logged, never surfaced to
-  the reader) → `{ alreadyConfirmed: false }`. > **Assumed (fix pass):** the pages never call
-  `confirmByToken`/`unsubscribeByToken` on GET — a client component (`LinkActionButton`) POSTs to
-  the JSON routes (§6, `spec/api.md`). `unsubscribeByToken(token, source)`: verify → row
+  the reader) → `{ alreadyConfirmed: false }`. `confirmByToken(token, ctx, site?, { via?, usedAsAlready? })`:
+  `via: 'link_open'` lands in the event's `details.via`; `usedAsAlready` turns a spent token whose
+  subscriber is still `confirmed` into `{ alreadyConfirmed: true }` (nothing written) instead of
+  410. > **Owner decision (2026-10-19):** the confirm link GET (route handler
+  `src/app/(site)/newsletter/confirm/route.ts`) calls `confirmByToken` with both options and 303s to
+  `/newsletter/confirmed`; the unsubscribe page still never calls `unsubscribeByToken` on GET — its
+  client component (`LinkActionButton`) POSTs to the JSON route (§6, `spec/api.md`). `unsubscribeByToken(token, source)`: verify → row
   by id → already `unsubscribed`/`bounced` → `{ alreadyUnsubscribed: true }` (no rows written) →
   else `suppress(row, { reason: 'unsubscribed', source })`. `suppress(row, { reason, source,
   details, actor })` = one transaction that first **re-reads the subscriber row under

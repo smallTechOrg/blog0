@@ -140,9 +140,16 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 > session secret) rather than a stored one, so Listmonk-sent issues can carry a blog0 link through a
 > subscriber attribute without a round trip; it never expires because an unsubscribe must always
 > work.
-> **Assumed:** confirmation on GET (one click from the email) is accepted even though some mail
-> scanners prefetch links — the same choice most list tools make; the confirm page sends
-> `Cache-Control: no-store` and `X-Robots-Tag: noindex`.
+> **Owner decision (2026-10-19) — confirm on open (supersedes fix-pass item 1 below for the
+> confirm link only):** opening the confirmation link confirms immediately, like Mailchimp/Substack.
+> `GET /newsletter/confirm` is a route handler (same path, so sent links keep working) that runs the
+> confirm POST's checks and `confirmByToken` (IP, user agent, consent metadata, event
+> `details.via = 'link_open'`), counted against the same link cap, then 303s to
+> `/newsletter/confirmed?status=ok|already|expired|invalid|limited`. A spent token whose subscriber
+> is still confirmed is `already` ("You’re already confirmed." — success, never an error).
+> Trade-off: a link scanner that prefetches the link can confirm; the audit records the IP/UA of the
+> confirming fetch. **Unsubscribe is unchanged:** its GET page asks **Yes, unsubscribe me** and only
+> that POST or the RFC 8058 one-click POST changes state.
 > **Assumed:** footer success copy changes from "You’re in. First issue lands Thursday." to
 > "Almost there — check your inbox and confirm." (design divergence 15 amended), because the old
 > line would be false under double opt-in.
@@ -195,7 +202,8 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 > **Assumed (fix):** a `GET /api/newsletter/unsubscribe` without `t` 303s to the bare page path; every
 > non-JSON POST (urlencoded or multipart, token from `?t=`) is recorded as `one_click`.
 > **Assumed (fix pass, post-freeze — supersedes any earlier line that says otherwise):**
-> 1. **Scanner-safe links.** `GET /newsletter/confirm` and `GET /newsletter/unsubscribe` never change
+> 1. **Scanner-safe links** (*confirm half superseded by the owner decision of 2026-10-19 above —
+>    the confirm link now confirms on open; this item still holds for unsubscribe*). `GET /newsletter/confirm` and `GET /newsletter/unsubscribe` never change
 >    state, never consume a token and never count toward the link caps: they only shape-check the
 >    token (malformed → 404; an unsubscribe token with a bad signature → 404) and render a button —
 >    "Confirm my subscription" / "Yes, unsubscribe me" — that POSTs the token to the existing
@@ -239,7 +247,7 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 
 ## Success Criteria
 - [ ] Integration: `POST /api/newsletter { email: ' A@B.com ', sourceUrl: '/p/humans-are-software' }` → `{ subscribed: true }`; the row is `pending`, `email = 'a@b.com'`, `signup_source_url` set, `consent_text`/`consent_version` equal the site settings, `confirm_token_hash` is 64 hex chars and is not the token; one `signup` + one `confirmation_sent` event; one `newsletter_message` row (stub) whose HTML contains `/newsletter/confirm?t=`.
-- [ ] Integration: opening that link → 200 page containing "You’re subscribed"; the row is `confirmed` with `confirmed_at` set and the token hash null; a `confirmed` event; **no** `provider_synced` event and `provider_synced_at` null (stub sender skips sync); opening it again → the page (HTTP 200) shows "This link has expired or was already used", and `POST /api/newsletter/confirm` with the same token → 410 `TOKEN_EXPIRED`.
+- [ ] Integration: opening that link → 303 to `/newsletter/confirmed?status=ok` ("You’re confirmed — welcome to <brand>."); the row is `confirmed` with `confirmed_at`, `confirmed_ip`, `confirmed_user_agent` set and the token hash null; a `confirmed` event with that IP/UA and `details.via = 'link_open'`; **no** `provider_synced` event and `provider_synced_at` null (stub sender skips sync); opening it again → `?status=already` ("You’re already confirmed.", nothing written), and `POST /api/newsletter/confirm` with the same token → 410 `TOKEN_EXPIRED`. Expired → `?status=expired`; malformed/unknown → `?status=invalid` (a true 404); over the cap → `?status=limited&m=N`. *(Owner decision 2026-10-19.)*
 - [ ] Integration: with injected `now` 73 h later the unused link → the expired copy on the page (200) and 410 `TOKEN_EXPIRED` from the JSON route; a new signup for the same address issues a different hash and a second `confirmation_sent` event; a 4th signup within 24 h sends nothing (3 `confirmation_sent` events, 4 `signup` events).
 - [ ] Integration: a signup for a `confirmed` address → same `{ subscribed: true }`, no new event, no message.
 - [ ] Integration: opening the unsubscribe link of a confirmed subscriber → page "You’re unsubscribed"; status `unsubscribed`; one `newsletter_suppression` row (`reason: 'unsubscribed'`, `source: 'email_link'`); one `unsubscribed` event and **no** `provider_removed` event (stub sender); `POST /api/newsletter/unsubscribe` with the same token (`List-Unsubscribe=One-Click` body, no `Origin`) → 200; a tampered token → 404 and no row changes.
@@ -252,7 +260,7 @@ click. The sending provider (Listmonk) only ever receives a copy and never becom
 - [ ] Integration: `pnpm newsletter:tick` with injected `now` 13 months after a confirmation nulls `signup_ip`/`confirmed_ip`, appends `ip_pruned`, and leaves user agent, source URL and consent intact; a second run changes nothing.
 - [ ] Integration (prune bar, migration `0003_newsletter_prune_fix`): a subscriber confirmed 14 months ago who re-signed up 2 months ago (`consented_at` = now − 2 months, new `signup_ip`) → the tick prunes nothing; a subscriber confirmed 14 months ago with an `unsubscribed` event (with IP) from 3 months ago → row IPs nulled, the 14-month-old events' `ip` nulled, the 3-month-old event keeps its `ip`. `select pg_get_function_identity_arguments('newsletter_prune_event_ips'::regproc)` is `p_subscriber_id uuid, p_before timestamp with time zone`, and `proconfig` contains a `search_path=` entry; the one-argument version no longer exists.
 - [ ] Integration: 31 confirm-link requests with a **well-formed** token (valid or not) from one known IP within an hour → the 31st: JSON route 429 with `Retry-After`, page shows the rate-limited copy at 200; requests with a **malformed** token (wrong shape) → 404 and are not counted.
-- [ ] Integration (fix pass, scanner-safe, tests first): a plain `GET /newsletter/confirm?t=<valid>` leaves the row `pending`, the token hash unchanged and no event/rate-limit count (render contains "Confirm my subscription"); a `POST /api/newsletter/confirm` with that token then confirms it. A plain `GET /newsletter/unsubscribe?t=<valid>` leaves the status `confirmed`, no suppression row, no count (contains "Yes, unsubscribe me"); the POST `{ token, source: 'email_link' }` → `unsubscribed`, one suppression with `source: 'email_link'`. The existing 31st-request cap test counts POSTs only; GETs never count. Existing criteria above that "open" a link follow the button.
+- [ ] Integration (fix pass, scanner-safe, tests first — unsubscribe; the confirm half is superseded by confirm-on-open, 2026-10-19): a plain `GET /newsletter/unsubscribe?t=<valid>` leaves the status `confirmed`, no suppression row, no count (contains "Yes, unsubscribe me"); the POST `{ token, source: 'email_link' }` → `unsubscribed`, one suppression with `source: 'email_link'`. The confirm link GET counts toward the same cap as the confirm POST.
 - [ ] Unit/integration (fix pass, secret): with `BLOG0_UNSUBSCRIBE_SECRET` set, a new token verifies with `[unsubscribeSecret, sessionSecret]`; a token signed with the session secret still verifies after the unsubscribe secret is added; a token signed with the unsubscribe secret still verifies after the session secret changes; `loadConfig` rejects a `replace-with-…` value and a value under 24 chars (aggregated `ConfigError`).
 - [ ] Integration (fix pass, erasure; Postgres and PGlite): `newsletter_erase_subscriber(id)` on a confirmed subscriber with events, a suppression and messages → no row of that subscriber (subscriber, events, messages, suppressions) contains the original email, IP, user agent or source URL (asserted by scanning the rows); subscriber `email` = `erased+<hash>@erased.invalid`, status `unsubscribed`; a suppression row `reason 'erased'` exists; exactly one new `erased` event with `ip`/`user_agent` null and no email in `details`; a direct `UPDATE`/`DELETE` on the ledger still raises "append-only"; the function has `proconfig` with `search_path=`; re-signup of the same address (any casing) → `pending`, needs confirmation, `signup` event `details.erasedBefore = true`, tombstone suppression count unchanged. `POST /api/admin/subscribers/:id/erase` `{ confirmEmail }` with a wrong address → 400 `VALIDATION_FAILED`, nothing changes; with the right one → `{ erased: true }`, `removeSubscriber` called once (stub: skipped) and `newsletter.erase` logged.
 - [ ] Integration (fix pass, token redaction): after a signup the stored `confirmation` message HTML and text contain `/newsletter/confirm?t=[redacted]` and never the token, while the captured transport message / stub log line carries the real link and it confirms; migration `0004` on a database with a pre-existing confirmation row redacts it.

@@ -13,7 +13,7 @@ import {
   insertLegacySubscriber,
   latestConfirmUrl,
   messagesTo,
-  NL_CONFIRM_BUTTON,
+  NL_ALREADY_CONFIRMED,
   NL_CONFIRMED,
   NL_DONE,
   NL_EXPIRED,
@@ -28,8 +28,8 @@ import {
 // Newsletter end to end (capabilities newsletter-list + newsletter-issues → E2E criteria), on the
 // production server with the recording stubs: BLOG0_SMTP_HOST empty (stub mail transport — the
 // `newsletter_message` row is the delivery) and BLOG0_NEWSLETTER_SENDER=stub (playwright.config.ts).
-// One serial walk over one address: footer signup → pending with proof → confirm link → confirmed
-// + timeline → link reused → exports → Site → Newsletter per post → publish → draft issue →
+// One serial walk over one address: footer signup → pending with proof → confirm link (confirms on open) →
+// confirmed + timeline → link reused ("already confirmed") → exports → Site → Newsletter per post → publish → draft issue →
 // preview HTML/Text → test send → send → log + stats → the issue's unsubscribe link → unsubscribed
 // + suppression → re-signup starts a fresh double opt-in and keeps the history. Plus the legacy
 // one-time confirmation. Runs after `smoke` (its own data; the reader walk's pending signup stays
@@ -121,37 +121,47 @@ test('footer signup → "Almost there"; the admin shows the address Pending with
   await expect(main.getByRole('button', { name: 'Resend confirmation' })).toBeVisible();
 });
 
-test('a plain GET of the confirm link (a mail scanner) leaves the subscriber Pending and the link unspent', async ({ page }) => {
+test('opening the confirm link confirms on open (303 → result page, IP/UA recorded); the admin shows Confirmed + timeline; opening it again is "already confirmed"', async ({ page }) => {
   const url = await latestConfirmUrl(EMAIL);
   walk.firstConfirmUrl = url;
-  const eventsBefore = await eventKinds(walk.subscriberId);
-
-  const res = await page.request.get(pathOf(url));
-  expect(res.status()).toBe(200);
-  expect(await res.text()).toContain(NL_CONFIRM_BUTTON);
-  await page.request.get(pathOf(url));
-
-  expect((await subscriberByEmail(EMAIL)).status).toBe('pending');
-  expect(await eventKinds(walk.subscriberId)).toEqual(eventsBefore);
 
   // The stored message never keeps the real token (fix pass); the log line / transport carried it.
   const stored = (await messagesTo(EMAIL, 'confirmation'))[0];
   expect(stored.text).toContain('/newsletter/confirm?t=[redacted]');
   expect(stored.text).not.toContain(new URL(url).searchParams.get('t')!);
-});
 
-test('pressing "Confirm my subscription" → "You’re subscribed."; the admin shows Confirmed + timeline; the spent link says so', async ({ page }) => {
-  const url = walk.firstConfirmUrl;
-
-  const res = await page.goto(pathOf(url));
-  expect(res?.status()).toBe(200);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm your subscription');
-  await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
+  // The bare GET is a 303 to the result page (no-store, noindex) — the state change happens in the route handler.
+  const raw = await page.request.get(pathOf(url), { maxRedirects: 0, headers: { 'user-agent': 'e2e-link-open/1.0' } });
+  expect(raw.status()).toBe(303);
+  expect(raw.headers()['location']).toBe('/newsletter/confirmed?status=ok');
+  expect(raw.headers()['cache-control']).toBe('no-store');
+  expect(raw.headers()['x-robots-tag']).toBe('noindex');
 
   expect((await subscriberByEmail(EMAIL)).status).toBe('confirmed');
   // The stub sender skips the provider sync (newsletter-issues.md, Assumed S7.3): no provider_* events.
   expect(await eventKinds(walk.subscriberId)).toEqual(['signup', 'confirmation_sent', 'confirmed']);
+  const [audit] = await withTestDb(
+    (sql) => sql<{ ua: string | null; ev_ua: string | null; via: string | null; source: string }[]>`
+      select s.confirmed_user_agent as ua, e.user_agent as ev_ua, e.details->>'via' as via, e.source
+      from newsletter_subscriber s join newsletter_subscriber_event e on e.subscriber_id = s.id and e.kind = 'confirmed'
+      where s.id = ${walk.subscriberId}`,
+  );
+  expect(audit).toEqual({ ua: 'e2e-link-open/1.0', ev_ua: 'e2e-link-open/1.0', via: 'link_open', source: 'email_link' });
+
+  // The reader's own click (after the fetch above, e.g. a scanner's) lands on the success page, never an error.
+  const res = await page.goto(pathOf(url));
+  expect(res?.status()).toBe(200);
+  await expect(page).toHaveURL(/\/newsletter\/confirmed\?status=already$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_ALREADY_CONFIRMED);
+  await expect(page.locator('#newsletter')).toBeVisible(); // site chrome
+  expect(await eventKinds(walk.subscriberId)).toHaveLength(3);
+
+  // The result page itself for a fresh confirmation (pure display, changes nothing).
+  await page.goto('/newsletter/confirmed?status=ok');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
+  const invalid = await page.goto('/newsletter/confirm?t=not-a-token');
+  expect(invalid?.status()).toBe(404);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('That link isn’t valid.');
 
   await signIn(page);
   const main = await openSubscriber(page, walk.subscriberId, EMAIL);
@@ -163,12 +173,6 @@ test('pressing "Confirm my subscription" → "You’re subscribed."; the admin s
     'Confirmed',
   ]);
   await expect(dd(main, 'Confirmed at')).not.toHaveText('—');
-
-  // The same link again: the page offers the button, the click reports it spent, nothing changes.
-  await page.goto(pathOf(url));
-  await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_EXPIRED);
-  expect(await eventKinds(walk.subscriberId)).toHaveLength(3);
 });
 
 test('/privacy renders the seeded draft text in the site chrome and the footer consent line links to it', async ({ page }) => {
@@ -394,6 +398,12 @@ test('a plain GET of the issue’s unsubscribe link leaves the subscriber Confir
   expect((await subscriberByEmail(EMAIL)).status).toBe('unsubscribed');
   expect(await suppressionRows(walk.subscriberId)).toEqual([{ reason: 'unsubscribed', source: 'email_link' }]);
 
+  // The old confirm link can no longer be "already confirmed" (the reader left): the expired copy, nothing changes.
+  await page.goto(pathOf(walk.firstConfirmUrl));
+  await expect(page).toHaveURL(/\/newsletter\/confirmed\?status=expired$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_EXPIRED);
+  expect((await subscriberByEmail(EMAIL)).status).toBe('unsubscribed');
+
   await signIn(page);
   const main = await openSubscriber(page, walk.subscriberId, EMAIL);
   await expect(main.locator('.subs-head .tag')).toHaveText('Unsubscribed');
@@ -467,7 +477,6 @@ test('Erase personal data: wrong address keeps Erase disabled; the right one era
   await signupInFooter(page, ERASE_EMAIL, 'Erase Me');
   const url = await latestConfirmUrl(ERASE_EMAIL);
   await page.goto(pathOf(url));
-  await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
   const row = await subscriberByEmail(ERASE_EMAIL);
   expect(row.status).toBe('confirmed');

@@ -29,5 +29,5 @@ export default async function UnsubscribePage({ searchParams }: PageProps) {
   if (!peekUnsubscribeToken(token)) notFound();
 
   const site = await getCurrentSite();
-  return <LinkActionButton kind="unsubscribe" token={token} brand={site.wordmark} brandName={site.brandName} />;
+  return <LinkActionButton token={token} brand={site.wordmark} brandName={site.brandName} />;
 }

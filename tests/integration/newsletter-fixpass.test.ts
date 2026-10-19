@@ -14,6 +14,7 @@ import { POST as createIssueRoute } from '@/app/api/admin/newsletter/issues/rout
 import { POST as eraseRoute } from '@/app/api/admin/subscribers/[id]/erase/route';
 import { POST as sendConfirmationRoute } from '@/app/api/admin/subscribers/[id]/send-confirmation/route';
 import { GET as detailRoute } from '@/app/api/admin/subscribers/[id]/route';
+import { GET as confirmGet } from '@/app/(site)/newsletter/confirm/route';
 import { POST as confirmRoute } from '@/app/api/newsletter/confirm/route';
 import { POST as newsletterRoute } from '@/app/api/newsletter/route';
 import { POST as unsubscribeRoute } from '@/app/api/newsletter/unsubscribe/route';
@@ -35,7 +36,7 @@ import { resetMailTransportForTests } from '@/server/newsletter/mail';
 import { privacyUrl, unsubscribeToken, unsubscribeVerifySecrets } from '@/server/newsletter/links';
 import { resetNewsletterLinkRateLimiterForTests, resetNewsletterRateLimiterForTests } from '@/server/newsletter/rate-limit';
 import { resetNewsletterSenderForTests, StubNewsletterSender, type NewsletterSender, type SenderIssue } from '@/server/newsletter/sender';
-import { peekConfirmToken, peekUnsubscribeToken } from '@/server/newsletter/service';
+import { peekUnsubscribeToken } from '@/server/newsletter/service';
 import { erasureHash, signUnsubscribeToken, verifyUnsubscribeToken } from '@/server/newsletter/tokens';
 
 import { actAs, call, createArticle, data, err, publish } from '../helpers/api';
@@ -145,30 +146,21 @@ async function confirmed(email: string, opts: SignupOptions = {}) {
   return row(email);
 }
 
-// --- (1) scanner-safe helpers -------------------------------------------------------------------
+// --- (1) link GETs: confirm on open; unsubscribe scanner-safe -------------------------------------------------------------------
 
-describe('peekConfirmToken / peekUnsubscribeToken (what the GET pages call)', () => {
-  it('peekConfirmToken only shape-checks: the row stays pending, the token hash unchanged, no event, and no link cap is spent; the POST then confirms', async () => {
+describe('confirm on open (owner decision 2026-10-19) / peekUnsubscribeToken (what the unsubscribe page calls)', () => {
+  it('the confirm link GET confirms and spends the same link cap as the POST: with a cap of ONE, the open goes through and the POST after it is 429', async () => {
     resetNewsletterLinkRateLimiterForTests({ perIp: 1, siteWide: 1 });
-    const token = (await signup('peek@example.com')) as string;
-    const before = await row('peek@example.com');
-    const eventsBefore = await eventKinds(before.id);
+    const token = (await signup('open@example.com')) as string;
+    const before = await row('open@example.com');
+    expect(before.status).toBe('pending');
 
-    for (let i = 0; i < 5; i += 1) expect(peekConfirmToken(token)).toBe(true);
-    expect(peekConfirmToken('not-a-token')).toBe(false);
-    expect(peekConfirmToken(undefined)).toBe(false);
-    expect(peekConfirmToken(['a'.repeat(43)])).toBe(false);
-
-    const after = await row('peek@example.com');
-    expect(after).toMatchObject({ status: 'pending', confirmTokenHash: before.confirmTokenHash, confirmedAt: null });
-    expect(await eventKinds(before.id)).toEqual(eventsBefore);
-
-    // five peeks spent nothing from a cap of ONE: the single POST still goes through
-    const res = await confirm(token);
-    expect(res.status).toBe(200);
-    expect(data(res.env)).toEqual({ confirmed: true, alreadyConfirmed: false });
-    expect(await row('peek@example.com')).toMatchObject({ status: 'confirmed', confirmTokenHash: null });
-    expect((await confirm(token)).status).toBe(429); // the cap counts POSTs: the second one is over it
+    const opened = await confirmGet(new Request(`${ORIGIN}/newsletter/confirm?t=${token}`, { headers: { host: 'localhost:3410', 'user-agent': 'vitest-open' } }));
+    expect(opened.status).toBe(303);
+    expect(opened.headers.get('location')).toBe('/newsletter/confirmed?status=ok');
+    expect(await row('open@example.com')).toMatchObject({ status: 'confirmed', confirmTokenHash: null, confirmedUserAgent: 'vitest-open' });
+    expect(await eventKinds(before.id)).toContain('confirmed');
+    expect((await confirm(token)).status).toBe(429); // one cap shared by GET and POST
   });
 
   it('peekUnsubscribeToken verifies the signature without a lookup: a confirmed subscriber stays confirmed with no suppression; the POST { token, source: email_link } unsubscribes', async () => {

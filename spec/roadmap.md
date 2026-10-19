@@ -568,9 +568,9 @@ pnpm test:container                          # exit 0 → "container-e2e: PASS" 
 pnpm backup -- --out var/backups && pnpm restore -- --in "$(ls -td var/backups/blog0-* | head -1)" --db blog0_restore_check --storage var/restore-check/storage --force   # "restore-check: OK" — manifest lists the 6 newsletter tables
 # Boot check (background tool): pnpm start   then:
 curl -fsS http://localhost:3410/api/health/ready                                       # "pending":0
-curl -fsS -o /dev/null -w "%{http_code}\n" "http://localhost:3410/newsletter/confirm?t=not-a-token"   # 404
+curl -sS -o /dev/null -w "%{http_code} %{redirect_url}\n" "http://localhost:3410/newsletter/confirm?t=not-a-token"   # 303 …/newsletter/confirmed?status=invalid (that page is a 404) — confirm-on-open, owner decision 2026-10-19
 curl -fsS -X POST -H 'content-type: application/json' -H 'origin: http://localhost:3410' -d '{"email":"gate@example.test","sourceUrl":"/"}' http://localhost:3410/api/newsletter   # {"ok":true,"data":{"subscribed":true}}
-# the server output has one newsletter.mail line with "transport":"stub" and a confirm_url; opening that URL answers 200 and contains "You’re subscribed"
+# the server output has one newsletter.mail line with "transport":"stub" and a confirm_url; opening that URL confirms (303 → /newsletter/confirmed?status=ok, "You’re confirmed — welcome to <brand>.")
 ```
 Lines that depend on Docker are reported `PENDING DOCKER` when the daemon is down — the gate is
 then "pending docker", not passed. The CI workflow change is proven by its first run on push
@@ -580,7 +580,7 @@ then "pending docker", not passed. The CI workflow change is proven by its first
 1. *Designer path* (no `.env`): `pnpm dev:design`, open `http://localhost:3410/`, scroll to the
    footer: the line under the form is the consent text; subscribe → "Almost there — check your
    inbox and confirm." The terminal shows a `newsletter.mail` line with `transport: 'stub'` and a
-   `confirm_url` — open it → "You’re subscribed." Sign in at `/admin`, **Subscribers** → the
+   `confirm_url` — open it → "You’re confirmed — welcome to blog0." Sign in at `/admin`, **Subscribers** → the
    address is **Confirmed**; open it → proof of consent (source `/`, consent v1, your browser's
    user agent, IP "not recorded — no trusted proxy") and the timeline (Signed up, Confirmation
    email sent (stub), Confirmed — no sync entry: the stub sender skips sync; "Synced to Listmonk"
@@ -621,7 +621,8 @@ then "pending docker", not passed. The CI workflow change is proven by its first
    labelled **Stub** sender/mail in the Site → Newsletter status strip.
 
 **Fix pass (post-freeze):** > **Assumed:** the one approved exception to the freeze — scanner-safe
-link pages (GET renders a button, POST changes state), optional `BLOG0_UNSUBSCRIBE_SECRET`,
+link pages (GET renders a button, POST changes state; *the confirm link confirms on open since the
+owner decision of 2026-10-19 — `newsletter-list.md`*), optional `BLOG0_UNSUBSCRIBE_SECRET`,
 `/privacy` + `privacyText` + `newsletterPostalAddress` + `newsletter_erase_subscriber` /
 `POST /api/admin/subscribers/:id/erase`, and redacted confirmation tokens (migration
 `0004_newsletter_erasure`; `pnpm db:verify` → `5 applied (latest 0004_newsletter_erasure)`) —

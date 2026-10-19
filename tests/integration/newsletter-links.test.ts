@@ -1,11 +1,12 @@
-// Capability newsletter-list: the reader-facing links — confirm / unsubscribe pages (server
-// components rendered to HTML in the site chrome), the JSON routes (incl. RFC 8058 one-click),
+// Capability newsletter-list: the reader-facing links — the confirm link (a route handler that
+// confirms on open and 303s to the result page) and the unsubscribe page (server component), the JSON routes (incl. RFC 8058 one-click),
 // suppression + re-signup rules, the append-only ledger trigger, and the link rate caps — against the
 // real test Postgres with the stub mail transport.
 import { renderToStaticMarkup } from 'react-dom/server';
 import { sql as dsql, and, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { GET as confirmGetRoute } from '@/app/(site)/newsletter/confirm/route';
 import { POST as confirmRoute } from '@/app/api/newsletter/confirm/route';
 import { POST as newsletterRoute } from '@/app/api/newsletter/route';
 import { GET as unsubscribeGetRoute, POST as unsubscribeRoute } from '@/app/api/newsletter/unsubscribe/route';
@@ -92,13 +93,31 @@ async function expectLedgerRefusal(promise: Promise<unknown>): Promise<void> {
   expect(`${e.message} ${e.cause?.message ?? ''}`).toMatch(/append-only/);
 }
 
-/** Renders a link page the way Next would, returning its HTML or 'NOT_FOUND'. */
-async function renderPage(which: 'confirm' | 'unsubscribe', token: string | undefined, headers: Record<string, string> = {}): Promise<string> {
+/** Renders the unsubscribe page the way Next would, returning its HTML or 'NOT_FOUND'. */
+async function renderPage(_which: 'unsubscribe', token: string | undefined, headers: Record<string, string> = {}): Promise<string> {
   requestHeaders.current = new Headers({ 'user-agent': 'vitest-page', ...headers });
-  const mod = which === 'confirm' ? await import('@/app/(site)/newsletter/confirm/page') : await import('@/app/(site)/newsletter/unsubscribe/page');
+  const mod = await import('@/app/(site)/newsletter/unsubscribe/page');
   try {
     const element = await mod.default({ searchParams: Promise.resolve(token === undefined ? {} : { t: token }) });
     return renderToStaticMarkup(element);
+  } catch (err) {
+    if (err instanceof NotFound) return 'NOT_FOUND';
+    throw err;
+  }
+}
+
+/** Opens the emailed confirm link: GET /newsletter/confirm?t=… (the route handler). */
+async function openConfirm(token: string | undefined, headers: Record<string, string> = {}) {
+  const q = token === undefined ? '' : `?t=${encodeURIComponent(token)}`;
+  const res = await confirmGetRoute(new Request(`${ORIGIN}/newsletter/confirm${q}`, { headers: { host: 'localhost:3410', ...headers } }));
+  return { res, status: res.status, location: res.headers.get('location') };
+}
+
+/** Renders /newsletter/confirmed with the given query, returning its HTML or 'NOT_FOUND'. */
+async function renderConfirmed(query: Record<string, string>): Promise<string> {
+  const mod = await import('@/app/(site)/newsletter/confirmed/page');
+  try {
+    return renderToStaticMarkup(await mod.default({ searchParams: Promise.resolve(query) }));
   } catch (err) {
     if (err instanceof NotFound) return 'NOT_FOUND';
     throw err;
@@ -127,41 +146,88 @@ afterEach(() => {
   setHops(savedHops);
 });
 
-describe('GET /newsletter/confirm (page) — scanner-safe (fix pass)', () => {
-  it('a plain GET only renders the Confirm button: nothing is consumed, written or counted; the POST confirms; a second POST is the expired/used outcome; garbage is a 404', async () => {
+describe('GET /newsletter/confirm — confirm on open (owner decision 2026-10-19)', () => {
+  it('opening the link confirms (IP + UA + via link_open recorded) and 303s to ?status=ok; a second open is "already" (success); nothing more is written', async () => {
+    setHops('1');
     const token = await signup('page@example.com');
-    const before = await row('page@example.com');
-    const eventsBefore = (await events('page@example.com')).length;
-    const linkLogsBefore = logs.find('newsletter.link').length;
+    const opened = await openConfirm(token, { 'user-agent': 'vitest-open', 'x-forwarded-for': '203.0.113.21' });
+    expect(opened.status).toBe(303);
+    expect(opened.location).toBe('/newsletter/confirmed?status=ok');
+    expect(opened.res.headers.get('cache-control')).toBe('no-store');
+    expect(opened.res.headers.get('x-robots-tag')).toBe('noindex');
 
-    for (let i = 0; i < 3; i += 1) {
-      const html = await renderPage('confirm', token);
-      expect(html).toContain('Confirm your subscription');
-      expect(html).toContain('Confirm my subscription');
-      expect(html).not.toContain('You’re subscribed');
-      expect(html).not.toContain(token); // the page never echoes the token into markup beyond what the client component holds
-    }
-
-    const untouched = await row('page@example.com');
-    expect(untouched).toMatchObject({ status: 'pending', confirmTokenHash: before.confirmTokenHash, confirmedAt: null });
-    expect((await events('page@example.com')).length).toBe(eventsBefore);
-    expect(logs.find('newsletter.link')).toHaveLength(linkLogsBefore); // a GET is not even a link request
-    expect(await renderPage('confirm', 'not-a-token')).toBe('NOT_FOUND');
-    expect(await renderPage('confirm', undefined)).toBe('NOT_FOUND');
-
-    const ok = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token }, { 'user-agent': 'vitest-page' });
-    expect(ok.res.status).toBe(200);
     const r = await row('page@example.com');
-    expect(r.status).toBe('confirmed');
-    expect(r.confirmedUserAgent).toBe('vitest-page');
-    expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'ok', subscriber_id: r.id });
+    expect(r).toMatchObject({ status: 'confirmed', confirmTokenHash: null, confirmedIp: '203.0.113.21', confirmedUserAgent: 'vitest-open' });
+    expect(r.confirmedAt).not.toBeNull();
+    const evs = await events('page@example.com');
+    expect(evs.map((e) => e.kind)).toEqual(['signup', 'confirmation_sent', 'confirmed']);
+    const confirmed = evs.at(-1)!;
+    expect(confirmed).toMatchObject({ source: 'email_link', ip: '203.0.113.21', userAgent: 'vitest-open' });
+    expect(confirmed.details).toMatchObject({ via: 'link_open', consentVersion: r.consentVersion, previousStatus: 'pending' });
+    expect(confirmed.details.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', via: 'link_open', outcome: 'ok', subscriber_id: r.id });
 
-    const again = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token });
-    expect(again.res.status).toBe(410);
+    const page = await renderConfirmed({ status: 'ok' });
+    expect(page).toContain('You’re confirmed — welcome to');
+    expect(page).not.toContain(token);
+
+    // the reader clicks again (or a scanner got there first): success, never an error, nothing written
+    const again = await openConfirm(token, { 'user-agent': 'vitest-again', 'x-forwarded-for': '203.0.113.22' });
+    expect(again.location).toBe('/newsletter/confirmed?status=already');
+    expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', via: 'link_open', outcome: 'already', subscriber_id: r.id });
+    expect(await renderConfirmed({ status: 'already' })).toContain('You’re already confirmed.');
+    expect((await events('page@example.com')).length).toBe(evs.length);
+    expect(await row('page@example.com')).toMatchObject({ confirmedIp: '203.0.113.21', confirmedUserAgent: 'vitest-open' });
+
+    // the JSON POST keeps its contract: a spent token is still 410 there
+    expect((await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token })).res.status).toBe(410);
+  });
+
+  it('a spent token whose subscriber has since unsubscribed is "expired", not "already"', async () => {
+    const token = await signup('gone@example.com');
+    expect((await openConfirm(token)).location).toBe('/newsletter/confirmed?status=ok');
+    await unsubscribeByToken(unsubscribeToken((await row('gone@example.com')).id), 'email_link', { ip: 'direct', userAgent: null });
+    expect((await openConfirm(token)).location).toBe('/newsletter/confirmed?status=expired');
+    expect((await row('gone@example.com')).status).toBe('unsubscribed');
+  });
+
+  it('expired (past 72 h) → ?status=expired with the existing copy; the row stays pending', async () => {
+    const token = await signup('late@example.com');
+    await getDb().update(newsletterSubscriber).set({ confirmTokenExpiresAt: new Date(Date.now() - 1000) }).where(eq(newsletterSubscriber.email, 'late@example.com'));
+    const opened = await openConfirm(token);
+    expect(opened.location).toBe('/newsletter/confirmed?status=expired');
+    expect((await row('late@example.com')).status).toBe('pending');
     expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'expired' });
-    const unknown = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: 'B'.repeat(43) });
-    expect(unknown.res.status).toBe(404);
+    const page = await renderConfirmed({ status: 'expired' });
+    expect(page).toContain('This link has expired or was already used.');
+    expect(page).toContain('Sign up again from the footer');
+  });
+
+  it('malformed, missing or unknown tokens → ?status=invalid, which is a true 404 with the existing copy; malformed ones are never counted', async () => {
+    resetNewsletterLinkRateLimiterForTests({ siteWide: 1 });
+    expect((await openConfirm('not-a-token')).location).toBe('/newsletter/confirmed?status=invalid');
+    expect((await openConfirm(undefined)).location).toBe('/newsletter/confirmed?status=invalid');
+    expect((await openConfirm('B'.repeat(43))).location).toBe('/newsletter/confirmed?status=invalid'); // well formed: spends the one slot
     expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'invalid' });
+    expect(await renderConfirmed({ status: 'invalid' })).toBe('NOT_FOUND');
+    expect(await renderConfirmed({})).toBe('NOT_FOUND');
+    expect(await renderConfirmed({ status: 'bogus' })).toBe('NOT_FOUND');
+    const { default: NotFoundPage } = await import('@/app/(site)/newsletter/confirmed/not-found');
+    expect(renderToStaticMarkup(await NotFoundPage())).toContain('That link isn’t valid.');
+  });
+
+  it('rate limited → ?status=limited&m=<minutes> with the existing copy; the row stays pending', async () => {
+    setHops('0');
+    resetNewsletterLinkRateLimiterForTests({ siteWide: 1 });
+    const a = await signup('lim1@example.com');
+    const b = await signup('lim2@example.com');
+    expect((await openConfirm(a)).location).toBe('/newsletter/confirmed?status=ok');
+    const limited = await openConfirm(b);
+    expect(limited.location).toMatch(/^\/newsletter\/confirmed\?status=limited&m=\d+$/);
+    expect((await row('lim2@example.com')).status).toBe('pending');
+    expect(logs.find('newsletter.link').at(-1)).toMatchObject({ kind: 'confirm', outcome: 'rate_limited' });
+    expect(await renderConfirmed({ status: 'limited', m: '3' })).toContain('Try the link again in 3 minutes.');
+    expect(await renderConfirmed({ status: 'limited', m: 'junk' })).toContain('Try the link again in 1 minute.');
   });
 
   it('POST /api/newsletter/confirm answers the exact codes: 200 → 410 → 404, needs no Origin, noindex', async () => {
@@ -436,13 +502,13 @@ describe('link rate caps (spec/architecture.md §6)', () => {
     expect(await renderPage('unsubscribe', unsubscribeToken((await row('cap0@example.com')).id), ip)).toContain('Yes, unsubscribe me');
   });
 
-  it('with hops=0 only the site-wide cap applies (injected small): the third POST is a 429 with the minutes in Retry-After; GETs never count', async () => {
+  it('with hops=0 only the site-wide cap applies (injected small): the third POST is a 429 with the minutes in Retry-After; unsubscribe page GETs never count', async () => {
     setHops('0');
     resetNewsletterLinkRateLimiterForTests({ siteWide: 2 });
     const a = await signup('site1@example.com');
     const b = await signup('site2@example.com');
     const c = await signup('site3@example.com');
-    for (let i = 0; i < 5; i += 1) expect(await renderPage('confirm', c)).toContain('Confirm my subscription');
+    for (let i = 0; i < 5; i += 1) expect(await renderPage('unsubscribe', unsubscribeToken((await row('site3@example.com')).id))).toContain('Yes, unsubscribe me');
     expect((await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: a })).res.status).toBe(200);
     expect((await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: b })).res.status).toBe(200);
     const blocked = await postJson<NewsletterConfirmResponse>(confirmRoute, '/api/newsletter/confirm', { token: c });

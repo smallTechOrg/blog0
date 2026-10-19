@@ -12,6 +12,10 @@ import { signUnsubscribeToken } from './tokens';
 
 export const CONFIRM_PATH = '/newsletter/confirm';
 export const UNSUBSCRIBE_PATH = '/newsletter/unsubscribe';
+/** The confirm link's result page (GET /newsletter/confirm 303s here — confirm-on-open, owner decision 2026-10-19). */
+export const CONFIRMED_PATH = '/newsletter/confirmed';
+export const CONFIRM_RESULT_STATUSES = ['ok', 'already', 'expired', 'invalid', 'limited'] as const;
+export type ConfirmResultStatus = (typeof CONFIRM_RESULT_STATUSES)[number];
 /** RFC 8058 one-click target: the POST endpoint itself (a GET there 303s to the page). */
 export const ONE_CLICK_UNSUBSCRIBE_PATH = '/api/newsletter/unsubscribe';
 
@@ -34,6 +38,16 @@ export function unsubscribeUrl(subscriberId: string): string {
  */
 export function oneClickUnsubscribeUrl(subscriberId: string): string {
   return `${base()}${ONE_CLICK_UNSUBSCRIBE_PATH}?t=${encodeURIComponent(unsubscribeToken(subscriberId))}`;
+}
+
+/**
+ * The relative `Location` of the confirm result page (relative on purpose: the reader stays on the
+ * origin that served the link even when it differs from BLOG0_PUBLIC_BASE_URL). `minutes` only for `limited`.
+ */
+export function confirmResultLocation(status: ConfirmResultStatus, minutes?: number): string {
+  const q = new URLSearchParams({ status });
+  if (status === 'limited' && minutes !== undefined) q.set('m', String(minutes));
+  return `${CONFIRMED_PATH}?${q.toString()}`;
 }
 
 /** The page link for a token already in hand (the GET fallback of the one-click URL). */

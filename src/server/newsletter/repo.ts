@@ -142,6 +142,23 @@ export async function wasTokenUsed(db: Executor, siteId: string, hash: string): 
   return Number(row?.n ?? 0) > 0;
 }
 
+/** The subscriber whose `confirmed` / `resubscribed` event spent this token hash (newest), or null. */
+export async function subscriberIdByUsedToken(db: Executor, siteId: string, hash: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: newsletterSubscriberEvent.subscriberId })
+    .from(newsletterSubscriberEvent)
+    .where(
+      and(
+        eq(newsletterSubscriberEvent.siteId, siteId),
+        sql`${newsletterSubscriberEvent.kind} in ('confirmed', 'resubscribed')`,
+        sql`${newsletterSubscriberEvent.details} ->> 'tokenHash' = ${hash}`,
+      ),
+    )
+    .orderBy(desc(newsletterSubscriberEvent.createdAt))
+    .limit(1);
+  return row?.id ?? null;
+}
+
 export interface ListFilter {
   status?: SubscriberStatus;
   q?: string;

@@ -310,7 +310,7 @@ BLOG0_SMTP_FROM=blog0 <newsletter@example.com>
 ```
 
 Prove it: sign up with your own address on the public site → the email arrives → the link opens
-"You’re subscribed". The web log has `"event":"newsletter.mail"` with `"transport":"smtp"` and
+"You’re confirmed — welcome to <brand>." (it confirms on open). The web log has `"event":"newsletter.mail"` with `"transport":"smtp"` and
 `"outcome":"sent"` (an `"outcome":"failed"` line carries the relay's error; the signup itself still
 succeeds and the admin can resend from the subscriber page).
 

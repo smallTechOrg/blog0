@@ -4,7 +4,7 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 import { e2eAdmin, originOf, signIn } from './helpers/admin';
-import { confirmUrlFromLog, lineCount, NL_CONFIRM_BUTTON, NL_CONFIRMED, NL_DONE, pathOf } from './helpers/newsletter';
+import { confirmUrlFromLog, lineCount, NL_CONFIRMED, NL_DONE, pathOf } from './helpers/newsletter';
 import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
 import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGN_E2E_STORAGE_DIR, DESIGNER_ENV } from './designer.global-setup';
 
@@ -217,7 +217,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect((await page.request.get(uploaded.audio.url)).status()).toBe(404);
   });
 
-  test('newsletter: footer signup → the stub logs the confirm link → "You’re subscribed." → the admin lists Confirmed (no SMTP, no Listmonk)', async ({ page }) => {
+  test('newsletter: footer signup → the stub logs the confirm link → opening it confirms ("You’re confirmed — welcome to …") → the admin lists Confirmed (no SMTP, no Listmonk)', async ({ page }) => {
     const email = `designer-nl-${Date.now()}@example.test`;
     const cursor = lineCount(DESIGN_E2E_SERVER_LOG);
 
@@ -235,8 +235,8 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
       .not.toBeNull();
     expect(url!).toMatch(new RegExp(`^http://localhost:${DESIGN_E2E_PORT}/newsletter/confirm\\?t=`));
 
-    await page.goto(pathOf(url!));
-    await page.getByRole('button', { name: NL_CONFIRM_BUTTON }).click();
+    await page.goto(pathOf(url!)); // confirm on open (owner decision 2026-10-19): 303 → the result page
+    await expect(page).toHaveURL(/\/newsletter\/confirmed\?status=ok$/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(NL_CONFIRMED);
 
     await signIn(page, designer());

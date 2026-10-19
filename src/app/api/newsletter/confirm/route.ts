@@ -10,8 +10,8 @@ import { getCurrentSite } from '@/server/site/current';
 
 // POST /api/newsletter/confirm — { token } → { confirmed: true, alreadyConfirmed } (spec/api.md).
 // No CSRF check: the token is the authority. TOKEN_INVALID (404), TOKEN_EXPIRED (410), RATE_LIMITED
-// (429, after the shape check — a malformed token is never counted). Used by tests and a future JS
-// fallback; the HTML page (/newsletter/confirm) calls the service directly.
+// (429, after the shape check — a malformed token is never counted). Kept for API callers; the emailed
+// link (GET /newsletter/confirm, a route handler) confirms on open with the same checks and cap.
 
 export const dynamic = 'force-dynamic';
 

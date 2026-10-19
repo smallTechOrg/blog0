@@ -15,10 +15,11 @@ import { withTestDb } from './db';
 import { e2eLogFile, readServerLog } from './logs';
 
 export const NL_DONE = 'Almost there — check your inbox and confirm.';
-export const NL_CONFIRMED = 'You’re subscribed.';
+/** The confirm link's result page (confirm on open, owner decision 2026-10-19): "You’re confirmed — welcome to <brand>." */
+export const NL_CONFIRMED = /^You’re confirmed — welcome to .+\.$/;
+export const NL_ALREADY_CONFIRMED = 'You’re already confirmed.';
 export const NL_EXPIRED = 'This link has expired or was already used.';
 export const NL_UNSUBSCRIBED = 'You’re unsubscribed. Sorry to see you go.';
-export const NL_CONFIRM_BUTTON = 'Confirm my subscription';
 export const NL_UNSUBSCRIBE_BUTTON = 'Yes, unsubscribe me';
 
 const CONFIRM_RE = /https?:\/\/[^\s"'<>]+\/newsletter\/confirm\?t=[A-Za-z0-9_%-]+/;

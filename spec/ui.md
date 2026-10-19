@@ -88,24 +88,35 @@ request body adds `sourceUrl: location.pathname + location.search`; success (`.f
 `role=status`) reads "Almost there — check your inbox and confirm." (div. 15 amended); the invalid
 and try-again messages are unchanged.
 
-### Newsletter link pages `/newsletter/confirm`, `/newsletter/unsubscribe` (Phase 7)
-Server components in the site chrome (`src/app/(site)/newsletter/{confirm,unsubscribe}/page.tsx`,
+### Newsletter link pages `/newsletter/confirm`, `/newsletter/confirmed`, `/newsletter/unsubscribe` (Phase 7)
+> **Owner decision (2026-10-19) — confirm on open:** `GET /newsletter/confirm?t=…` is a **route
+> handler** (`src/app/(site)/newsletter/confirm/route.ts`, same path so sent links keep working) that
+> confirms on open, like Mailchimp/Substack, and 303s to the result page
+> `/newsletter/confirmed?status=ok|already|expired|invalid|limited[&m=<minutes>]`
+> (`src/app/(site)/newsletter/confirmed/page.tsx`, site chrome, noindex, pure display). Copy: `ok` →
+> "You’re confirmed — welcome to <brand>." + the confirmed body below; `already` (a spent token whose
+> subscriber is still confirmed — a second click, or the reader after a scanner) → "You’re already
+> confirmed." (a success, never an error); `expired` → the 410 copy below (resend path: sign up again
+> from the footer; the admin can resend); `invalid` (or a missing/unknown status) → a true 404 via
+> this segment's `not-found.tsx` with the 404 copy below; `limited` → the 429 copy. One-line
+> trade-off: a link scanner that prefetches the link can confirm; the audit records the IP/UA of the confirming fetch. The **unsubscribe** page is unchanged (button below).
+
+Server components in the site chrome (`src/app/(site)/newsletter/{confirmed,unsubscribe}/page.tsx`,
 `dynamic = 'force-dynamic'`, `Cache-Control: no-store`, `robots: noindex` metadata, `<title>` "Subscription — blog0").
 The "410" (expired / used) and "429" (rate-limited) outcomes below name the outcome, not the HTTP
 status: a page can only answer 200 or a true 404, so both render at 200 (the JSON routes carry
 410 / 429 — `spec/api.md`).
-> **Assumed (fix pass, scanner-safe):** a plain GET never changes state. For a well-formed token
-> the page first renders the **prompt** state — h1 "Confirm your subscription" / "Unsubscribe from
-> <brand>?" with one `.btn` (**Confirm my subscription** / **Yes, unsubscribe me**, client component
-> `LinkActionButton.tsx`) that POSTs the token to `/api/newsletter/{confirm,unsubscribe}` and then
-> swaps the card to the outcome copy below (success, 410 expired/used, 404 invalid, 429
-> rate-limited with the retry minutes); while posting the button reads "Working…" and is disabled;
-> a network error shows "Something went wrong — try again." with the button re-enabled. The
-> unsubscribe prompt adds "You can sign up again any time." The 404 for a malformed/bad-signature
-> token stays a true 404.
+> **Assumed (fix pass, scanner-safe — unsubscribe only since 2026-10-19):** a plain GET of the
+> unsubscribe page never changes state. For a well-formed, correctly signed token it first renders
+> the **prompt** state — h1 "Unsubscribe from <brand>?" with one `.btn` **Yes, unsubscribe me**
+> (client component `LinkActionButton.tsx`) that POSTs the token to `/api/newsletter/unsubscribe` and
+> then swaps the card to the outcome copy below (success, 404 invalid, 429 rate-limited with the retry
+> minutes); while posting the button reads "Working…" and is disabled; a network error shows
+> "Something went wrong — try again." with the button re-enabled. The prompt adds "You can sign up
+> again any time." The 404 for a malformed/bad-signature token stays a true 404.
 One `.surface` card centred in `main`: an eyebrow `.tag` ("Newsletter"), a plain `h1` and one
 paragraph, then a `.btn-outline` link **Back to blog0** (`/`). Copy per outcome
-(`spec/api.md` → newsletter): confirm 200 "You’re subscribed." / "Thanks — <brand> issues will
+(`spec/api.md` → newsletter): confirm `ok` "You’re confirmed — welcome to <brand>." / "Thanks — <brand> issues will
 land in this inbox. Unsubscribe any time from the link at the bottom of each one."; 410 "This
 link has expired or was already used." / "Sign up again from the footer of any page and we’ll
 send a fresh link."; 404 "That link isn’t valid." / "Check the address you were sent, or sign up
