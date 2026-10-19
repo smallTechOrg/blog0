@@ -1,15 +1,20 @@
-// pnpm newsletter:tick — the hourly newsletter housekeeping (spec/architecture.md §13.3; scheduled by
-// cron / the platform scheduler — blog0 runs no in-process timer): digest days rule (creates the
-// digest draft when due; sends only with auto-send on) → provider suppressions into blog0 → stats
-// for issues sent in the last 30 days → the 12-month IP prune → retried Listmonk deletes of erased
-// subscribers. One `newsletter.tick` log line.
+// pnpm newsletter:tick (locally, via tsx) | node newsletter-tick.mjs (in the image and the `scheduler`
+// stage, bundled by scripts/build-release.mjs — Stage B, spec/architecture.md §12.7) — the hourly
+// newsletter housekeeping (spec/architecture.md §13.3; scheduled by cron / supercronic — blog0 runs
+// no in-process timer): digest days rule (creates the digest draft when due; sends only with
+// auto-send on) → provider suppressions into blog0 → stats for issues sent in the last 30 days → the
+// 12-month IP prune → retried Listmonk deletes of erased subscribers. One `newsletter.tick` log line.
 // Prints "digest: created #N | not due; suppressions pulled N; stats refreshed N; ips pruned N; erasures retried N";
 // exits 1 when any step failed (the others still ran); 2 on a usage error.
 // Stage A: BLOG0_HEARTBEAT_TICK_URL (optional) gets GET <url> after a run that exits 0 and
 // GET <url>/fail after one that exits 1 (5 s timeout; never changes the exit code; a usage error
 // pings nothing). An invalid heartbeat value is reported once (`ops.heartbeat` invalid_url) and never
 // fails the tick (spec/architecture.md §12.3).
-import { runCli } from './lib/cli';
+// Deliberately does NOT import scripts/lib/cli.ts (the scripts/release.ts runner pattern instead):
+// the bundle maps the shim below to an empty module.
+import './lib/allow-server-only';
+
+import { loadEnvConfig } from '@next/env';
 
 import { HEARTBEAT_ENV } from '../src/server/config';
 import { closeDb, initDb } from '../src/server/db/client';
@@ -17,14 +22,14 @@ import { runTick } from '../src/server/newsletter/issues/tick';
 import { dropInvalidHeartbeatEnv, pingHeartbeatFromEnv } from '../src/server/ops/heartbeat';
 import { getCurrentSite } from '../src/server/site/current';
 
-const USAGE = 'Usage: pnpm newsletter:tick';
+const USAGE = 'Usage: pnpm newsletter:tick   (in the image: node newsletter-tick.mjs)';
 
-runCli('newsletter:tick', async () => {
+class UsageError extends Error {}
+
+async function main(): Promise<void> {
   const args = process.argv.slice(2).filter((a) => a !== '--');
-  if (args.length > 0) {
-    console.error(`newsletter:tick failed: Unknown argument(s): ${args.join(' ')}\n${USAGE}`);
-    process.exit(2);
-  }
+  if (args.length > 0) throw new UsageError(`Unknown argument(s): ${args.join(' ')}\n${USAGE}`);
+  loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
   // Read the heartbeat before the config loads; then drop invalid heartbeat values so the full config
   // (getConfig) is not refused because of a monitoring URL.
   const heartbeatEnv = { [HEARTBEAT_ENV.tick]: process.env[HEARTBEAT_ENV.tick] };
@@ -50,4 +55,9 @@ runCli('newsletter:tick', async () => {
     throw error;
   }
   await ping('success');
+}
+
+main().catch((error: unknown) => {
+  console.error(`newsletter:tick failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(error instanceof UsageError ? 2 : 1);
 });

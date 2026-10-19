@@ -1,0 +1,11 @@
+# blog0 scheduler (supercronic; times in UTC — the image sets no TZ). spec/architecture.md §12.7.
+# Validate: docker run --rm blog0-scheduler:<tag> supercronic -test /app/scheduler/crontab
+# Each job's stdout/stderr goes to the container log (-passthrough-logs); env comes from blog0.env.
+
+# Hourly newsletter housekeeping (digest rule, provider suppressions, stats, IP prune, erasure retries);
+# pings BLOG0_HEARTBEAT_TICK_URL itself.
+7 * * * * node /app/newsletter-tick.mjs
+
+# Daily media backup: rclone sync /data/storage (read-only mount) → MEDIA_BACKUP_DEST; pings
+# BLOG0_HEARTBEAT_BACKUP_URL (success) or <url>/fail.
+30 3 * * * /app/scheduler/media-backup.sh

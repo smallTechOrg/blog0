@@ -1,0 +1,108 @@
+# blog0 on one GCP VM (Stage B, spec/architecture.md §12.7; runbook docs/deploy-gcp.md).
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/compose.env up -d --build --wait
+# Needs Docker Compose ≥ 2.24. Env files (never committed; templates beside this file):
+#   deploy/compose.env   interpolation below (image tag, Cloud SQL instance, domains, ACME e-mail, backup target)
+#   deploy/blog0.env     blog0's runtime env (release, blog0, scheduler)
+#   deploy/listmonk.env  Listmonk's config + first-run admin (+ the values deploy/listmonk-settings.sh reads)
+# Postgres is Cloud SQL, reached through the proxy sidecar (no TLS on the in-VM hop; the proxy
+# encrypts to Cloud SQL and authenticates with the VM's attached service account). blog0 and Listmonk
+# use separate databases on the one instance. `release` (migrate + verify + site/admin) runs on every
+# `up`; blog0 and the scheduler start only after it exits 0. Only Caddy publishes public ports;
+# Listmonk's admin is bound to 127.0.0.1:9000 (reach it through an SSH tunnel).
+# Local verification of this exact file: deploy/docker-compose.local.yml (`pnpm deploy:local`).
+name: blog0-prod
+
+x-blog0-build: &blog0-build
+  context: ..
+  dockerfile: Dockerfile
+  target: runtime
+
+services:
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.26.2-alpine # pinned; bump deliberately
+    environment:
+      CSQL_PROXY_INSTANCE_CONNECTION_NAME: ${CLOUD_SQL_INSTANCE:?set CLOUD_SQL_INSTANCE (project:region:instance) in deploy/compose.env}
+      CSQL_PROXY_ADDRESS: 0.0.0.0
+      CSQL_PROXY_PORT: '5432'
+      CSQL_PROXY_HEALTH_CHECK: 'true'
+      CSQL_PROXY_HTTP_ADDRESS: 0.0.0.0
+      # Auth = the VM's attached service account (ADC via the metadata server). Optional key file instead:
+      # add `CSQL_PROXY_CREDENTIALS_FILE: /secrets/sa.json` here and the volume `./secrets/sa.json:/secrets/sa.json:ro`.
+    healthcheck: { test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:9090/readiness'], interval: 5s, timeout: 3s, retries: 30, start_period: 5s }
+    restart: unless-stopped
+    # no host port: only the compose network reaches it
+
+  release: # one-off: node release.mjs (migrate → verify 0 pending → site + first admin); idempotent
+    image: blog0:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG (e.g. the short git SHA) in deploy/compose.env}
+    build: *blog0-build
+    command: [node, release.mjs]
+    env_file: [blog0.env]
+    depends_on:
+      cloud-sql-proxy: { condition: service_healthy, required: false }
+    restart: 'no'
+
+  blog0:
+    image: blog0:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG (e.g. the short git SHA) in deploy/compose.env}
+    build: *blog0-build
+    env_file: [blog0.env]
+    depends_on:
+      release: { condition: service_completed_successfully }
+      cloud-sql-proxy: { condition: service_healthy, required: false }
+    volumes: [blog0-storage:/data/storage]
+    # healthcheck: the image's (GET /api/health/live); stop grace > BLOG0_SHUTDOWN_TIMEOUT_MS + 2 s
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  scheduler: # supercronic: hourly newsletter tick, daily media backup (deploy/scheduler/crontab)
+    image: blog0-scheduler:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG in deploy/compose.env}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: scheduler
+    env_file: [blog0.env]
+    environment:
+      MEDIA_BACKUP_DEST: ${MEDIA_BACKUP_DEST:?set MEDIA_BACKUP_DEST in deploy/compose.env}
+    depends_on:
+      release: { condition: service_completed_successfully }
+      cloud-sql-proxy: { condition: service_healthy, required: false }
+    volumes: [blog0-storage:/data/storage:ro]
+    restart: unless-stopped
+
+  listmonk:
+    image: listmonk/listmonk:v5.1.0 # pinned; keep in step with the root docker-compose.yml
+    # The image entrypoint only execs its argv: install (first run only), upgrade, serve.
+    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
+    env_file: [listmonk.env]
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      TZ: Etc/UTC
+    depends_on:
+      cloud-sql-proxy: { condition: service_healthy, required: false }
+    ports: ['127.0.0.1:9000:9000'] # admin only via the SSH tunnel; the public paths go through Caddy
+    volumes: [listmonk-uploads:/listmonk/uploads]
+    # v5: /api/health needs a session or token; the login page is the unauthenticated probe.
+    healthcheck: { test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9000/admin/login >/dev/null || exit 1'], interval: 5s, timeout: 3s, retries: 30 }
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.11.7-alpine # pinned; bump deliberately
+    environment:
+      BLOG0_DOMAIN: ${BLOG0_DOMAIN:?set BLOG0_DOMAIN in deploy/compose.env}
+      NEWS_DOMAIN: ${NEWS_DOMAIN:?set NEWS_DOMAIN in deploy/compose.env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in deploy/compose.env}
+      CADDY_LOCAL_CERTS: ${CADDY_LOCAL_CERTS:-}
+    depends_on:
+      blog0: { condition: service_healthy }
+      listmonk: { condition: service_healthy }
+    ports: ['80:80', '443:443', '443:443/udp']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates + ACME account: keep across upgrades
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  blog0-storage: {}
+  caddy-data: {}
+  caddy-config: {}
+  listmonk-uploads: {}

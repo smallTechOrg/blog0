@@ -1180,7 +1180,7 @@ no provisioning, no `gcloud` writes, no DNS, no deploy. Runbook: `docs/deploy-gc
 ```
 deploy/
 ├── docker-compose.prod.yml      # the VM stack (below); `name: blog0-prod`
-├── docker-compose.local.yml     # local-verification override; `name: blog0-local`
+├── docker-compose.local.yml     # local-verification override; `name: blog0-prodlocal`
 ├── Caddyfile                    # one file, env-parameterised (prod + local)
 ├── compose.env.example          # compose interpolation vars (--env-file)
 ├── blog0.env.example            # blog0 runtime env (every var documented)
@@ -1206,6 +1206,11 @@ deploy/scheduler/media-backup.sh /app/scheduler/`; `USER node`; `HEALTHCHECK NON
 `FROM runtime AS app` so a plain `docker build .` (CI `image` job, `pnpm test:container`) still
 produces the unchanged runtime image (size check unaffected).
 > **Assumed:** supercronic `v0.2.33` (newest at build time if newer; ARG + per-arch sha256 pinned).
+> **Assumed (B1, verified 2026-10-19):** supercronic **`v0.2.50`** (newest release) with sha256
+> amd64 `d2d7c97f…cdd0`, arm64 `a1c0af98…99e2` (= the GitHub release asset digests); the node:22 slim
+> base is Debian 12 bookworm, so `apt-get install rclone` applies. The scheduler stage also creates
+> `/backup/media` owned by `node` (the local backup volume inherits it). `.dockerignore` excludes
+> `deploy` except `deploy/scheduler` (the dev-only env files of `deploy/local/` never enter the build).
 > **Assumed:** rclone over `gcloud storage rsync` — the Debian `rclone` package (~20 MB, single
 > binary, ADC/metadata auth via `env_auth=true`) vs the `google/cloud-sdk` slim image (hundreds
 > of MB plus Python); bookworm's rclone 1.60 is sufficient for GCS sync.
@@ -1231,7 +1236,7 @@ changes the exit code; unset → no ping). `MEDIA_BACKUP_DEST` prod =
 | `blog0` | `blog0:${BLOG0_IMAGE_TAG}` (build `..`, target `runtime`) | `env_file: blog0.env`; depends on `release: service_completed_successfully`; volume `blog0-storage:/data/storage`; no host port; `restart: unless-stopped` |
 | `scheduler` | `blog0-scheduler:${BLOG0_IMAGE_TAG}` (target `scheduler`) | `env_file: blog0.env`, env `MEDIA_BACKUP_DEST`; `blog0-storage:/data/storage:ro`; depends on `release` completed |
 | `listmonk` | `listmonk/listmonk:v5.1.0` | §12.6 command (install idempotent → upgrade → serve); `env_file: listmonk.env`; `ports: ['127.0.0.1:9000:9000']` (admin via SSH tunnel only); `listmonk-uploads:/listmonk/uploads`; §12.6 healthcheck |
-| `caddy` | `caddy:2.10-alpine` | `ports: ['80:80','443:443']`; `./Caddyfile:/etc/caddy/Caddyfile:ro`; `caddy-data:/data`, `caddy-config:/config`; env `BLOG0_DOMAIN`, `NEWS_DOMAIN`, `ACME_EMAIL`, `CADDY_LOCAL_CERTS` |
+| `caddy` | `caddy:2.11.7-alpine` | `ports: ['80:80','443:443','443:443/udp']`; `./Caddyfile:/etc/caddy/Caddyfile:ro`; `caddy-data:/data`, `caddy-config:/config`; env `BLOG0_DOMAIN`, `NEWS_DOMAIN`, `ACME_EMAIL`, `CADDY_LOCAL_CERTS` |
 
 Cross-service dependencies on `cloud-sql-proxy` use `required: false` so the local override can
 disable it. Volumes: `blog0-storage`, `caddy-data`, `caddy-config`, `listmonk-uploads`. Every
@@ -1243,6 +1248,11 @@ SQL); Listmonk `LISTMONK_db__host=cloud-sql-proxy`, `ssl_mode=disable`, `max_ope
 > failed migration keeps the old containers from being replaced by a new image that needs it.
 > **Assumed:** proxy `2.18.2` and Caddy `2.10` — the builder pins the newest 2.x patch of each
 > after verifying the tag exists (same rule as Listmonk, §12.6).
+> **Assumed (B1, verified 2026-10-19):** `cloud-sql-proxy:2.26.2-alpine` is the newest 2.x alpine tag
+> (gcr.io tag list); Caddy is pinned to **`caddy:2.11.7-alpine`** (newest; `2.10-alpine` exists but is
+> older); `BLOG0_IMAGE_TAG` is required (`:?`) so an `up` never runs an unnamed tag. Both `release` and
+> `blog0` carry the same `build` (target `runtime`); `blog0` gets `stop_grace_period: 15s`; Caddy also
+> publishes `443/udp` (HTTP/3).
 
 **`deploy/Caddyfile`.** Global `{ email {$ACME_EMAIL} {$CADDY_LOCAL_CERTS} }`.
 `{$BLOG0_DOMAIN} { reverse_proxy blog0:3410 }`. `{$NEWS_DOMAIN}`: named matcher `@public` =
@@ -1255,24 +1265,43 @@ SQL); Listmonk `LISTMONK_db__host=cloud-sql-proxy`, `ssl_mode=disable`, `max_ope
 (archive disabled), `/uploads/*`, `/`.
 > **Assumed:** the v5.1.0 public route shapes above; B1 proves them end-to-end (verify.sh step 6
 > curls the real tracking URLs from a Mailpit-captured message through Caddy).
+> **Verified (B1, listmonk v5.1.0, 2026-10-19):** a Mailpit-captured campaign carries
+> `/link/U/U/U` (click → **307** to the target), `/campaign/U/U/px.png` (200 `image/png`),
+> `/campaign/U/U` ("view in browser" from Listmonk's default template's `{{ MessageURL }}`; blog0's
+> `blog0-issue` template has none) and `List-Unsubscribe: <…/subscription/U/U>` +
+> `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. The unsubscribe page loads
+> `/public/static/{style.css,logo.svg,favicon.png}` **and `/public/custom.css` + `/public/custom.js`**
+> and posts its form to its own URL. `@public` therefore also allows `^/campaign/U/U$` and
+> `^/public/custom\.(css|js)$` (`/public/static/` is one path segment: `[^/]+`).
 
 **`deploy/docker-compose.local.yml`** (`docker compose -f deploy/docker-compose.prod.yml -f
 deploy/docker-compose.local.yml --env-file deploy/local/compose.env …`): `cloud-sql-proxy:
 { profiles: [gcp] }`; new `postgres: postgres:<CLOUD_SQL_MAJOR>` with network alias
 `cloud-sql-proxy` (so no URL changes), `deploy/local/init-db.sh` (creates roles `blog0`,
-`listmonk` — non-superusers owning their databases, the Cloud SQL shape), `127.0.0.1:5434:5432`,
+`listmonk` — non-superusers owning their databases, the Cloud SQL shape), `127.0.0.1:3494:5432`,
 volume `pgdata-local`; every DB-dependent service gains `depends_on: postgres: service_healthy`;
-new `mailpit: axllent/mailpit:v1.27` (`127.0.0.1:8025` UI/API); `caddy.ports: !override
-['8080:80','8443:443']`, `CADDY_LOCAL_CERTS=local_certs`; `listmonk.ports: !override
-['127.0.0.1:9100:9000']`; env files → `deploy/local/*.env`; `MEDIA_BACKUP_DEST=/backup/media` on
+new `mailpit: axllent/mailpit:v1.31.6` (`127.0.0.1:3495` UI/API); `caddy.ports: !override
+['127.0.0.1:8080:80','127.0.0.1:8443:443']`, `CADDY_LOCAL_CERTS=local_certs`; `listmonk.ports: !override
+['127.0.0.1:3491:9000']`; env files → `deploy/local/*.env`; `MEDIA_BACKUP_DEST=/backup/media` on
 volume `media-backup-local`. Domains `blog.localtest.me` / `news.localtest.me` (public DNS →
 127.0.0.1). blog0 locally keeps SMTP unset (stub transport — its SMTP never disables STARTTLS);
 Listmonk SMTP → `mailpit:1025`, never a real server.
 > **Assumed:** `localtest.me` resolution; `deploy-smoke.sh` also honours `BLOG0_SMOKE_RESOLVE=127.0.0.1`
 > (adds curl `--resolve`) for offline runs, which verify.sh sets.
+> **Assumed (B1, owner's port/isolation rules for this machine):** the override's project name is
+> **`blog0-prodlocal`** (not `blog0-local`) and its host ports are Caddy `127.0.0.1:8080/8443`,
+> Listmonk admin **`127.0.0.1:3491`** (not 9100), Postgres **`127.0.0.1:3494`** (not 5434; verify.sh
+> step 4 seeds through it), Mailpit UI/API **`127.0.0.1:3495`** (not 8025; SMTP unpublished) — so the
+> dev stack (`blog0`: :9000/:5433, test Mailpit :8025) is never touched. Mailpit is pinned to
+> `axllent/mailpit:v1.31.6` (= the root compose test stack). The local Postgres healthcheck is
+> `pg_isready -h 127.0.0.1` (TCP — not ready during the init scripts). verify.sh builds the two images
+> sequentially (`compose build release`, then `scheduler`) before `up -d --build --wait` (2 GB Colima),
+> seeds with the stubs forced (`BLOG0_NEWSLETTER_SENDER=stub`, empty SMTP/Listmonk/heartbeat vars)
+> so the host's `.env` cannot reach a relay, and in step 6 also requires every captured news-host URL
+> and every asset of the unsubscribe page to pass the edge, and Listmonk's campaign `views`/`clicks` ≥ 1.
 
-**`deploy/listmonk-settings.sh <listmonk-url>`** (admin basic auth from `LISTMONK_ADMIN_USER`/
-`LISTMONK_ADMIN_PASSWORD`, like `listmonk-dev.sh`): GET then PUT `/api/settings` merging only —
+**`deploy/listmonk-settings.sh [--env-file <file>] <listmonk-url>`** (admin session login from `LISTMONK_ADMIN_USER`/
+`LISTMONK_ADMIN_PASSWORD`, like `listmonk-dev.sh`; `--env-file` fills only unset variables): GET then PUT `/api/settings` merging only —
 `app.root_url = $LISTMONK_ROOT_URL` (prod `https://news.<domain>`, local
 `https://news.localtest.me:8443`; opens/clicks resolve), `privacy.unsubscribe_header=true`,
 `privacy.allow_export=false`, `privacy.allow_wipe=false`, `app.enable_public_archive=false`,
@@ -1281,6 +1310,11 @@ Listmonk SMTP → `mailpit:1025`, never a real server.
 `LISTMONK_BOUNCE_POP_{HOST,PORT,USER,PASSWORD}`, scan 15 m, hard bounce → blocklist) when
 `LISTMONK_BOUNCE_POP_HOST` is set. Prints `listmonk-settings: ok` (no secret echoed); exit 1 on
 any API error.
+> **Assumed (B1):** v5's API takes no admin basic auth, so the script logs in like `listmonk-dev.sh`
+> (nonce + session cookie; the password reaches curl through a 0600 file, never argv); optional
+> `LISTMONK_FROM_EMAIL` → `app.from_email` (Gmail requires the authenticated mailbox or a verified
+> alias); SMTP auth `plain` when `LISTMONK_SMTP_USER` is set, else `none`; the existing entry's uuid
+> is kept; after the PUT it waits for Listmonk's reload and reads the settings back.
 > **Assumed:** root URL is a DB setting in v5 (not config) — hence the script; Gmail's
 > 2 000/day per-user limit → the 1 800/day window; the sending mailbox (e.g. `newsletter@<domain>`)
 > is dedicated and is also the POP bounce mailbox (Gmail sets Return-Path to the authenticated
@@ -1304,10 +1338,10 @@ each line `deploy-smoke: <check> ok`, first failure `deploy-smoke: FAIL <check> 
 `deploy-local: <step>`; trap tears the stack down with `down -v` unless `--keep`): 1. `compose
 config -q` for prod alone (with `compose.env.example`) and prod+local; 2. `up -d --build --wait`;
 3. `docker compose run --rm release` again → `0 pending: OK` (idempotent); 4. seed with
-`BLOG0_DATABASE_URL=postgres://blog0:blog0@127.0.0.1:5434/blog0`: `pnpm db:seed:posts` then
+`BLOG0_DATABASE_URL=postgres://blog0:blog0@127.0.0.1:3494/blog0`: `pnpm db:seed:posts` then
 `pnpm seed:tldr -- --source fixture` (committed decks, 0 AI calls) and `docker compose exec blog0 node -e
 "require('fs').writeFileSync('/data/storage/verify-media.txt','ok')"` (a file for step 7); 5.
-`listmonk-settings.sh http://127.0.0.1:9100` with Mailpit SMTP; 6. via the Listmonk API create a
+`listmonk-settings.sh http://127.0.0.1:3491` with Mailpit SMTP; 6. via the Listmonk API create a
 list + subscriber + campaign whose body has one `{{ TrackLink "https://blog.localtest.me:8443/" }}`
 and `{{ TrackView }}`, start it, poll Mailpit's API for the message, extract the `news…/link/…` and
 `…/px.png` URLs, curl them through Caddy (`--insecure --resolve`): link → 3xx to the target,

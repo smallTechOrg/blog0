@@ -26,3 +26,6 @@ vitest.config.ts
 .DS_Store
 Dockerfile
 .dockerignore
+# Stage B deploy kit: only the scheduler's crontab + backup script reach the image (Dockerfile `scheduler`).
+deploy
+!deploy/scheduler

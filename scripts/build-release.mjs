@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// pnpm build:release — bundles scripts/release.ts into dist/release.mjs and (Stage A)
-// scripts/reset-password.ts into dist/reset-password.mjs with identical options (spec/architecture.md
-// §12.1), so the container runs `node release.mjs` / `node reset-password.mjs --email <e>` without tsx,
-// dev dependencies or the full node_modules.
+// pnpm build:release — bundles scripts/release.ts into dist/release.mjs, (Stage A)
+// scripts/reset-password.ts into dist/reset-password.mjs and (Stage B, spec/architecture.md §12.7)
+// scripts/newsletter-tick.ts into dist/newsletter-tick.mjs with identical options (spec/architecture.md
+// §12.1), so the container runs `node release.mjs` / `node reset-password.mjs --email <e>` /
+// `node newsletter-tick.mjs` without tsx, dev dependencies, the full node_modules or a repo checkout.
+// The tick reaches the content pipeline (Shiki, unified) through issue snapshots: bundled, not external.
 //
 // Module resolution in the image: Next's standalone output (pnpm layout) exposes only a few packages
 // at /app/node_modules — `@node-rs/argon2` is one of them, but `postgres` and `@electric-sql/pglite`
@@ -30,7 +32,7 @@ const stubServerOnlyShim = {
 
 const PGLITE_STUB = `
 const unavailable = () => {
-  throw new Error('PGlite is not part of the bundled CLIs (release.mjs, reset-password.mjs) — they are for Postgres; in designer mode use pnpm dev:design / pnpm admin:reset-password');
+  throw new Error('PGlite is not part of the bundled CLIs (release.mjs, reset-password.mjs, newsletter-tick.mjs) — they are for Postgres; in designer mode use pnpm dev:design / pnpm admin:reset-password');
 };
 export class PGlite { constructor() { unavailable(); } static create() { unavailable(); } }
 export const types = {};
@@ -45,10 +47,11 @@ const stubPglite = {
   },
 };
 
-/** Both CLIs the image carries: same options, so both resolve modules the same way in /app. */
+/** The CLIs the image carries: same options, so all resolve modules the same way in /app. */
 const ENTRIES = [
   ['scripts/release.ts', 'release.mjs'],
   ['scripts/reset-password.ts', 'reset-password.mjs'],
+  ['scripts/newsletter-tick.ts', 'newsletter-tick.mjs'],
 ];
 
 for (const [entry, name] of ENTRIES) {

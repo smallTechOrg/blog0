@@ -1,0 +1,44 @@
+# blog0 edge (Stage B, spec/architecture.md §12.7) — one file for production and local verification,
+# parameterised by the caddy service's environment (deploy/docker-compose.prod.yml):
+#   BLOG0_DOMAIN       the site, e.g. example.com              (local: blog.localtest.me)
+#   NEWS_DOMAIN        Listmonk's public host, news.<domain>    (local: news.localtest.me)
+#   ACME_EMAIL         Let's Encrypt account e-mail (expiry notices)
+#   CADDY_LOCAL_CERTS  empty in production (ACME certificates); `local_certs` locally (Caddy's own CA)
+# {$VAR} is substituted before parsing, so an empty CADDY_LOCAL_CERTS disappears entirely.
+{
+	email {$ACME_EMAIL}
+	{$CADDY_LOCAL_CERTS}
+}
+
+# The site: everything goes to blog0 (it sets its own security headers; X-Forwarded-For is appended
+# here, hence BLOG0_TRUSTED_PROXY_HOPS=1).
+{$BLOG0_DOMAIN} {
+	reverse_proxy blog0:3410
+}
+
+# Listmonk's public surface — ONLY what a subscriber's mail client / browser needs (paths verified
+# against listmonk v5.1.0 by deploy/local/verify.sh step 6 from a Mailpit-captured campaign):
+#   /link/<link>/<campaign>/<subscriber>          click-tracking redirect (307) ({{ TrackLink }})
+#   /campaign/<campaign>/<subscriber>/px.png      open-tracking pixel           ({{ TrackView }})
+#   /campaign/<campaign>/<subscriber>             "view in browser"             ({{ MessageURL }}, Listmonk's
+#                                                 default template; blog0's own issue template has none)
+#   /subscription/<campaign>/<subscriber>         Listmonk's unsubscribe page (+ ?manage=true) and its form
+#                                                 POST; also the List-Unsubscribe header URL (one-click POST,
+#                                                 List-Unsubscribe-Post: List-Unsubscribe=One-Click)
+#   /public/static/<file>, /public/custom.css, /public/custom.js   that page's style, logo, favicon,
+#                                                 appearance CSS/JS
+# Everything else — /admin*, /api/* (incl. /api/public/*), /subscription/form, /subscription/optin/*,
+# export/wipe, /archive*, /uploads/*, / — answers 404 with X-Blog0-Edge: denied (the admin UI is
+# reached only through an SSH tunnel to 127.0.0.1:9000 on the VM).
+{$NEWS_DOMAIN} {
+	@public {
+		path_regexp ^/(link/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|campaign/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(/px\.png)?|subscription/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|public/static/[^/]+|public/custom\.(css|js))$
+	}
+	handle @public {
+		reverse_proxy listmonk:9000
+	}
+	handle {
+		header X-Blog0-Edge denied
+		respond 404
+	}
+}

@@ -35,7 +35,7 @@ const updatedAt = () =>
   timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow()
-    .$onUpdate(() => new Date());
+    .$onUpdate(() => sql`now()`); // DB clock on update too (matches defaultNow on insert)
 const siteId = () =>
   uuid('site_id')
     .notNull()

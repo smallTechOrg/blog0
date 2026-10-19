@@ -1,5 +1,7 @@
 # Deploying blog0
 
+> **Google Cloud (VM + Docker + Cloud SQL):** the step-by-step runbook is [`docs/deploy-gcp.md`](deploy-gcp.md); this file stays the platform-neutral reference.
+
 blog0 ships as **one OCI image** (`Dockerfile`, non-root uid 1000, `node:22.23.1-slim`) that any
 container platform can run. The same image has two commands:
 

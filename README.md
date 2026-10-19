@@ -336,6 +336,7 @@ With a real key present, a rejected key (401/403) or any provider error is alway
 | `pnpm release` | the release step run locally via `tsx` (migrate + verify 0 pending + ensure the site row and, when `BLOG0_ADMIN_EMAIL`/`BLOG0_ADMIN_PASSWORD` are set, the first admin) against `BLOG0_DATABASE_URL` (postgres:// only); the image runs the same step as `node release.mjs` |
 | `pnpm build:release` | bundles `scripts/release.ts` into `dist/release.mjs` (esbuild) — the image's release step; the Dockerfile runs it after `pnpm build` |
 | `pnpm test:container` | builds the container image, runs the release step and the full E2E suite against the container on port **3412** (needs Docker) — see [Deploy](#deploy) |
+| `pnpm pg:compat -- <major>` | the integration suite (plus `db:migrate`/`db:verify` as a non-superuser owner) on a throwaway `postgres:<major>` container on port **5440** (needs Docker; exit 3 = `PENDING DOCKER`) → `pg-compat: PostgreSQL <major> PASS` — see [`docs/deploy-gcp.md`](docs/deploy-gcp.md) |
 
 `pnpm test:e2e` runs 5 Playwright projects in a fixed order — `tldr` → `reader` → `listen` →
 `smoke` → `newsletter` — because they share `blog0_test` and each needs the state the previous one leaves.
@@ -363,6 +364,12 @@ blog0 deploys as one non-root container image (`Dockerfile`) with a separate rel
 `/data/storage`. The runbook — environment table, first deploy, upgrades, backups + restore
 drill, rotating `BLOG0_SESSION_SECRET`, health probes, logs, reverse proxy + TLS, scaling — is
 [`docs/deploy.md`](docs/deploy.md).
+
+**Deploy to GCP** (one Compute Engine VM running Docker + Cloud SQL for PostgreSQL 18 + a GCS
+bucket for media + Google Workspace SMTP): follow [`docs/deploy-gcp.md`](docs/deploy-gcp.md) —
+owner inputs checklist, exact `gcloud` commands, first release, smoke test, restore drill,
+upgrades, rollback, costs. Prove the kit locally first with `pnpm deploy:local` and
+`pnpm pg:compat -- 18`.
 
 Prove the image end to end locally (Docker running, e.g. `colima start`; Postgres + `.env` as for
 the tests):
