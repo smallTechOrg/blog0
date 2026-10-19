@@ -12,6 +12,7 @@ import type { NewsletterSender } from './types';
 export * from './types';
 export { ListmonkSender, BLOG0_BLOCKLIST_MARKER, escapeGoTemplate, isBlog0Blocklist, listmonkOptOut, redactEmails, safePath, toListmonkExpressions, toListmonkCampaignBody, trackLinks, BLOG0_TEMPLATE_NAME, BLOG0_TEMPLATE_BODY } from './listmonk';
 export { latestConsentMs, providerOptOutWins } from './opt-out';
+export { isPublicHost, isPublicUrl } from './public-host';
 export { StubNewsletterSender, type StubCampaign, type StubSenderOptions } from './stub';
 
 let current: NewsletterSender | null = null;

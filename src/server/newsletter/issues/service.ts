@@ -26,6 +26,8 @@ import { SENDING_STALE_MS } from '../constants';
 import { consentLine, privacyUrl, unsubscribeUrl, UNSUBSCRIBE_PATH } from '../links';
 import { getMailTransport, MailError } from '../mail';
 import * as listRepo from '../repo';
+import { getNewsletterSender } from '../sender';
+import type { NewsletterSender } from '../sender/types';
 
 import { renderIntro } from './intro';
 import { fillPlaceholders, renderIssueHtml, renderIssueText } from './render';
@@ -93,7 +95,16 @@ export function issueWarnings(siteRow: Pick<SiteRow, 'newsletterPostalAddress'>)
   return siteRow.newsletterPostalAddress.trim() === '' ? ['postal_address_missing'] : [];
 }
 
-export async function issueDetail(db: Executor, row: NewsletterIssueRow): Promise<IssueDetailDto> {
+/** Stage A `trackingPublic` for the issue page (the sender's own answer; never throws). */
+async function trackingPublicOf(sender: NewsletterSender): Promise<boolean> {
+  try {
+    return await sender.trackingPublic();
+  } catch {
+    return true;
+  }
+}
+
+export async function issueDetail(db: Executor, row: NewsletterIssueRow, sender: NewsletterSender = getNewsletterSender()): Promise<IssueDetailDto> {
   const siteRow = await siteRowById(db, row.siteId);
   const events = await repo.issueEvents(db, row.id);
   const names = await repo.userNames(db, [row.createdBy, row.sentBy, ...events.map((e) => e.actorUserId)]);
@@ -110,6 +121,7 @@ export async function issueDetail(db: Executor, row: NewsletterIssueRow): Promis
     editable: row.status === 'draft',
     stuckSending: isStuckSending(row),
     warnings: issueWarnings(siteRow),
+    trackingPublic: await trackingPublicOf(sender),
   };
 }
 

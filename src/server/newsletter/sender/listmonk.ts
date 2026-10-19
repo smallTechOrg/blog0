@@ -18,6 +18,7 @@ import {
   type ProviderDeleteTarget,
 } from './types';
 import { providerOptOutWins } from './opt-out';
+import { isPublicUrl } from './public-host';
 
 // Listmonk adapter (spec/architecture.md §13.3; Listmonk v5.1.0, API-user token auth).
 // Plain `fetch`, 15 s timeout per call, one retry on network error / 5xx after 500 ms; every call
@@ -45,6 +46,8 @@ export const BLOG0_BLOCKLIST_MARKER = 'blog0_blocklisted_at';
 
 const TIMEOUT_MS = 15_000;
 const RETRY_BACKOFF_MS = 500;
+/** Stage A: how long a `trackingPublic` answer is reused (per process). */
+export const TRACKING_CACHE_MS = 10 * 60 * 1000;
 
 /**
  * Listmonk runs subject, body and altbody through Go's text/template: a literal `{{` / `}}` in blog0's
@@ -190,6 +193,10 @@ interface CallOptions {
   body?: Json;
   /** Statuses returned to the caller as `{ status, data: null }` instead of throwing. */
   tolerate?: number[];
+  /** Per-call timeout (default 15 s). */
+  timeoutMs?: number;
+  /** false → a single attempt (no retry on network error / 5xx). */
+  retry?: boolean;
 }
 
 interface CallResult<T> {
@@ -255,6 +262,7 @@ export class ListmonkSender implements NewsletterSender {
   readonly #auth: string;
   readonly #listId: number;
   #templateId: number | null = null;
+  #tracking: { value: boolean; at: number } | null = null;
 
   constructor(config: ListmonkConfig) {
     this.#baseUrl = config.url.replace(/\/+$/, '');
@@ -269,7 +277,7 @@ export class ListmonkSender implements NewsletterSender {
   // --- HTTP --------------------------------------------------------------------------------------
 
   async #call<T>(options: CallOptions): Promise<CallResult<T>> {
-    const { method, path, body, tolerate = [] } = options;
+    const { method, path, body, tolerate = [], timeoutMs = TIMEOUT_MS, retry = true } = options;
     const url = `${this.#baseUrl}${path}`;
     // Every message / log line below names the path WITHOUT its query (B1: `?query=subscribers.email=…`
     // carries an address; SenderError messages reach logs, `last_error` and stderr).
@@ -288,12 +296,12 @@ export class ListmonkSender implements NewsletterSender {
             ...(body === undefined ? {} : { 'content-type': 'application/json' }),
           },
           body: body === undefined ? undefined : JSON.stringify(body),
-          signal: AbortSignal.timeout(TIMEOUT_MS),
+          signal: AbortSignal.timeout(timeoutMs),
           cache: 'no-store',
         });
       } catch (error) {
         const timedOut = error instanceof Error && error.name === 'TimeoutError';
-        if (attempt === 1) {
+        if (attempt === 1 && retry) {
           this.#logCall(method, path, null, started, attempt, 'retry', error);
           await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
           continue;
@@ -302,12 +310,12 @@ export class ListmonkSender implements NewsletterSender {
         throw new SenderError(
           timedOut ? 'TIMEOUT' : 'UNAVAILABLE',
           timedOut
-            ? `Listmonk did not answer ${method} ${shown} within ${TIMEOUT_MS / 1000} s`
+            ? `Listmonk did not answer ${method} ${shown} within ${timeoutMs / 1000} s`
             : `Listmonk unreachable at ${this.#baseUrl}: ${redactEmails(error instanceof Error ? error.message : String(error))}`,
         );
       }
 
-      if (response.status >= 500 && attempt === 1) {
+      if (response.status >= 500 && attempt === 1 && retry) {
         this.#logCall(method, path, response.status, started, attempt, 'retry');
         await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
         continue;
@@ -610,6 +618,29 @@ export class ListmonkSender implements NewsletterSender {
       });
     }
     return out;
+  }
+
+  // --- tracking (Stage A) ---------------------------------------------------------------------------
+
+  /**
+   * Can opens / clicks be counted? Listmonk's pixel and link redirects live under its `app.root_url`;
+   * a reader's mail client must reach that host. `GET /api/settings` (3 s, no retry; needs the API
+   * user's `settings:get`) → `app.root_url`; any failure → `BLOG0_LISTMONK_URL`. Cached 10 min per
+   * process. Never throws. (The settings payload carries SMTP credentials: nothing of it is logged.)
+   */
+  async trackingPublic(now: number = Date.now()): Promise<boolean> {
+    if (this.#tracking !== null && now - this.#tracking.at < TRACKING_CACHE_MS) return this.#tracking.value;
+    let rootUrl = this.#baseUrl;
+    try {
+      const { data } = await this.#call<Record<string, unknown> | null>({ method: 'GET', path: '/api/settings', timeoutMs: 3000, retry: false });
+      const fromSettings = isJsonObject(data) ? data['app.root_url'] : undefined;
+      if (typeof fromSettings === 'string' && fromSettings.trim() !== '') rootUrl = fromSettings.trim();
+    } catch {
+      // fall back to BLOG0_LISTMONK_URL
+    }
+    const value = isPublicUrl(rootUrl);
+    this.#tracking = { value, at: now };
+    return value;
   }
 
   // --- health ------------------------------------------------------------------------------------

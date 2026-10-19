@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { delayDecision, LOGIN_DELAY_RESET_MS } from './auth/login-delay';
+
 // Throttle core (spec/architecture.md §6, capability abuse-protection):
 // - FixedWindowCounter: first-hit windows keyed by string, in memory per process, bounded in size;
 // - RateLimitStore: the async store the login and newsletter throttles call. MemoryRateLimitStore
@@ -84,7 +86,10 @@ export type RateScope =
   | 'newsletter.site'
   // Phase 7: the confirm + unsubscribe links (pages and JSON routes share these two buckets).
   | 'newsletter.link.ip'
-  | 'newsletter.link.site';
+  | 'newsletter.link.site'
+  // Stage A: login hard caps per real IP + the progressive per-email delay (login.email is no longer written).
+  | 'login.ip'
+  | 'login.delay';
 
 export interface RateBucket {
   scope: RateScope;
@@ -106,6 +111,14 @@ export interface RateLimitStore {
   clear(siteId: string, bucket: RateBucket, now: number): Promise<void>;
   /** Deletes expired windows; returns how many. */
   prune(now: number): Promise<number>;
+  /**
+   * Stage A — progressive delay (scope `login.delay`), atomic check-and-reserve for one key: inside the
+   * wait of the key's schedule (auth/login-delay.ts) → limited, nothing counted; else n + 1 and
+   * "last attempt" = now. A key idle for 15 minutes starts again at n = 0.
+   */
+  attemptDelay(siteId: string, key: string, now: number): Promise<RateCheck>;
+  /** Forgets the key's delay (a correct password, a password reset). */
+  clearDelay(siteId: string, key: string): Promise<void>;
 }
 
 /**
@@ -116,6 +129,8 @@ export interface RateLimitStore {
 export class MemoryRateLimitStore implements RateLimitStore {
   readonly kind = 'memory' as const;
   readonly #counters = new Map<string, FixedWindowCounter>();
+  /** login.delay state per `siteId\0key`: attempts since the last success + the last attempt's time. */
+  readonly #delays = new Map<string, { count: number; last: number }>();
 
   #counter(bucket: RateBucket): FixedWindowCounter {
     const id = `${bucket.scope}\u0000${bucket.max}\u0000${bucket.windowMs}`;
@@ -163,12 +178,48 @@ export class MemoryRateLimitStore implements RateLimitStore {
   async prune(now: number): Promise<number> {
     let removed = 0;
     for (const counter of this.#counters.values()) removed += counter.prune(now);
-    return removed;
+    return removed + this.#pruneDelays(now);
   }
 
-  /** Tracked windows across every counter (tests: memory stays bounded). */
+  async attemptDelay(siteId: string, key: string, now: number): Promise<RateCheck> {
+    return this.attemptDelaySync(siteId, key, now);
+  }
+
+  /** The synchronous core of `attemptDelay` (no await between the check and the reservation). */
+  attemptDelaySync(siteId: string, key: string, now: number): RateCheck {
+    const id = `${siteId}\u0000${key}`;
+    const entry = this.#delays.get(id);
+    const live = entry !== undefined && now < entry.last + LOGIN_DELAY_RESET_MS;
+    const n = live ? entry.count : 0;
+    const decision = delayDecision(n, live ? entry.last : null, now);
+    if (decision.limited) return { limited: true, retryAfterSec: decision.retryAfterSec, scope: 'login.delay' };
+    if (!entry && this.#delays.size >= MAX_ENTRIES) this.#pruneDelays(now);
+    this.#delays.delete(id); // re-insert so Map order stays oldest-first for the overflow prune
+    this.#delays.set(id, { count: n + 1, last: now });
+    return { limited: false };
+  }
+
+  async clearDelay(siteId: string, key: string): Promise<void> {
+    this.#delays.delete(`${siteId}\u0000${key}`);
+  }
+
+  /** Drops idle delay keys (and, if still at capacity, the oldest); returns how many. */
+  #pruneDelays(now: number): number {
+    const before = this.#delays.size;
+    for (const [id, entry] of this.#delays) {
+      if (now >= entry.last + LOGIN_DELAY_RESET_MS) this.#delays.delete(id);
+    }
+    let overflow = this.#delays.size - MAX_ENTRIES + 1;
+    for (const id of this.#delays.keys()) {
+      if (overflow-- <= 0) break;
+      this.#delays.delete(id);
+    }
+    return before - this.#delays.size;
+  }
+
+  /** Tracked windows across every counter plus delay keys (tests: memory stays bounded). */
   get size(): number {
-    let total = 0;
+    let total = this.#delays.size;
     for (const counter of this.#counters.values()) total += counter.size;
     return total;
   }

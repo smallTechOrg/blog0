@@ -111,7 +111,10 @@ images). Assets in `public/`: `favicon.svg`, `favicon-32.png`, `favicon.ico`, `o
 tagline in `--muted`, a 6 px `--accent` rule; made once with any tool, the binary is committed) and
 `logo.png` (512×512 wordmark mark, the JSON-LD publisher logo). **Designer-replaceable:** a
 designer may overwrite any of these files keeping the name, format and pixel size; nothing else
-changes. **JSON-LD** (`JsonLd.tsx`, escaping and CSP: `spec/architecture.md` §6): home → one
+changes. > **Assumed (A1):** the committed card renders the wordmark's last character (the nought)
+in `--accent` like the masthead; `favicon.svg` is an `--accent` nought ring on a `--text` rounded
+tile (32/16 px PNG/ICO rasterised from it); the (site) layout supplies `metadataBase` and the default
+share tags, so the newsletter link pages inherit them. **JSON-LD** (`JsonLd.tsx`, escaping and CSP: `spec/architecture.md` §6): home → one
 `@graph` with `Organization` (`name` = brand, `url`, `logo` = absolute `/logo.png`, `sameAs` = the
 site's X/LinkedIn URLs when set) and `WebSite` (`name`, `url`); article → `Article` (`headline`
 title, `description` dek, `datePublished` `first_published_at`, `dateModified`
@@ -129,7 +132,8 @@ recorded — this environment doesn't send email."; `failed` → "We couldn't se
 email — please try again shortly." (`role=alert`, the form stays usable for a retry). The form adds
 a honeypot `<input name="website" tabindex="-1" autocomplete="off">` inside a wrapper with
 `aria-hidden="true"` and an off-screen class (never `display:none`), and sends `website` (its
-value) and `fillMs = Math.round(performance.now() − mountedAt)` with the body (`spec/api.md`).
+value) and `fillMs = Math.round(performance.now() − mountedAt)` with the body (`spec/api.md`). > **Assumed (A1):** a
+success response without a known `delivery` reads as `sent`.
 
 ### Newsletter link pages `/newsletter/confirm`, `/newsletter/confirmed`, `/newsletter/unsubscribe` (Phase 7)
 > **Owner decision (2026-10-19) — confirm on open:** `GET /newsletter/confirm?t=…` is a **route
@@ -560,7 +564,9 @@ issue. Validation inline (`ISSUE_POSTS_INVALID` names the offending titles).
   ≥ 60 s since the last; stopped on unmount; one request in flight at a time); a failed refresh
   keeps the last tiles and shows "Couldn’t refresh stats" muted beside "as of …"; **Refresh stats**
   stays. When `issue.trackingPublic === false` a small muted note under the tiles reads "Opens
-  can't be counted: Listmonk's public URL isn't reachable from the internet."
+  can't be counted: Listmonk's public URL isn't reachable from the internet." > **Assumed (A1):** an
+  auto-refresh tick that finds another action's request in flight is skipped (the next tick retries);
+  the note also shows when no stats exist yet.
 - States: loading "Loading the issue…", `AdminLoadError` + Retry, 404 → "That issue isn’t here."
 
 > **Assumed (S7.4):** the Subscriber **Messages** card has no **Open confirm link** — `SubscriberMessageDto`

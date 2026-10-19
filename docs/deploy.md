@@ -53,11 +53,13 @@ makes the server log one aggregated error and exit 1 before serving.
 | `BLOG0_LISTMONK_API_TOKEN` | with sender `listmonk` | — | **yes** | the API user's token |
 | `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | optional | — | **yes** | ≥ 24 chars (`openssl rand -base64 32`); unset → `POST /api/newsletter/webhook` answers 404 |
 | `BLOG0_UNSUBSCRIBE_SECRET` | optional | session secret | **yes** | ≥ 24 chars (`openssl rand -base64 32`); signs **new** unsubscribe links, verified before the session secret. Set it once, before the first issue, so a later session-secret rotation leaves mailed links working. See [Rotating the secrets](#rotating-blog0_session_secret) |
+| `BLOG0_HEARTBEAT_BACKUP_URL` / `BLOG0_HEARTBEAT_TICK_URL` | optional (validated at boot) | — | **yes** (the URL is the credential) | absolute http(s) dead-man's-switch URLs pinged by `pnpm backup` / `pnpm newsletter:tick` — see [Heartbeats](#heartbeats) |
 | `BLOG0_STORAGE_DIR` | baked in: `/data/storage` | — | no | do not change; mount the volume there |
 | `PORT` / `HOSTNAME` / `NODE_ENV` | baked in: `3410` / `0.0.0.0` / `production` | — | no | map a host/ingress port to 3410 instead of changing `PORT` |
 
-Not read by the container: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_DIR`,
-`BLOG0_STANDALONE`, `BLOG0_NEW_ADMIN_PASSWORD`, `BLOG0_E2E_*`, `BLOG0_REQUIRE_REAL_KEY`,
+Not read by the web server: `BLOG0_TEST_DATABASE_URL`, `BLOG0_PORT`, `BLOG0_DIST_DIR`,
+`BLOG0_STANDALONE`, `BLOG0_NEW_ADMIN_PASSWORD` (only by `node reset-password.mjs` —
+[Reset an admin password](#reset-an-admin-password)), `BLOG0_E2E_*`, `BLOG0_REQUIRE_REAL_KEY`,
 `BLOG0_CONTAINER_BUILD`, `BLOG0_LISTMONK_PORT`, `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD`
 (local scripts and tests only; the last two are read by Listmonk's own first install).
 
@@ -184,6 +186,32 @@ backup **off the host** (another region/provider, e.g. `rclone copy` / `aws s3 s
 of `/srv/backups`) — a backup on the database's own disk is not a backup. The dump contains
 password hashes and subscriber emails: store it encrypted and access-controlled.
 
+### Heartbeats
+
+A cron job that silently stops (host rebooted, crontab lost, `pg_dump` upgraded away) is worse
+than one that fails loudly. Give each scheduled job a dead-man's switch — e.g. a free
+[healthchecks.io](https://healthchecks.io) check per job (period 1 day + grace 2 h for the backup;
+1 h + 30 min for the tick) — and put its ping URL in the job's environment (`.env` of the ops
+checkout):
+
+```bash
+BLOG0_HEARTBEAT_BACKUP_URL=https://hc-ping.com/<uuid-of-the-backup-check>
+BLOG0_HEARTBEAT_TICK_URL=https://hc-ping.com/<uuid-of-the-tick-check>
+```
+
+- `pnpm backup` sends `GET <url>` after a successful backup and `GET <url>/fail` after a failed one;
+  `pnpm newsletter:tick` does the same with its own URL (a tick with any failed step counts as
+  failed). Missed pings → the service alerts you; a `/fail` ping alerts at once.
+- 5 s timeout; the ping **never changes the job's exit code**. Each ping logs one `ops.heartbeat`
+  line (`job`, `signal`, `outcome` = `ok` | `http_error` | `timeout` | `network_error` |
+  `invalid_url`, `status`, `ms`) — never the URL, which embeds the check's secret uuid. Treat both
+  values as secrets.
+- A usage error (exit 2) pings nothing. An invalid value (not an absolute http(s) URL) makes the
+  web server refuse to boot (aggregated config error) and makes a script log `invalid_url` once
+  while the job itself still runs. Services without the healthchecks.io `/fail` convention answer
+  it with a 404 (logged `http_error`) — harmless.
+- Prove it: `pnpm backup -- --out var/backups` → the backup check turns green.
+
 ## Restore
 
 Restore into a **scratch** database first, check it, then point the app at it:
@@ -209,6 +237,43 @@ BLOG0_DATABASE_URL='postgres://…/blog0_restored' pnpm db:verify      # … 0 p
 **Drill** (monthly): restore the latest backup into `blog0_restore_check` with
 `--storage /tmp/blog0-restore-check --force`, expect `restore-check: OK`, then drop it. A backup
 that has never been restored is a hope, not a backup.
+
+## Reset an admin password
+
+Forgotten password, or a password that may have leaked (Stage A — there is no email reset):
+
+```bash
+# in the production container (the image carries the bundled CLI):
+docker exec -it blog0 node reset-password.mjs --email you@example.com
+# → New password (12–200 characters): ****   Repeat the new password: ****
+# password reset for y***@example.com · 2 sessions ended
+
+# non-interactive (e.g. a platform "run command"): pass the password in the environment
+docker exec -e BLOG0_NEW_ADMIN_PASSWORD='<new password>' blog0 node reset-password.mjs --email you@example.com
+
+# from an ops checkout (or designer mode — pglite:// works here, not in the image):
+BLOG0_NEW_ADMIN_PASSWORD='<new password>' pnpm admin:reset-password --email you@example.com
+```
+
+What it does, in one transaction: sets the new password (argon2id), **ends every session of that
+admin** (all their browsers are signed out) and clears the email's sign-in delay (below). It prints
+only the masked email and the number of sessions ended — never the password — and logs
+`auth.password_reset`. Exit 1: no admin with that email in `BLOG0_SITE_SLUG`'s site (nothing
+changes); exit 2: a password outside 12–200 characters, no `--email`, or no password source (set
+`BLOG0_NEW_ADMIN_PASSWORD` or run with a terminal — `docker exec -it`). Prefer the prompt: an
+environment variable can end up in shell history.
+
+### Sign-in throttling (why an attacker can't lock you out)
+
+Knowing the admin email is not enough to lock the owner out. After 5 attempts for one email
+(since its last successful sign-in), every further attempt must wait 1 s, then 2, 4, 8, 16, 32 and
+at most 60 s after the previous one; an attempt inside the wait is refused ("Too many attempts — try
+again in N seconds.", `429` + `Retry-After`) without the password being checked, and the **right
+password after the wait signs in**. 15 quiet minutes reset the count. With a real client IP
+(`BLOG0_TRUSTED_PROXY_HOPS` set behind a proxy) there are also hard caps: 5 failures per (email, IP)
+and 50 per IP within 15 minutes. The delay is stored in Postgres (`rate_limit_bucket`, scope
+`login.delay`), so it holds across restarts and instances; `auth.login` log lines carry the
+`scope` of every refusal. A reset (above) clears the email's delay immediately.
 
 ## Rotating `BLOG0_SESSION_SECRET`
 
@@ -315,6 +380,16 @@ Prove it: sign up with your own address on the public site → the email arrives
 `"outcome":"sent"` (an `"outcome":"failed"` line carries the relay's error; the signup itself still
 succeeds and the admin can resend from the subscriber page).
 
+The signup form tells the reader what happened (`delivery` in the response): "Almost there — check
+your inbox and confirm." when the SMTP relay accepted the confirmation; "Signup recorded — this
+environment doesn't send email." while `BLOG0_SMTP_HOST` is unset (the stub); "We couldn't send your
+confirmation email — please try again shortly." when the relay refused it (the pending signup is
+kept). Addresses that send nothing (already confirmed, over the 3-per-day cap, suppressed) get the
+environment's success answer, so the form never reveals who is subscribed. Bots are dropped
+silently before anything is counted or stored: a filled hidden `website` field, or a submission
+less than 2 s after the form appeared, gets the same success answer and one
+`newsletter.signup_dropped` log line (`reason` `honeypot` | `too_fast`, never the email).
+
 ### DNS for the From domain (SPF, DKIM, DMARC)
 
 Without these, Gmail/Yahoo/Outlook junk or reject the mail. All records are on the domain of
@@ -403,7 +478,12 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
    BLOG0_LISTMONK_LIST_ID=<n>
    ```
 
-   **Site → Newsletter** now reads "Sender: **Listmonk** · list blog0 · healthy". Push the existing
+   **Site → Newsletter** now reads "Sender: **Listmonk** · list blog0 · healthy". Opens and clicks
+   are counted only when Listmonk's **root URL** (`LISTMONK_app__root_url`, Settings → General →
+   Root URL) is a public host that readers' mail clients can reach; with `localhost`, a private IP
+   or a single-label name (`listmonk`) the issue page notes that opens can't be counted (blog0 reads
+   the root URL via `GET /api/settings` — the API user needs `settings:get`; else it falls back to
+   `BLOG0_LISTMONK_URL` — and re-checks every 10 minutes). Push the existing
    confirmed subscribers once: **Sync to Listmonk** there, or `pnpm newsletter:sync` from the ops
    checkout (`synced N, blocklisted N, skipped N, N changed`; a second run `… 0 changed`). Every
    send syncs again first.
@@ -430,6 +510,7 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
 
   ```cron
   7 * * * * cd /srv/blog0-repo && pnpm -s newsletter:tick >> /var/log/blog0-newsletter-tick.log 2>&1
+  # optional: BLOG0_HEARTBEAT_TICK_URL in the checkout's .env → alerts when the tick stops or fails (see Heartbeats)
   # digest: not due; suppressions pulled 0; stats refreshed 1; ips pruned 0; erasures retried 0
   ```
 

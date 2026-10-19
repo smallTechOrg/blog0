@@ -4,7 +4,7 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 import { e2eAdmin, originOf, signIn } from './helpers/admin';
-import { confirmUrlFromLog, lineCount, NL_CONFIRMED, NL_DONE, pathOf } from './helpers/newsletter';
+import { BOT_CHECK_WAIT_MS, confirmUrlFromLog, lineCount, NL_CONFIRMED, NL_RECORDED, pathOf } from './helpers/newsletter';
 import { audioFixtureMeta, expectRange206, uploadSampleMp3 } from './helpers/upload';
 import { DESIGN_E2E_PORT, DESIGN_E2E_SERVER_LOG, DESIGN_E2E_STORAGE_DIR, DESIGNER_ENV } from './designer.global-setup';
 
@@ -225,8 +225,10 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     const form = page.locator('#newsletter');
     await form.scrollIntoViewIfNeeded();
     await form.getByLabel('Email').fill(email);
+    await page.waitForTimeout(BOT_CHECK_WAIT_MS); // Stage A bot check: a human takes ≥ 2 s
     await form.getByRole('button', { name: 'Subscribe' }).click();
-    await expect(form.getByRole('status')).toHaveText(NL_DONE);
+    // No SMTP in designer mode → the stub transport's honest copy (Stage A delivery = recorded).
+    await expect(form.getByRole('status')).toHaveText(NL_RECORDED);
 
     // The stub mail transport prints the link a designer follows (BLOG0_SMTP_HOST unset).
     let url: string | null = null;

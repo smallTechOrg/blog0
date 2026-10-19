@@ -46,7 +46,8 @@ const SEEDED_SLUGS = Object.values(SEEDED).map((p) => p.slug);
 const FEATURED_ORDER = [SEEDED.destroy.title, SEEDED.techFirst.title, SEEDED.humans.title];
 const HUMANS_DEK =
   'A human is a collection of perceptions, feelings, thoughts and intentions — read through the Buddha’s account of how perception becomes proliferation.';
-const NL_DONE = 'Almost there — check your inbox and confirm.';
+/** Stage A: the stub transport's honest signup copy (E2E always runs the stub). */
+const NL_RECORDED = 'Signup recorded — this environment doesn’t send email.';
 
 interface PublishedRow {
   slug: string;
@@ -79,8 +80,27 @@ async function settledScrollY(page: Page): Promise<number> {
   return last;
 }
 
+/** The boot strip's line as read by assistive tech (its `.sr` copy holds the whole line at once). */
 async function bootLine(page: Page) {
-  return page.locator('.boot__in span').first();
+  return page.locator('.boot__in span.sr');
+}
+
+/** The visible, animated copy of the boot line. */
+function bootVisible(page: Page) {
+  return page.locator('.boot__in span[aria-hidden="true"]').first();
+}
+
+/** WCAG contrast of two `rgb(…)` colours. */
+function contrastOf(a: string, b: string): number {
+  const lum = (c: string) => {
+    const [r, g, bl] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number).map((v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -117,7 +137,11 @@ test.describe('reader site (blog0)', () => {
     await page.goto('/');
     await expect(page).toHaveTitle('blog0');
     await expect(await bootLine(page)).toHaveText('> start of blog0', { timeout: 2_000 });
-    await expect(page.locator('.sitehead .wordmark')).toHaveAttribute('aria-label', 'blog0');
+    // Stage A: animated text is read once from its .sr copy; the animated copy is aria-hidden.
+    await expect(page.locator('.sitehead .wordmark > .sr')).toHaveText('blog0');
+    await expect(page.locator('.sitehead .wordmark > span[aria-hidden="true"]')).toHaveCount(1);
+    await expect(page.locator('.sitehead .tagline > .sr')).not.toBeEmpty();
+    await expect(page.locator('.boot')).not.toHaveAttribute('aria-hidden', 'true');
     await expect(page.locator('.sitehead .wordmark .typed__c.is-in')).toHaveCount(5);
     await expect(page.locator('.sitehead .wordmark__o')).toHaveText('0');
 
@@ -128,12 +152,91 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('a[href*="rss"], a[href*="feed.xml"], link[type="application/rss+xml"]')).toHaveCount(0);
   });
 
+  test('intro only on the visit’s first load of /: typed boot line + print-in; reload, other pages and later visits render at first paint', async ({ browser }) => {
+    // Visit 1 starts on home → the intro plays.
+    const visit = await browser.newContext();
+    try {
+      const page = await visit.newPage();
+      await page.goto('/');
+      await expect(page.locator('html')).toHaveAttribute('data-intro', '1');
+      await expect(bootVisible(page)).toHaveText('> start of blog0', { timeout: 3_000 });
+      expect(await page.evaluate(() => sessionStorage.getItem('blog0.intro'))).toBe('1');
+
+      // Reload in the same visit: no intro, the page's command and every typed char at once.
+      await page.reload();
+      expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
+      expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
+      await expect(bootVisible(page)).toHaveText('> cd ~');
+      expect(await page.locator('.ln').count()).toBe(0);
+      const opacities = await page.locator('.sitehead .typed__c, .abt .typed__c').evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity));
+      expect(opacities.length).toBeGreaterThan(5);
+      expect(new Set(opacities)).toEqual(new Set(['1']));
+
+      // A client navigation in the same visit: written out, no stagger.
+      await page.locator('.sitehead').getByRole('link', { name: 'Archive' }).click();
+      await expect(page).toHaveURL(/\/archive$/);
+      await expect(bootVisible(page)).toHaveText('> ls archive');
+      expect(await page.locator('.ln').count()).toBe(0);
+    } finally {
+      await visit.close();
+    }
+
+    // Visit 2 starts on an article → no intro, text at first paint; going home later: no intro either.
+    const other = await browser.newContext();
+    try {
+      const page = await other.newPage();
+      await page.goto(`/p/${SEEDED.humans.slug}`);
+      expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
+      expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
+      await expect(bootVisible(page)).toHaveText(`> open ${SEEDED.humans.slug}`);
+      expect(await page.locator('.ln').count()).toBe(0);
+      await page.goto('/');
+      expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
+      await expect(bootVisible(page)).toHaveText('> cd ~');
+    } finally {
+      await other.close();
+    }
+
+    // First paint without scripts (no intro decided): the server HTML already shows the page command
+    // and the complete wordmark.
+    const noJs = await browser.newContext({ javaScriptEnabled: false });
+    try {
+      const raw = await noJs.newPage();
+      await raw.goto('/archive');
+      await expect(raw.locator('.boot__in span[aria-hidden="true"]').first()).toHaveText('> ls archive');
+      const chars = raw.locator('.sitehead .wordmark .typed__c');
+      expect(await chars.evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity))).toEqual(['1', '1', '1', '1', '1']);
+    } finally {
+      await noJs.close();
+    }
+  });
+
+  test('--faint text meets 4.5:1 against the page background in light and dark', async ({ page }) => {
+    for (const scheme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto(`/p/${SEEDED.humans.slug}`);
+      await expect(page.locator('html')).toHaveAttribute('data-theme', scheme);
+      const { fg, bg } = await page.evaluate(() => {
+        const probe = document.createElement('span');
+        probe.textContent = 'faint';
+        probe.style.color = 'var(--faint)';
+        document.body.appendChild(probe);
+        const out = { fg: getComputedStyle(probe).color, bg: getComputedStyle(document.body).backgroundColor };
+        probe.remove();
+        return out;
+      });
+      const real = await page.locator('.readhead__by span').first().evaluate((el) => getComputedStyle(el).color);
+      expect(real, 'a design --faint element uses the overridden token').toBe(fg);
+      expect(contrastOf(fg, bg), `${scheme}: ${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   test('home: About, Featured Editorial (3 seeded, rank order), Latest newest first with See More / View all', async ({ page }) => {
     await page.goto('/');
 
     const about = page.locator('section#about');
     await expect(about.getByRole('heading', { name: 'About Us' })).toBeVisible();
-    const strap = await about.locator('.abt__strap').getAttribute('aria-label');
+    const strap = await about.locator('.abt__strap > .sr').textContent(); // Stage A: typed text reads from .sr
     expect(strap?.trim().length ?? 0).toBeGreaterThan(5);
     expect(await about.locator('.abt__body p').count()).toBeGreaterThan(0);
 
@@ -254,7 +357,7 @@ test.describe('reader site (blog0)', () => {
     expect(await page.locator('main').locator('p').count()).toBeGreaterThan(2);
   });
 
-  test('newsletter: subscribe in the footer → "Almost there…", the address is in Admin → Subscribers and its CSV', async ({ page }) => {
+  test('newsletter: subscribe in the footer → "Signup recorded…" (stub), the address is in Admin → Subscribers and its CSV', async ({ page }) => {
     const email = `reader-${Date.now()}@example.test`;
     await page.goto('/');
     const form = page.locator('#newsletter');
@@ -272,8 +375,9 @@ test.describe('reader site (blog0)', () => {
 
     await form.getByLabel('Name (optional)').fill('E2E Reader');
     await form.getByLabel('Email').fill(`  ${email.toUpperCase()} `);
+    await page.waitForTimeout(2_100); // Stage A bot check: humans take ≥ 2 s
     await form.getByRole('button', { name: 'Subscribe' }).click();
-    await expect(form.getByRole('status')).toHaveText(NL_DONE);
+    await expect(form.getByRole('status')).toHaveText(NL_RECORDED);
     expect(posts).toBe(1);
 
     const stored = await withTestDb(
@@ -314,7 +418,7 @@ test.describe('reader site (blog0)', () => {
       await expect(page.getByText('Saved — the home page and /about show it on the next load.')).toBeVisible();
 
       await page.goto('/');
-      await expect(page.locator('section#about .abt__strap')).toHaveAttribute('aria-label', edited);
+      await expect(page.locator('section#about .abt__strap > .sr')).toHaveText(edited);
       await page.goto('/about');
       await expect(page.locator('.pagehead .abt__strap')).toHaveText(edited);
     } finally {
@@ -596,7 +700,7 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('.tdeck .tdeck__big')).toHaveText(SEEDED.techFirst.title);
   });
 
-  test('an article carries its title and OG / Twitter tags', async ({ page, request }, testInfo) => {
+  test('an article carries its title, OG / Twitter tags with the large card image, icons and one Article JSON-LD', async ({ page, request }, testInfo) => {
     const base = originOf(testInfo);
     const res = await request.get(`/p/${SEEDED.humans.slug}`);
     expect(res.status()).toBe(200);
@@ -611,7 +715,57 @@ test.describe('reader site (blog0)', () => {
     expect(await meta('meta[name="description"]')).toBe(HUMANS_DEK);
     expect(await meta('meta[property="og:url"]')).toBe(`${base}/p/${SEEDED.humans.slug}`);
     expect(await meta('meta[property="og:type"]')).toBe('article');
-    expect(await meta('meta[name="twitter:card"]')).toBe('summary');
+    expect(await meta('meta[name="twitter:card"]')).toBe('summary_large_image');
+    expect(await meta('meta[property="og:image"]')).toBe(`${base}/og-default.png`);
+    expect(await meta('meta[property="og:image:width"]')).toBe('1200');
+    expect(await meta('meta[property="og:image:height"]')).toBe('630');
+    expect(await meta('meta[name="twitter:image"]')).toBe(`${base}/og-default.png`);
+    await expect(page.locator('link[rel="icon"][href="/favicon.svg"]')).toHaveAttribute('type', 'image/svg+xml');
+    await expect(page.locator('link[rel="icon"][href="/favicon-32.png"]')).toHaveAttribute('sizes', '32x32');
+
+    // Structured data: exactly one block, valid JSON, never a raw "<" inside.
+    const blocks = page.locator('script[type="application/ld+json"]');
+    await expect(blocks).toHaveCount(1);
+    const raw = await blocks.first().evaluate((el) => el.textContent ?? '');
+    expect(raw).not.toContain('<');
+    const ld = JSON.parse(raw) as Record<string, unknown>;
+    expect(ld).toMatchObject({
+      '@context': 'https://schema.org',
+      '@type': 'Article',
+      headline: SEEDED.humans.title,
+      description: HUMANS_DEK,
+      url: `${base}/p/${SEEDED.humans.slug}`,
+      mainEntityOfPage: `${base}/p/${SEEDED.humans.slug}`,
+      image: `${base}/og-default.png`,
+      publisher: { '@type': 'Organization', name: 'blog0', logo: `${base}/logo.png` },
+    });
+    expect((ld.author as Record<string, unknown>)['@type']).toBe('Person');
+    expect(Date.parse(ld.datePublished as string)).not.toBeNaN();
+    expect(Date.parse(ld.dateModified as string)).toBeGreaterThanOrEqual(Date.parse(ld.datePublished as string));
+  });
+
+  test('home carries one Organization + WebSite JSON-LD and the large card; the share/icon files are served', async ({ page, request }, testInfo) => {
+    const base = originOf(testInfo);
+    await page.goto('/');
+    const blocks = page.locator('script[type="application/ld+json"]');
+    await expect(blocks).toHaveCount(1);
+    const ld = JSON.parse((await blocks.first().textContent()) ?? '') as { '@graph': Array<Record<string, unknown>> };
+    expect(ld['@graph'].map((n) => n['@type'])).toEqual(['Organization', 'WebSite']);
+    expect(ld['@graph'][0]).toMatchObject({ name: 'blog0', url: `${base}/`, logo: `${base}/logo.png` });
+    expect(await page.locator('meta[name="twitter:card"]').first().getAttribute('content')).toBe('summary_large_image');
+    expect(await page.locator('meta[property="og:image"]').first().getAttribute('content')).toBe(`${base}/og-default.png`);
+
+    for (const [file, type] of [
+      ['/favicon.svg', 'image/svg+xml'],
+      ['/favicon-32.png', 'image/png'],
+      ['/favicon.ico', 'image/'],
+      ['/og-default.png', 'image/png'],
+      ['/logo.png', 'image/png'],
+    ] as const) {
+      const res = await request.get(file);
+      expect(res.status(), file).toBe(200);
+      expect(res.headers()['content-type'], file).toContain(type);
+    }
   });
 
   test('/sitemap.xml lists every published article (the 5 seeded included) plus /, /archive, /about, /privacy', async ({ request }, testInfo) => {

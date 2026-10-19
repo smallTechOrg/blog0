@@ -3,6 +3,7 @@
 // BLOG0_NEW_ADMIN_PASSWORD, or an interactive hidden prompt (asked twice) when unset on a terminal.
 // Never prints the password; the email is masked in the output.
 import { requireSiteId, runCli, siteSlugFromEnv } from './lib/cli';
+import { promptHidden } from './lib/prompt';
 
 import { loadDatabaseTarget } from '../src/server/config';
 import { createDbHandle } from '../src/server/db/client';
@@ -26,50 +27,15 @@ function parseArgs(argv: string[]): { email?: string; name?: string } {
   return out;
 }
 
-/** Reads one line from the terminal without echoing it. */
-function promptHidden(question: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const stdin = process.stdin;
-    process.stdout.write(question);
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding('utf8');
-    let value = '';
-    const onData = (chunk: string): void => {
-      for (const ch of chunk) {
-        if (ch === '\r' || ch === '\n' || ch === '\u0004') {
-          cleanup();
-          process.stdout.write('\n');
-          resolve(value);
-          return;
-        }
-        if (ch === '\u0003') {
-          cleanup();
-          process.stdout.write('\n');
-          reject(new SeedError('Cancelled.'));
-          return;
-        }
-        if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
-        else value += ch;
-      }
-    };
-    const cleanup = (): void => {
-      stdin.off('data', onData);
-      stdin.setRawMode(false);
-      stdin.pause();
-    };
-    stdin.on('data', onData);
-  });
-}
-
 async function readPassword(): Promise<string> {
   const fromEnv = process.env.BLOG0_NEW_ADMIN_PASSWORD;
   if (fromEnv !== undefined && fromEnv.trim() !== '') return fromEnv;
   if (!process.stdin.isTTY) {
     throw new SeedError('No password given — set BLOG0_NEW_ADMIN_PASSWORD (12+ characters) or run in a terminal to be prompted.');
   }
-  const first = await promptHidden('Password for the new admin (12+ characters): ');
-  const second = await promptHidden('Repeat the password: ');
+  const cancelled = () => new SeedError('Cancelled.');
+  const first = await promptHidden('Password for the new admin (12+ characters): ', cancelled);
+  const second = await promptHidden('Repeat the password: ', cancelled);
   if (first !== second) throw new SeedError('The two passwords do not match.');
   return first;
 }

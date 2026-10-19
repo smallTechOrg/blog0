@@ -24,6 +24,9 @@ let currentSite: SiteRow;
 
 /** A listmonk-kind sender that records blocklist calls (the stub kind skips live syncs by design). */
 class RecordingSender implements NewsletterSender {
+  async trackingPublic() {
+    return true;
+  }
   readonly kind = 'listmonk' as const;
   readonly inner = new StubNewsletterSender();
   removed: string[] = [];

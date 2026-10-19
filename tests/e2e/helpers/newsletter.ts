@@ -15,6 +15,10 @@ import { withTestDb } from './db';
 import { e2eLogFile, readServerLog } from './logs';
 
 export const NL_DONE = 'Almost there — check your inbox and confirm.';
+/** Stage A: the signup copy when the environment records but does not send (stub transport — every E2E run). */
+export const NL_RECORDED = 'Signup recorded — this environment doesn’t send email.';
+/** Stage A bot check: a signup submitted < 2 000 ms after the form mounted is dropped silently. */
+export const BOT_CHECK_WAIT_MS = 2_100;
 /** The confirm link's result page (confirm on open, owner decision 2026-10-19): "You’re confirmed — welcome to <brand>." */
 export const NL_CONFIRMED = /^You’re confirmed — welcome to .+\.$/;
 export const NL_ALREADY_CONFIRMED = 'You’re already confirmed.';

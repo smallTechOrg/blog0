@@ -245,6 +245,9 @@ test.describe('Listen walk: upload → ready → image → publish → follow al
     await expect(listenTab.locator('.mode__d')).toHaveText('1 min');
     const img = page.locator('.readbody figure.mdfig img');
     await expect(img).toHaveAttribute('src', j.imageUrl!);
+    // Stage A: the published page reserves the image box from media_asset (width/height attributes).
+    await expect(img).toHaveAttribute('width', String(PNG.width));
+    await expect(img).toHaveAttribute('height', String(PNG.height));
     await img.scrollIntoViewIfNeeded(); // loading="lazy"
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(PNG.width);
     await page.evaluate(() => window.scrollTo(0, 0));

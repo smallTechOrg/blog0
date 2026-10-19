@@ -111,6 +111,9 @@ async function addSubscriber(email: string, status: 'pending' | 'confirmed' | 'u
 
 /** A sender wrapping the DB-recording stub whose steps can be made to fail; counts createIssue calls. */
 class FlakySender implements NewsletterSender {
+  async trackingPublic() {
+    return true;
+  }
   kind: 'stub' | 'listmonk' = 'stub';
   readonly inner = new StubNewsletterSender({ recordToDb: true });
   healthy = true;

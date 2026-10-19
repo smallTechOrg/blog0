@@ -97,7 +97,28 @@ export interface Config {
   shutdownTimeoutMs: number;
   /** Phase 7 (spec/architecture.md §10, §13): transactional mail transport, sender adapter, webhook. */
   newsletter: NewsletterConfig;
+  /** Stage A (§10, §12.3): dead-man's-switch URLs pinged by `pnpm backup` / `pnpm newsletter:tick`. Secret — the URL is the credential. */
+  heartbeats: { backupUrl: Secret | null; tickUrl: Secret | null };
   isProduction: boolean;
+}
+
+/** Stage A heartbeat variables (§10) — read by the scripts through src/server/ops/heartbeat.ts. */
+export const HEARTBEAT_ENV = { backup: 'BLOG0_HEARTBEAT_BACKUP_URL', tick: 'BLOG0_HEARTBEAT_TICK_URL' } as const;
+
+/**
+ * A heartbeat variable: unset/empty → `unset`; an absolute http(s) URL → `url` (trimmed, kept exactly —
+ * a trailing slash is the caller's business); anything else → `invalid`. Pure; shared with the scripts.
+ */
+export function heartbeatSetting(env: Record<string, string | undefined>, name: string): { kind: 'unset' } | { kind: 'invalid' } | { kind: 'url'; url: string } {
+  const raw = (env[name] ?? '').trim();
+  if (raw === '') return { kind: 'unset' };
+  try {
+    const url = new URL(raw);
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname !== '') return { kind: 'url', url: raw };
+  } catch {
+    // fall through
+  }
+  return { kind: 'invalid' };
 }
 
 export type RateLimitStoreSetting = 'auto' | 'db' | 'memory';
@@ -394,6 +415,14 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
 
   const newsletter = loadNewsletter(problems, env);
 
+  // Stage A heartbeats: optional; the value is never echoed (it embeds the check's secret uuid).
+  const heartbeat = (name: string): Secret | null => {
+    const setting = heartbeatSetting(env, name);
+    if (setting.kind === 'invalid') problems.push(`${name} must be an absolute http(s) URL (e.g. https://hc-ping.com/<uuid>)`);
+    return setting.kind === 'url' ? new Secret(setting.url) : null;
+  };
+  const heartbeats = { backupUrl: heartbeat(HEARTBEAT_ENV.backup), tickUrl: heartbeat(HEARTBEAT_ENV.tick) };
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   const target = database as ParsedDatabaseUrl;
@@ -428,6 +457,7 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     rateLimitStore: rateLimitStore as RateLimitStoreSetting,
     shutdownTimeoutMs,
     newsletter,
+    heartbeats,
     isProduction,
   };
 }

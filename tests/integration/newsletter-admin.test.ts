@@ -56,7 +56,7 @@ async function signup(email: string, sourceUrl = '/'): Promise<string> {
     new Request(`${ORIGIN}/api/newsletter`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: ORIGIN, host: 'localhost:3410', 'user-agent': 'vitest-ua' },
-      body: JSON.stringify({ email, sourceUrl }),
+      body: JSON.stringify({ email, sourceUrl, fillMs: 5000 }),
     }),
     ctx,
   );

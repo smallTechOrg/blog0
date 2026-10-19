@@ -11,7 +11,7 @@ import { ApiError } from '../http/api';
 import { log, maskEmail } from '../log';
 import { findUserByEmail, normalizeUserEmail, recordUserLogin, toUserDto } from '../users/repo';
 import { verifyAgainstDummy, verifyPassword } from './password';
-import { getLoginRateLimiter, rateLimitMessage } from './rate-limit';
+import { getLoginRateLimiter, rateLimitMessage, type LoginThrottleScope } from './rate-limit';
 import { createSession } from './session';
 
 // Sign-in service (capability admin-auth). Wrong email and wrong password are indistinguishable
@@ -74,18 +74,21 @@ export interface LoginSuccess {
   issuedAt: Date;
 }
 
-function logAttempt(outcome: 'ok' | 'bad_credentials' | 'rate_limited', email: string, requestId?: string): void {
+function logAttempt(outcome: 'ok' | 'bad_credentials' | 'rate_limited', email: string, requestId?: string, scope?: LoginThrottleScope): void {
   log.info('auth.login', {
     msg: `sign-in ${outcome}`,
     outcome,
     email_masked: maskEmail(email),
     request_id: requestId,
+    scope,
   });
 }
 
 /**
- * Verifies credentials and opens a session. Throws ApiError RATE_LIMITED (429, Retry-After) while
- * the (email, IP) pair or the email itself is locked — even for a correct password — or BAD_CREDENTIALS (401).
+ * Verifies credentials and opens a session. Throws ApiError RATE_LIMITED (429, Retry-After =
+ * `error.details.retryAfterSec`) inside a hard cap (real IP only) or the email's progressive delay —
+ * the password is then not checked — or BAD_CREDENTIALS (401). After the delay a correct password
+ * signs in, so nobody can lock the owner out by knowing the email (Stage A).
  */
 export async function login(input: LoginInput): Promise<LoginSuccess> {
   const now = input.now ?? new Date();
@@ -97,8 +100,8 @@ export async function login(input: LoginInput): Promise<LoginSuccess> {
   // a correct password clears the reservation below. A store failure propagates (fail closed → 500).
   const check = await limiter.attempt(input.siteId, email, input.ip, now.getTime());
   if (check.limited) {
-    logAttempt('rate_limited', email, input.requestId);
-    throw new ApiError('RATE_LIMITED', 429, rateLimitMessage(check.retryAfterSec), undefined, {
+    logAttempt('rate_limited', email, input.requestId, check.scope);
+    throw new ApiError('RATE_LIMITED', 429, rateLimitMessage(check.retryAfterSec), { retryAfterSec: check.retryAfterSec }, {
       'retry-after': String(check.retryAfterSec),
     });
   }

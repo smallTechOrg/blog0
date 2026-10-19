@@ -68,6 +68,20 @@ describe.skipIf(stack === null)(`Listmonk adapter against the test stack (listmo
     expect(await wrongList.healthcheck()).toEqual({ ok: false, message: 'list 987654 not found' });
   });
 
+  it('trackingPublic (Stage A): the test stack\'s root URL is http://localhost:9001 → false (opens can\'t be counted); a token without settings access falls back to BLOG0_LISTMONK_URL (also local) → false', async () => {
+    const logs = captureLogs();
+    try {
+      expect(await sender.trackingPublic()).toBe(false);
+      const badToken = new ListmonkSender({ url: env.url, apiUser: env.apiUser, apiToken: new Secret('not-the-token'), listId: env.listId });
+      expect(await badToken.trackingPublic()).toBe(false);
+      const settingsCalls = logs.find('newsletter.provider').filter((l) => l.path === '/api/settings');
+      expect(settingsCalls.map((l) => l.attempt)).toEqual([1, 1]); // 3 s, no retry
+      expect(JSON.stringify(logs.lines)).not.toContain(env.apiToken);
+    } finally {
+      logs.stop();
+    }
+  });
+
   it('syncSubscriber twice → one Listmonk subscriber with the consent attribs, enabled, in the list; second call changed: false', async () => {
     const s = subscriber('a');
     createdEmails.add(s.email);

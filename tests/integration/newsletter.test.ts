@@ -40,7 +40,8 @@ function postRequest(body: unknown, headers: Record<string, string> = {}): Reque
   return new Request(`${ORIGIN}/api/newsletter`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: ORIGIN, host: 'localhost:3410', 'user-agent': UA, ...headers },
-    body: typeof body === 'string' ? body : JSON.stringify(body),
+    // Stage A: every signup here is a human one (fill time ≥ 2 s) unless the test says otherwise.
+    body: typeof body === 'string' ? body : JSON.stringify(body !== null && typeof body === 'object' && !('fillMs' in body) ? { ...body, fillMs: 5000 } : body),
   });
 }
 
@@ -100,7 +101,7 @@ describe('POST /api/newsletter — double opt-in signup (happy path)', () => {
     const { res, env } = await post({ email: ' A@B.com ', name: ' Asha Reader ', sourceUrl: '/p/humans-are-software' });
 
     expect(res.status).toBe(200);
-    expect(env).toEqual({ ok: true, data: { subscribed: true } });
+    expect(env).toEqual({ ok: true, data: { subscribed: true, delivery: 'recorded' } });
     const stored = await rows();
     expect(stored).toHaveLength(1);
     const row = stored[0];
@@ -185,7 +186,7 @@ describe('POST /api/newsletter — double opt-in signup (happy path)', () => {
     const { res, env } = await post({ email: 'DONE@example.com', name: 'Later' });
 
     expect(res.status).toBe(200);
-    expect(env).toEqual({ ok: true, data: { subscribed: true } });
+    expect(env).toEqual({ ok: true, data: { subscribed: true, delivery: 'recorded' } });
     expect((await eventsOf('done@example.com')).length).toBe(before);
     expect(await messagesTo('done@example.com')).toHaveLength(1);
     expect((await rows())[0]).toMatchObject({ status: 'confirmed', name: null });

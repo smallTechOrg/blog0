@@ -5,6 +5,10 @@ import { isElement, isWhitespaceText, walk, type HElement, type HNode, type HRoo
 // Images (design-app.js mdToHtml / mdInline):
 // - an image alone in a paragraph → <figure class="mdfig"><img loading="lazy" alt><figcaption>title</figcaption></figure>
 // - any other image → <img class="mdimg" loading="lazy"> (+ <span class="mdimg__cap"> when titled)
+// Stage A (spec/architecture.md §4): an img whose src is in `dims` also gets width/height (set
+// after the class, so the attribute order is src, alt, loading, class, width, height).
+
+export type ImageDimsMap = ReadonlyMap<string, { width: number; height: number }>;
 
 function imgElement(src: HElement): HElement {
   const { src: url, alt } = src.properties;
@@ -16,12 +20,22 @@ function imgElement(src: HElement): HElement {
   };
 }
 
+function withDims(img: HElement, dims: ImageDimsMap | undefined): HElement {
+  const url = img.properties.src;
+  const d = dims && typeof url === 'string' ? dims.get(url) : undefined;
+  if (d) {
+    img.properties.width = d.width;
+    img.properties.height = d.height;
+  }
+  return img;
+}
+
 function caption(img: HElement): string | null {
   const title = img.properties.title;
   return typeof title === 'string' && title.trim() ? title : null;
 }
 
-export function images(root: HRoot): void {
+export function images(root: HRoot, dims?: ImageDimsMap): void {
   walk<HNode>(root, (node, index, parent) => {
     if (isElement(node, 'p')) {
       const content = node.children.filter((c) => !isWhitespaceText(c));
@@ -33,7 +47,7 @@ export function images(root: HRoot): void {
           tagName: 'figure',
           properties: { className: ['mdfig'] },
           children: [
-            imgElement(only),
+            withDims(imgElement(only), dims),
             ...(cap ? [{ type: 'element', tagName: 'figcaption', properties: {}, children: [{ type: 'text', value: cap }] }] : []),
           ],
         };
@@ -47,6 +61,7 @@ export function images(root: HRoot): void {
     const cap = caption(node);
     const img = imgElement(node);
     img.properties.className = ['mdimg'];
+    withDims(img, dims);
     parent.children![index] = img;
     if (cap) {
       parent.children!.splice(index + 1, 0, {

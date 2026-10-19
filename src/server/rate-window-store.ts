@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 
 import { and, asc, eq, lte, or, sql, type SQL } from 'drizzle-orm';
 
+import { delayDecision, LOGIN_DELAY_RESET_MS } from './auth/login-delay';
 import { getConfig, type Config } from './config';
 import { getDb, type Db, type Tx } from './db/client';
 import { rateLimitBucket } from './db/schema';
@@ -49,7 +50,14 @@ function windowRow(siteId: string, bucket: RateBucket, now: number): WindowRow {
   };
 }
 
-function matchRow(row: WindowRow): SQL {
+/** The constant window of a `login.delay` row (epoch 0); its `expires_at` carries the timing. */
+export const DELAY_WINDOW_START = new Date(0);
+
+function delayRow(siteId: string, key: string): Omit<WindowRow, 'expiresAt'> {
+  return { siteId, scope: 'login.delay', keyHash: sha256Hex(key), windowStart: DELAY_WINDOW_START };
+}
+
+function matchRow(row: Omit<WindowRow, 'expiresAt'>): SQL {
   return and(
     eq(rateLimitBucket.siteId, row.siteId),
     eq(rateLimitBucket.scope, row.scope),
@@ -124,6 +132,42 @@ export class DbRateLimitStore implements RateLimitStore {
 
     await this.#maybePrune(now);
     return result;
+  }
+
+  /**
+   * Stage A progressive delay (spec/architecture.md §6), no migration: one row per key with scope
+   * `login.delay`, `window_start` = epoch 0 (constant), `count` = attempts since the last success,
+   * `expires_at` = last attempt + 15 min (so an idle key is reset by expiry and removed by the prune).
+   * One transaction: upsert → lock → expired ⇒ n = 0 → wait check → n + 1, expires_at = now + 15 min.
+   */
+  async attemptDelay(siteId: string, key: string, now: number): Promise<RateCheck> {
+    const row = delayRow(siteId, key);
+    const result = await this.#handle().transaction(async (tx: Tx): Promise<RateCheck> => {
+      await tx
+        .insert(rateLimitBucket)
+        .values({ ...row, expiresAt: new Date(now), count: 0 })
+        .onConflictDoNothing();
+      const [locked] = await tx
+        .select({ count: rateLimitBucket.count, expiresAt: rateLimitBucket.expiresAt })
+        .from(rateLimitBucket)
+        .where(matchRow(row))
+        .for('update');
+      const live = locked !== undefined && locked.expiresAt.getTime() > now;
+      const n = live ? locked.count : 0;
+      const decision = delayDecision(n, live ? locked.expiresAt.getTime() - LOGIN_DELAY_RESET_MS : null, now);
+      if (decision.limited) return { limited: true, retryAfterSec: decision.retryAfterSec, scope: 'login.delay' };
+      await tx
+        .update(rateLimitBucket)
+        .set({ count: n + 1, expiresAt: new Date(now + LOGIN_DELAY_RESET_MS) })
+        .where(matchRow(row));
+      return { limited: false };
+    });
+    await this.#maybePrune(now);
+    return result;
+  }
+
+  async clearDelay(siteId: string, key: string): Promise<void> {
+    await this.#handle().delete(rateLimitBucket).where(matchRow(delayRow(siteId, key)));
   }
 
   async refund(siteId: string, bucket: RateBucket, now: number): Promise<void> {

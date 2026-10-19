@@ -118,7 +118,7 @@ async function signup(email: string, opts: SignupOptions = {}): Promise<string |
         'x-forwarded-for': opts.ip ?? '203.0.113.7',
         'user-agent': opts.ua ?? 'vitest-signup',
       },
-      body: JSON.stringify({ email, name: opts.name, sourceUrl: opts.sourceUrl ?? '/' }),
+      body: JSON.stringify({ email, name: opts.name, sourceUrl: opts.sourceUrl ?? '/', fillMs: 5000 }),
     }),
     ctx,
   );
@@ -446,6 +446,9 @@ async function livedSubscriber() {
 }
 
 class RecordingSender implements NewsletterSender {
+  async trackingPublic() {
+    return true;
+  }
   kind: 'stub' | 'listmonk' = 'stub';
   readonly inner = new StubNewsletterSender({ recordToDb: false });
   removed: string[] = [];

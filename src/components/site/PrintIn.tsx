@@ -1,9 +1,9 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
-import { prefersReducedMotion } from '@/components/design/motion';
+import { endIntro, introActive, prefersReducedMotion } from '@/components/design/motion';
 
 import { BOOT_LINE_MS } from './Boot';
 
@@ -24,15 +24,22 @@ function releaseHold() {
    candidates include containers and their children; only the innermost of
    each nesting prints on its own, so a paragraph is a line but the column
    that holds it is not. The classes come off again once the run is over,
-   so nothing stays bound to the animation. */
+   so nothing stays bound to the animation.
+
+   Stage A (spec/ui.md §1 rule 4, §3 Chrome): the print-in is part of the intro — it runs only on
+   the visit's first load of `/` (`html[data-intro="1"]`). Any later route change ends the intro,
+   and every other page renders at first paint: no `.ln` stagger. */
 export function PrintIn() {
   const pathname = usePathname();
   /* opening the deck rewrites /p/<slug> to /p/<slug>/tldr in place — that is
      the same page, not a new one, so it must not print again */
   const route = pathname.replace(/\/tldr$/, '');
+  const firstRoute = useRef<string | null>(null);
 
   useLayoutEffect(() => {
-    if (prefersReducedMotion()) {
+    if (firstRoute.current === null) firstRoute.current = route;
+    else if (firstRoute.current !== route) endIntro();
+    if (!introActive() || prefersReducedMotion()) {
       releaseHold();
       return;
     }

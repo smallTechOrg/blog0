@@ -63,6 +63,11 @@ export class StubNewsletterSender implements NewsletterSender {
     return { ok: true, message: 'stub sender (nothing is delivered)', listName: 'stub' };
   }
 
+  /** Stage A: the stub counts its own rows — nothing to reach from outside, so always true. */
+  async trackingPublic(): Promise<boolean> {
+    return true;
+  }
+
   async syncSubscriber(s: SenderSubscriber): Promise<{ providerId: string; changed: boolean }> {
     const providerId = `stub-${s.subscriberId}`;
     const before = this.subscribers.get(providerId);

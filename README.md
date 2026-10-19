@@ -382,7 +382,12 @@ reports `PENDING KEY`. The image is rebuilt only when a build-context file is ne
 (`BLOG0_CONTAINER_BUILD=always|never` overrides).
 
 Backups: `pnpm backup -- --out <dir>`; restore + check: `pnpm restore -- --in <backupDir> --db <name> --storage <dir>`
-(details and cron example in the runbook). Newsletter in production (SMTP relay, Listmonk, DNS,
+(details and cron example in the runbook). Set `BLOG0_HEARTBEAT_BACKUP_URL` / `BLOG0_HEARTBEAT_TICK_URL`
+(e.g. healthchecks.io ping URLs) and the backup and the hourly tick report success (`GET <url>`) or
+failure (`GET <url>/fail`) — runbook → **Heartbeats**. Forgotten admin password:
+`docker exec -it <container> node reset-password.mjs --email <you>` (or
+`pnpm admin:reset-password --email <you>` from a checkout) — runbook → **Reset an admin password**.
+Newsletter in production (SMTP relay, Listmonk, DNS,
 the hourly `pnpm newsletter:tick` cron): the runbook's **Newsletter** section.
 
 ## Newsletter
@@ -483,8 +488,9 @@ suite.
 | `pnpm seed:tldr [-- --write-fixture]` | publish a TLDR deck for each seeded post without one (real Jev call with a key, committed fixture without; `--write-fixture` refreshes the fixture with a real key) |
 | `pnpm spike:pglite` | PGlite feasibility spike (embedded-engine smoke check) |
 | `pnpm admin:create --email <address> --name "<Display Name>"` | add another admin to the site |
+| `pnpm admin:reset-password --email <address>` | set a new password for that admin (from `BLOG0_NEW_ADMIN_PASSWORD` or a hidden prompt, 12–200 chars), end all their sessions and clear the email's sign-in delay; prints `password reset for s***@… · N sessions ended` (exit 1 unknown admin, 2 bad input). In the image: `node reset-password.mjs --email <address>` |
 
-Every `pnpm db:*` / `admin:create` script also works on the embedded engine, e.g.:
+Every `pnpm db:*` / `admin:create` / `admin:reset-password` script also works on the embedded engine, e.g.:
 
 ```bash
 BLOG0_DATABASE_URL=pglite://./var/pglite pnpm db:verify
@@ -507,7 +513,7 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_DIST_DIR` | no | `.next` | Next.js build dir (`next.config.ts` `distDir`): a separate build dir so gate builds don't overwrite a running server's build — e.g. `BLOG0_DIST_DIR=.next-gate pnpm build` then `BLOG0_DIST_DIR=.next-gate BLOG0_PORT=3447 pnpm start` (build and start with the same value; `.next-*/` is gitignored) |
 | `BLOG0_PUBLIC_BASE_URL` | no | `http://localhost:3410` | absolute links, OG, origin check, `Secure` cookie when https |
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
-| `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (login throttling and the newsletter per-IP cap key on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored and the newsletter per-IP cap skipped |
+| `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (the sign-in hard caps and the newsletter per-IP cap key on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored, those per-IP caps skipped (sign-in is then protected by the progressive per-email delay alone — never a lockout) |
 | `BLOG0_SESSION_SECRET` | yes on postgres | pglite: generated | ≥ 32 chars (`openssl rand -base64 48`); on `pglite://` an absent value is generated once into `var/pglite-session-secret` (0600) |
 | `BLOG0_OPENROUTER_API_KEY` | yes on postgres | pglite: none | validated at boot for presence (`replace-with-…` rejected); `pending-placeholder` boots but real-key tests report PENDING KEY; liveness by `pnpm check:openrouter`. On `pglite://` absent/placeholder = Jev disabled (`LLM_NOT_CONFIGURED`) |
 | `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | only `pnpm check:openrouter`'s `GET {base}/key` |
@@ -518,7 +524,7 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_LOG_FILE` | no | — | append JSON lines here too (E2E sets it) |
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | seed + E2E | name `Sai Krishna V` | first admin for `pnpm db:seed`; password ≥ 12; local dev may export them from gitignored `var/dev-admin.env` |
 | `CI` | no | — | `true` turns PENDING KEY skips into failures when `BLOG0_REQUIRE_REAL_KEY` is unset |
-| `BLOG0_NEW_ADMIN_PASSWORD` | no | — | non-interactive `pnpm admin:create` |
+| `BLOG0_NEW_ADMIN_PASSWORD` | no | — | non-interactive `pnpm admin:create` / `pnpm admin:reset-password` |
 | `BLOG0_STORAGE_DIR` | no | `./var/storage` | audio/image storage + upload limits |
 | `BLOG0_MAX_AUDIO_MB` / `BLOG0_MAX_AUDIO_MINUTES` / `BLOG0_MAX_IMAGE_MB` | no | `50` / `30` / `8` | audio/image storage + upload limits |
 | `BLOG0_E2E_BASE_URL` | no | — | point Playwright at an already-running server |
@@ -539,6 +545,8 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_LISTMONK_LIST_ID` | with sender `listmonk` | — | integer id of the one list blog0 mirrors into (`pnpm newsletter:sync -- --create-list`) |
 | `BLOG0_NEWSLETTER_WEBHOOK_SECRET` | no | — | ≥ 24 chars (`openssl rand -base64 32`); bearer secret of `POST /api/newsletter/webhook`; unset → that endpoint answers 404 |
 | `BLOG0_UNSUBSCRIBE_SECRET` | no | session secret | ≥ 24 chars (`openssl rand -base64 32`); signs **new** unsubscribe links (verified first, then the session secret) so rotating the session secret does not break links already mailed |
+| `BLOG0_HEARTBEAT_BACKUP_URL` | no | — | absolute http(s) URL (secret); `pnpm backup` sends `GET <url>` on success, `GET <url>/fail` on failure (5 s timeout, never changes the exit code) |
+| `BLOG0_HEARTBEAT_TICK_URL` | no | — | the same for `pnpm newsletter:tick` |
 
 ## Layout
 

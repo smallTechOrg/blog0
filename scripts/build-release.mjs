@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// pnpm build:release — bundles scripts/release.ts into dist/release.mjs (spec/architecture.md §12.1)
-// so the container runs the release step as `node release.mjs` without tsx, dev dependencies or the
-// full node_modules.
+// pnpm build:release — bundles scripts/release.ts into dist/release.mjs and (Stage A)
+// scripts/reset-password.ts into dist/reset-password.mjs with identical options (spec/architecture.md
+// §12.1), so the container runs `node release.mjs` / `node reset-password.mjs --email <e>` without tsx,
+// dev dependencies or the full node_modules.
 //
 // Module resolution in the image: Next's standalone output (pnpm layout) exposes only a few packages
 // at /app/node_modules — `@node-rs/argon2` is one of them, but `postgres` and `@electric-sql/pglite`
@@ -29,7 +30,7 @@ const stubServerOnlyShim = {
 
 const PGLITE_STUB = `
 const unavailable = () => {
-  throw new Error('PGlite is not part of the release bundle — the release step is for Postgres; designer mode migrates in pnpm dev:design');
+  throw new Error('PGlite is not part of the bundled CLIs (release.mjs, reset-password.mjs) — they are for Postgres; in designer mode use pnpm dev:design / pnpm admin:reset-password');
 };
 export class PGlite { constructor() { unavailable(); } static create() { unavailable(); } }
 export const types = {};
@@ -44,31 +45,39 @@ const stubPglite = {
   },
 };
 
-const outfile = path.join(root, 'dist', 'release.mjs');
-await build({
-  absWorkingDir: root,
-  entryPoints: ['scripts/release.ts'],
-  outfile,
-  platform: 'node',
-  format: 'esm',
-  target: 'node22',
-  bundle: true,
-  tsconfig: 'tsconfig.json',
-  alias: { 'server-only': './scripts/lib/empty-module.mjs' },
-  external: ['@node-rs/argon2', 'next'],
-  // Bundled CommonJS code (e.g. @next/env) uses require() and __dirname, which ESM lacks. The alias
-  // avoids clashing with src/server/db/pglite.ts's own `import { createRequire } from 'node:module'`
-  // (esbuild does not rename banner bindings).
-  banner: {
-    js: [
-      "import { createRequire as __blog0CreateRequire } from 'node:module';",
-      'const require = __blog0CreateRequire(import.meta.url);',
-      'const __filename = import.meta.filename;',
-      'const __dirname = import.meta.dirname;',
-    ].join(' '),
-  },
-  plugins: [stubServerOnlyShim, stubPglite],
-  legalComments: 'none',
-  logLevel: 'warning',
-});
-console.log(`build:release: ${path.relative(root, outfile)}`);
+/** Both CLIs the image carries: same options, so both resolve modules the same way in /app. */
+const ENTRIES = [
+  ['scripts/release.ts', 'release.mjs'],
+  ['scripts/reset-password.ts', 'reset-password.mjs'],
+];
+
+for (const [entry, name] of ENTRIES) {
+  const outfile = path.join(root, 'dist', name);
+  await build({
+    absWorkingDir: root,
+    entryPoints: [entry],
+    outfile,
+    platform: 'node',
+    format: 'esm',
+    target: 'node22',
+    bundle: true,
+    tsconfig: 'tsconfig.json',
+    alias: { 'server-only': './scripts/lib/empty-module.mjs' },
+    external: ['@node-rs/argon2', 'next'],
+    // Bundled CommonJS code (e.g. @next/env) uses require() and __dirname, which ESM lacks. The alias
+    // avoids clashing with src/server/db/pglite.ts's own `import { createRequire } from 'node:module'`
+    // (esbuild does not rename banner bindings).
+    banner: {
+      js: [
+        "import { createRequire as __blog0CreateRequire } from 'node:module';",
+        'const require = __blog0CreateRequire(import.meta.url);',
+        'const __filename = import.meta.filename;',
+        'const __dirname = import.meta.dirname;',
+      ].join(' '),
+    },
+    plugins: [stubServerOnlyShim, stubPglite],
+    legalComments: 'none',
+    logLevel: 'warning',
+  });
+  console.log(`build:release: ${path.relative(root, outfile)}`);
+}

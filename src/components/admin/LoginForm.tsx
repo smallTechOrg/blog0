@@ -11,6 +11,22 @@ import { apiRequest } from './api';
 // server's message ("Email or password is incorrect." / "Too many attempts — try again in N minutes.");
 // network and unexpected failures read as apiRequest's messages.
 
+/** Stage A (spec/ui.md §4 Sign in): the rate-limit copy from `Retry-After` (the body's
+ *  `details.retryAfterSec`): seconds under a minute, else whole minutes rounded up. */
+export function loginErrorMessage(error: { code: string; message: string; details?: unknown }): string {
+  if (error.code === 'VALIDATION_FAILED') return 'Enter a valid email address and your password.';
+  if (error.code === 'RATE_LIMITED') {
+    const raw = error.details && typeof error.details === 'object' ? (error.details as { retryAfterSec?: unknown }).retryAfterSec : undefined;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+      const sec = Math.max(1, Math.ceil(raw));
+      if (sec < 60) return `Too many attempts — try again in ${sec} ${sec === 1 ? 'second' : 'seconds'}.`;
+      const min = Math.ceil(sec / 60);
+      return `Too many attempts — try again in ${min} ${min === 1 ? 'minute' : 'minutes'}.`;
+    }
+  }
+  return error.message;
+}
+
 type State = { kind: 'idle' } | { kind: 'pending' } | { kind: 'error'; message: string } | { kind: 'done' };
 
 export function LoginForm({ next }: { next: string }) {
@@ -41,7 +57,7 @@ export function LoginForm({ next }: { next: string }) {
     }
 
     const { code } = res.error;
-    setState({ kind: 'error', message: code === 'VALIDATION_FAILED' ? 'Enter a valid email address and your password.' : res.error.message });
+    setState({ kind: 'error', message: loginErrorMessage(res.error) });
     if (code === 'BAD_CREDENTIALS' && passwordRef.current) {
       passwordRef.current.value = '';
       passwordRef.current.focus();

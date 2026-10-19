@@ -27,6 +27,21 @@
    A timeout in the script lifts it anyway if hydration never comes. */
 html[data-printing] #blog0-root { visibility: hidden; }
 
+/* Stage A — the intro (spec/ui.md §1 rule 4): the typed wordmark, tagline and About lines only
+   type on the visit's first load of / (the pre-paint script sets html[data-intro="1"]). Every
+   other page shows them complete at first paint, before any script runs. */
+html:not([data-intro="1"]) .typed__c { opacity: 1; transition: none; }
+
+/* --- Stage A: --faint at WCAG AA (spec/ui.md §5, §6) -----------------
+   The design's --faint is ~3:1 on the paper. Same hue, the nearest value
+   reaching 4.5:1 against both --bg and --surface of each theme
+   (tests/unit/site/contrast.test.ts). design.css keeps the originals. */
+:root { --faint: #6D7077; }
+:root[data-theme="dark"] { --faint: #8D887E; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --faint: #8D887E; }
+}
+
 /* --- paragraphs (the pipeline's .para replaces the design's .sent; div. 2) --- */
 .para { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 /* A reader's paragraph is tappable (paragraph share): the article page
@@ -203,3 +218,12 @@ html[data-printing] #blog0-root { visibility: hidden; }
 }
 .admin-warn a { text-decoration: underline; }
 .admin-btn--danger { color: var(--danger, #b3261e); border-color: var(--danger, #b3261e); }
+
+/* --- Stage A: inline image dimensions (spec/architecture.md §4) -------
+   width/height come from media_asset so the page reserves the box before
+   the image loads; height:auto keeps the ratio in a narrower column. */
+.prose img[width][height] { height: auto; }
+
+/* --- Stage A: newsletter honeypot (spec/ui.md §3 "Newsletter form") ---
+   off-screen, never display:none (some bots skip hidden fields). */
+.ft-hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }

@@ -26,6 +26,11 @@ export const sourceUrlField = z
   .refine((v) => v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\'), 'sourceUrl must be a relative path')
   .refine((v) => !/[\s<>"'`]/.test(v), 'sourceUrl must be a relative path');
 
+/** Stage A: ms from form mount to submit — an integer 0 … 24 h (spec/api.md). */
+export const FILL_MS_MAX = 86_400_000;
+/** Stage A honeypot field (`website`): any string ≤ 200; non-empty after trim ⇒ silent drop (bot-check.ts). */
+export const HONEYPOT_MAX = 200;
+
 /** POST /api/newsletter */
 export const subscribeBody = z.object({
   email: emailField,
@@ -36,6 +41,8 @@ export const subscribeBody = z.object({
     .nullish()
     .transform((v) => (v ? v : null)),
   sourceUrl: sourceUrlField.optional().default('/'),
+  website: z.string().max(HONEYPOT_MAX).optional(),
+  fillMs: z.number().int().min(0).max(FILL_MS_MAX).optional(),
 });
 export type SubscribeInput = z.infer<typeof subscribeBody>;
 

@@ -10,11 +10,23 @@ import { getDb } from '../db/client';
 import { article, type SiteRow } from '../db/schema';
 import { getCurrentSite } from '../site/current';
 import { publishedWhere, type PublishedArticlePage } from './articles';
+import { articleJsonLd, homeJsonLd, ogImageMetadata, twitterMetadata } from './seo';
 
 // Page metadata for the reader site (design `titleFor`: "<Title> — blog0", home = "blog0";
 // spec/capabilities/article-reading.md: meta description = dek; Open Graph for link previews),
 // plus the sitemap and robots data (spec/capabilities/reader-site.md "Sitemap/robots").
 // Absolute URLs (canonical, og:url, sitemap) come from BLOG0_PUBLIC_BASE_URL.
+// Stage A (spec/ui.md §3 "head and share metadata"): every public page carries the default share
+// image and the large Twitter card; `metadataBase` resolves the image path; JSON-LD data per page.
+
+/** `metadataBase` = BLOG0_PUBLIC_BASE_URL (null when it is not a valid URL — then Next's default). */
+export function metadataBaseUrl(): URL | null {
+  try {
+    return new URL(getConfig().publicBaseUrl);
+  } catch {
+    return null;
+  }
+}
 
 export const TITLE_SEPARATOR = ' — ';
 
@@ -45,8 +57,9 @@ export function articleMetadata(
       ...(opts.updatedAt ? { modifiedTime: opts.updatedAt.toISOString() } : {}),
       authors: [a.bylineName],
       section: a.topic || undefined,
+      images: ogImageMetadata(opts.wordmark),
     },
-    twitter: { card: 'summary', title: a.title, description },
+    twitter: twitterMetadata({ title: a.title, description }),
   };
 }
 
@@ -62,8 +75,45 @@ export function sitePageMetadata(opts: { title: string; description?: string; ur
       description: opts.description,
       url: opts.url,
       siteName: opts.siteName,
+      images: ogImageMetadata(opts.siteName),
     },
+    twitter: twitterMetadata({ title: opts.title, description: opts.description }),
   };
+}
+
+/** The (site) layout's defaults, inherited by public pages that set no share tags of their own
+ *  (the newsletter link pages): metadataBase, the share image and the large card. */
+export function siteDefaultMetadata(wordmark: string): Metadata {
+  const base = metadataBaseUrl();
+  return {
+    ...(base ? { metadataBase: base } : {}),
+    openGraph: { siteName: wordmark, images: ogImageMetadata(wordmark) },
+    twitter: twitterMetadata({ title: wordmark }),
+  };
+}
+
+function sameAsOf(site: Pick<SiteRow, 'socialXUrl' | 'socialLinkedinUrl'>): string[] {
+  return [site.socialXUrl, site.socialLinkedinUrl].filter((u): u is string => typeof u === 'string' && u.trim() !== '');
+}
+
+/** Home JSON-LD: Organization + WebSite. */
+export function homeStructuredData(site: Pick<SiteRow, 'wordmark' | 'socialXUrl' | 'socialLinkedinUrl'>): Record<string, unknown> {
+  return homeJsonLd({ brand: site.wordmark, baseUrl: getConfig().publicBaseUrl, sameAs: sameAsOf(site) });
+}
+
+/** Article JSON-LD for a loaded published page. */
+export function articleStructuredData(page: PublishedArticlePage): Record<string, unknown> {
+  return articleJsonLd({
+    brand: page.site.wordmark,
+    baseUrl: getConfig().publicBaseUrl,
+    sameAs: [],
+    slug: page.article.slug,
+    title: page.article.title,
+    dek: page.article.dek,
+    authorName: page.article.bylineName,
+    firstPublishedAt: page.publishedAt,
+    contentUpdatedAt: page.contentUpdatedAt,
+  });
 }
 
 /** `generateMetadata` for a non-article site page at `path` ('/', '/archive', '/about'): title and

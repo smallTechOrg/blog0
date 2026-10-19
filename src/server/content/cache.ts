@@ -5,7 +5,8 @@ import type { RenderedArticle, RenderInput } from '@/lib/content/types';
 import { RENDER_VERSION, renderArticle } from './render';
 
 // In-memory LRU of rendered revisions (spec/architecture.md §4), keyed by
-// `revisionId + ':' + RENDER_VERSION`. Revisions are immutable, so an entry never goes stale.
+// `revisionId + ':' + RENDER_VERSION` (+ `':dims'` for the published page's render with image
+// dimensions — Stage A; a revision's media dimensions never change). Revisions are immutable, so an entry never goes stale.
 // Preview renders are NOT cached — call renderArticle() directly for those.
 // Callers must treat the returned object as read-only (it is shared between requests).
 
@@ -13,13 +14,13 @@ export const RENDER_CACHE_MAX = 200;
 
 const entries = new Map<string, Promise<RenderedArticle>>();
 
-export function renderCacheKey(revisionId: string): string {
-  return `${revisionId}:${RENDER_VERSION}`;
+export function renderCacheKey(revisionId: string, withImageDims = false): string {
+  return `${revisionId}:${RENDER_VERSION}${withImageDims ? ':dims' : ''}`;
 }
 
 /** Renders a saved revision once per process (concurrent callers share one render). */
 export function getRenderedRevision(revisionId: string, input: RenderInput): Promise<RenderedArticle> {
-  const key = renderCacheKey(revisionId);
+  const key = renderCacheKey(revisionId, Boolean(input.imageDims));
   const hit = entries.get(key);
   if (hit) {
     entries.delete(key);

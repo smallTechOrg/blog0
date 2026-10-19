@@ -23,6 +23,7 @@ import { article, articleFormat, articleRevision } from '../db/schema';
 import { readListenPayload, readTldrPayload, type ListenPayload, type TldrPayload } from '../formats/payload';
 import { log } from '../log';
 import { getCurrentSite } from '../site/current';
+import { loadImageDims, mediaImageSrcs } from './image-dims';
 
 // Published-only reads for the reader site (spec/architecture.md §3 "Public article"). Every
 // query filters by the current site AND `status = 'published'` AND a non-null published revision
@@ -115,6 +116,8 @@ export interface PublishedArticlePage {
   publishedAt: Date;
   /** When the article last changed for readers: the body-change date when known, else the last publish. */
   updatedAt: Date | null;
+  /** `article.content_updated_at` (JSON-LD dateModified falls back to the first publish). */
+  contentUpdatedAt: Date | null;
   site: { wordmark: string; timezone: string };
 }
 
@@ -148,7 +151,16 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
     .limit(1);
   if (!row) return null;
 
-  const rendered = await getRenderedRevision(row.revisionId, { title: row.title, dek: row.dek, bodyMd: row.bodyMd });
+  // Stage A: the body's /media/ images get width/height from media_asset (one query; the render
+  // itself stays pure — spec/architecture.md §4).
+  const srcs = mediaImageSrcs(row.bodyMd);
+  const imageDims = srcs.length ? await loadImageDims(site.id, srcs) : null;
+  const rendered = await getRenderedRevision(row.revisionId, {
+    title: row.title,
+    dek: row.dek,
+    bodyMd: row.bodyMd,
+    ...(imageDims && imageDims.size ? { imageDims } : {}),
+  });
   const deck = published(readTldrPayload, row.deckPayload, 'public.deck_invalid', row.id);
   const listenPayload = published(readListenPayload, row.listenPayload, 'public.listen_invalid', row.id);
   const listen = listenPayload ? listenViewModel(listenPayload, rendered.paragraphs, row.slug) : null;
@@ -189,6 +201,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
     },
     publishedAt,
     updatedAt: row.contentUpdatedAt ?? row.lastPublishedAt ?? null,
+    contentUpdatedAt: (row.contentUpdatedAt as Date | null) ?? null,
     site: { wordmark: site.wordmark, timezone: site.timezone },
   };
 }

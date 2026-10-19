@@ -15,7 +15,8 @@ import {
   messagesTo,
   NL_ALREADY_CONFIRMED,
   NL_CONFIRMED,
-  NL_DONE,
+  NL_RECORDED,
+  BOT_CHECK_WAIT_MS,
   NL_EXPIRED,
   NL_UNSUBSCRIBE_BUTTON,
   NL_UNSUBSCRIBED,
@@ -65,8 +66,11 @@ async function signupInFooter(page: Page, email: string, name?: string): Promise
   await form.scrollIntoViewIfNeeded();
   if (name) await form.getByLabel('Name (optional)').fill(name);
   await form.getByLabel('Email').fill(email);
+  // Stage A: a human takes ≥ 2 s; a faster submit is dropped silently by the server's bot check.
+  await page.waitForTimeout(BOT_CHECK_WAIT_MS);
   await form.getByRole('button', { name: 'Subscribe' }).click();
-  await expect(form.getByRole('status')).toHaveText(NL_DONE);
+  // E2E runs the stub transport → the honest "recorded" copy (spec/ui.md §3, delivery = recorded).
+  await expect(form.getByRole('status')).toHaveText(NL_RECORDED);
 }
 
 async function openSubscriber(page: Page, id: string, email: string): Promise<Locator> {
@@ -82,7 +86,7 @@ async function settings(page: Page): Promise<NewsletterSettingsResponse> {
   return ((await res.json()) as { data: NewsletterSettingsResponse }).data;
 }
 
-test('footer signup → "Almost there"; the admin shows the address Pending with its proof of consent', async ({ page }) => {
+test('footer signup → "Signup recorded" (stub); the admin shows the address Pending with its proof of consent', async ({ page }) => {
   await page.goto('/');
   // The consent line is followed by the Privacy link (fix pass); the stored consent text is the line alone.
   const consentShown = (await page.locator('#newsletter .ft-micro').innerText()).trim().replace(/\s*Privacy$/, '');
@@ -119,6 +123,45 @@ test('footer signup → "Almost there"; the admin shows the address Pending with
   await expect(dd(main, 'Signup IP')).toHaveText(row.signup_ip ?? 'not recorded — no trusted proxy');
   await expect(dd(main, 'Confirmation emails sent')).toHaveText('1');
   await expect(main.getByRole('button', { name: 'Resend confirmation' })).toBeVisible();
+});
+
+test('bot check: a submit inside 2 s, or with the honeypot filled, shows the same success copy and stores nothing', async ({ page }) => {
+  const fast = `nl-fast-${Date.now()}@example.test`;
+  const filled = `nl-honeypot-${Date.now()}@example.test`;
+  const bodies: Array<Record<string, unknown>> = [];
+  page.on('request', (r) => {
+    if (r.url().endsWith('/api/newsletter') && r.method() === 'POST') bodies.push(r.postDataJSON() as Record<string, unknown>);
+  });
+
+  // Too fast: straight after the page loads.
+  await page.goto('/');
+  let form = page.locator('#newsletter');
+  await form.getByLabel('Email').fill(fast);
+  await form.getByRole('button', { name: 'Subscribe' }).click();
+  await expect(form.getByRole('status')).toHaveText(NL_RECORDED);
+  expect(bodies.at(-1)).toMatchObject({ email: fast, website: '' });
+  expect(bodies.at(-1)!.fillMs as number).toBeLessThan(2_000);
+
+  // The honeypot is off-screen, out of the tab order and hidden from assistive tech.
+  await page.goto('/');
+  form = page.locator('#newsletter');
+  const hp = form.locator('input[name="website"]');
+  await expect(hp).toHaveAttribute('tabindex', '-1');
+  await expect(hp).toHaveAttribute('autocomplete', 'off');
+  await expect(form.locator('.ft-hp')).toHaveAttribute('aria-hidden', 'true');
+  expect(await hp.evaluate((el) => el.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+  await hp.fill('https://spam.example', { force: true });
+  await form.getByLabel('Email').fill(filled);
+  await page.waitForTimeout(BOT_CHECK_WAIT_MS);
+  await form.getByRole('button', { name: 'Subscribe' }).click();
+  await expect(form.getByRole('status')).toHaveText(NL_RECORDED);
+  expect(bodies.at(-1)).toMatchObject({ email: filled, website: 'https://spam.example' });
+  expect(bodies.at(-1)!.fillMs as number).toBeGreaterThanOrEqual(2_000);
+
+  const stored = await withTestDb(
+    (sql) => sql<Array<{ email: string }>>`select email from newsletter_subscriber where email in (${fast}, ${filled})`,
+  );
+  expect(stored).toEqual([]);
 });
 
 test('opening the confirm link confirms on open (303 → result page, IP/UA recorded); the admin shows Confirmed + timeline; opening it again is "already confirmed"', async ({ page }) => {
@@ -350,13 +393,31 @@ test('Send → confirm → Sent · 1 recipient, the send log, stats, and the stu
     `Campaign created stub-${walk.issueId}`,
     'Campaign started',
     'Sent',
+    // Stage A: the page refreshes stats as soon as the issue is sent (no click).
+    'Stats fetched',
   ]);
 
-  await main.getByRole('button', { name: 'Refresh stats' }).click();
+  // Stage A: the stats fill without clicking (auto-refresh on open), and survive a reload.
   const stat = (label: string) => main.locator('.statbox', { has: page.locator('.statbox__label', { hasText: label }) }).locator('.statbox__n');
   await expect(stat('Recipients')).toHaveText('1');
   await expect(stat('Sent')).toHaveText('1');
   await expect(stat('Opens')).toHaveText('n/a');
+  // The stub sender's tracking is "public" (spec/api.md): no tracking note.
+  await expect(main.getByText("Opens can't be counted", { exact: false })).toHaveCount(0);
+
+  let statsPosts = 0;
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().endsWith(`/api/admin/newsletter/issues/${walk.issueId}/stats`)) statsPosts += 1;
+  });
+  await page.reload();
+  await expect.poll(() => statsPosts, { message: 'one stats refresh on open, without a click' }).toBe(1);
+  await expect(stat('Recipients')).toHaveText('1');
+  await expect(main.locator('.issue-stats time')).toHaveText(/^as of /);
+  await main.getByRole('button', { name: 'Refresh stats' }).click();
+  await expect.poll(() => statsPosts).toBe(2);
+  await expect(stat('Sent')).toHaveText('1');
+  // Unchanged counters append no new event (the auto-refresh never floods the send log).
+  await expect(log.filter({ hasText: 'Stats fetched' })).toHaveCount(1);
 
   // The issue list agrees.
   await page.goto('/admin/newsletter');

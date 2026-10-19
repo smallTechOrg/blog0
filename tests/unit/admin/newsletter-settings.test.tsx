@@ -29,7 +29,7 @@ vi.mock('@/components/admin/api', async (importOriginal) => {
 
 const SETTINGS: NewsletterSettingsDto = { mode: 'manual', autoSend: false, digestDays: 7, digestPosts: 3, consentText: 'One issue a week at most.', consentVersion: 'v1', modeSetAt: null };
 const STATUS: NewsletterStatusDto = {
-  sender: { kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null },
+  sender: { kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null, trackingPublic: true },
   mail: { transport: 'stub', from: null },
   counts: { all: 5, pending: 1, confirmed: 3, unsubscribed: 0, bounced: 0, legacy_unconfirmed: 1 },
   digest: null,
@@ -63,10 +63,10 @@ describe('newsletter settings form helpers', () => {
 
   it('writes the status strip lines for stub and listmonk / smtp', () => {
     expect(senderLine(STATUS.sender)).toEqual({ kind: 'Stub', rest: 'issues are recorded, not delivered', stub: true });
-    expect(senderLine({ kind: 'listmonk', configured: true, listId: '3', listName: 'blog0', lastSyncAt: null, healthy: true, message: null })).toEqual({
+    expect(senderLine({ kind: 'listmonk', configured: true, listId: '3', listName: 'blog0', lastSyncAt: null, healthy: true, message: null, trackingPublic: true })).toEqual({
       kind: 'Listmonk', rest: 'list blog0 · healthy', stub: false,
     });
-    expect(senderLine({ kind: 'listmonk', configured: true, listId: '3', listName: null, lastSyncAt: null, healthy: false, message: 'ECONNREFUSED' })).toEqual({
+    expect(senderLine({ kind: 'listmonk', configured: true, listId: '3', listName: null, lastSyncAt: null, healthy: false, message: 'ECONNREFUSED', trackingPublic: true })).toEqual({
       kind: 'Listmonk', rest: 'list 3 · unreachable — ECONNREFUSED', stub: false,
     });
     expect(mailLine(STATUS.mail)).toBe('Stub — confirmation links are written to the server log and the subscriber’s audit view');

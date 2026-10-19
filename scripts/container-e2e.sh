@@ -112,6 +112,28 @@ release_out="$(docker run --rm --add-host=host.docker.internal:host-gateway --en
 echo "$release_out"
 grep -q '0 pending: OK' <<<"$release_out" || fail "release output lacks '0 pending: OK'"
 
+# 4b. Stage A: the bundled password-reset CLI inside the image (a throwaway admin seeded by a second,
+# idempotent release run; the E2E global setup resets blog0_test right after, so nothing leaks).
+step "reset-password step"
+RESET_EMAIL="reset-check@example.test"
+RESET_PW_OLD="container-reset-old-$$-pw"
+RESET_PW_NEW="container-reset-new-$$-pw"
+docker run --rm --add-host=host.docker.internal:host-gateway --env-file "$ENV_FILE" \
+  -e BLOG0_DATABASE_URL="$DB_URL" -e BLOG0_ADMIN_EMAIL="$RESET_EMAIL" -e BLOG0_ADMIN_PASSWORD="$RESET_PW_OLD" \
+  -e BLOG0_ADMIN_NAME="Reset Check" "$IMAGE" node release.mjs >/dev/null 2>&1 || fail "seeding the reset-check admin"
+reset_out="$(docker run --rm --add-host=host.docker.internal:host-gateway --env-file "$ENV_FILE" \
+  -e BLOG0_DATABASE_URL="$DB_URL" -e BLOG0_NEW_ADMIN_PASSWORD="$RESET_PW_NEW" "$IMAGE" \
+  node reset-password.mjs --email "$RESET_EMAIL" 2>&1)" || {
+  echo "$reset_out"
+  fail "node reset-password.mjs exited non-zero"
+}
+grep -q 'password reset for r\*\*\*@example.test · 0 sessions ended' <<<"$reset_out" || {
+  echo "$reset_out"
+  fail "reset-password output lacks the masked line"
+}
+! grep -q "$RESET_PW_NEW" <<<"$reset_out" || fail "reset-password printed the password"
+say "reset-password: $(grep 'password reset for' <<<"$reset_out")"
+
 # 5. App container
 step "start ${NAME} on ${HOST_PORT}"
 mkdir -p "$STORAGE_DIR" "$LOG_DIR"

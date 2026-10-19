@@ -86,15 +86,15 @@ describe('issue labels', () => {
   it('writes the one-click send confirmation with the count and the sender', () => {
     expect(sendConfirmTitle(42)).toBe('Send to 42 confirmed subscribers?');
     expect(sendConfirmTitle(1)).toBe('Send to 1 confirmed subscriber?');
-    expect(senderNote({ kind: 'listmonk', configured: true, listId: '3', listName: 'blog0', lastSyncAt: null, healthy: true, message: null })).toBe('via Listmonk · list blog0');
-    expect(senderNote({ kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null })).toBe('via the stub sender — recorded, not delivered');
+    expect(senderNote({ kind: 'listmonk', configured: true, listId: '3', listName: 'blog0', lastSyncAt: null, healthy: true, message: null, trackingPublic: true })).toBe('via Listmonk · list blog0');
+    expect(senderNote({ kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null, trackingPublic: true })).toBe('via the stub sender — recorded, not delivered');
   });
 });
 
 const ISSUE: IssueDetailDto = {
   id: 'i1', number: 3, status: 'draft', origin: 'per_post', title: 'Hello world', postCount: 1, recipientCount: null,
   createdAt: '2026-10-12T11:50:00Z', sentAt: null, lastError: null, introMd: 'Intro', providerCampaignId: null, stats: null,
-  createdBy: 'Sai', sentBy: null, editable: true, stuckSending: false, warnings: [],
+  createdBy: 'Sai', sentBy: null, editable: true, stuckSending: false, warnings: [], trackingPublic: true,
   posts: [{ articleId: 'a1', slug: 'hello', title: 'Hello', dek: 'Dek', excerpt: 'Ex', topic: 'AI', publishedLabel: '1 Oct 2026', readUrl: 'https://b/p/hello', tldrUrl: null, listenUrl: null }],
   events: [{ id: 'e1', kind: 'created', actor: 'Sai', details: {}, createdAt: '2026-10-12T11:50:00Z' }],
 };
@@ -153,7 +153,7 @@ describe('IssuePreview', () => {
 describe('SendDialog', () => {
   it('asks once with the recipient count and the sender line', () => {
     const html = renderToStaticMarkup(
-      <SendDialog recipients={2} sender={{ kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null }} pending={false} onSend={noop} onCancel={noop} />,
+      <SendDialog recipients={2} sender={{ kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null, trackingPublic: true }} pending={false} onSend={noop} onCancel={noop} />,
     );
     expect(html).toContain('role="dialog"');
     expect(html).toContain('Send to 2 confirmed subscribers?');
@@ -161,7 +161,7 @@ describe('SendDialog', () => {
     expect(html).toContain('>Send now</button>');
     expect(html).toContain('>Cancel</button>');
     const busy = renderToStaticMarkup(
-      <SendDialog recipients={2} sender={{ kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null }} pending onSend={noop} onCancel={noop} />,
+      <SendDialog recipients={2} sender={{ kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null, trackingPublic: true }} pending onSend={noop} onCancel={noop} />,
     );
     expect(busy).toMatch(/<button[^>]*disabled[^>]*>Sending…<\/button>/);
   });

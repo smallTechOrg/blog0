@@ -38,12 +38,15 @@ const toHastProcessor = unified()
  * mdast → hast: remark-rehype (raw HTML dropped, footnotes as a visible "Notes" section) →
  * rehype-slug → safe URLs → links → images → tables → Shiki.
  */
-export async function mdastToHast(mdast: MdRoot): Promise<HRoot> {
+export async function mdastToHast(
+  mdast: MdRoot,
+  opts: { imageDims?: ReadonlyMap<string, { width: number; height: number }> } = {},
+): Promise<HRoot> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- local structural mdast type
   const hast = (await toHastProcessor.run(mdast as any)) as unknown as HRoot;
   safeUrls(hast);
   externalLinks(hast);
-  images(hast);
+  images(hast, opts.imageDims);
   wrapTables(hast);
   await highlightCode(hast);
   return hast;

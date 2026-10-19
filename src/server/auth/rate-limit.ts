@@ -1,33 +1,55 @@
 import 'server-only';
 
-import type { RateBucket, RateLimitStore } from '../rate-window';
+import type { RateBucket, RateLimitStore, RateScope } from '../rate-window';
 import { getRateLimitStore, peekRateLimitStore, resetRateLimitStoreForTests } from '../rate-window-store';
 
-// Login throttling (spec/architecture.md §6; capabilities admin-auth, abuse-protection):
-// - 5 failed attempts for the same (lower-cased email, client IP) within 15 minutes, and
-// - 20 failed attempts for the same lower-cased email across all IPs within 15 minutes
-// → further attempts are refused for the rest of that window. Both buckets are per site.
-// `attempt()` checks AND reserves a failure atomically in the throttle store (in Postgres by
-// default, so the cap holds across restarts and instances); a correct password then calls
-// `recordSuccess()` with the attempt's `now`. This module holds no state of its own.
+export { delayDecision, LOGIN_DELAY_CAP_SEC, LOGIN_DELAY_RESET_MS, LOGIN_FREE_ATTEMPTS, loginDelaySec } from './login-delay';
+
+// Login throttling — Stage A (spec/architecture.md §6; capabilities admin-auth, abuse-protection).
+// Knowing the admin email must never lock the owner out, so the hard per-email lock is gone:
+// (a) hard caps ONLY when the client IP is a real address (skipped for `direct` / `unknown`, which
+//     would otherwise make the pair cap a per-email lock again): 5 failures per (email, IP) and 50 per
+//     IP within 15 minutes (`login.pair`, `login.ip`);
+// (b) a progressive per-email delay, always (`login.delay`, auth/login-delay.ts): after 5 attempts
+//     since the last success, each next attempt waits 1, 2, 4 … 60 s after the previous one.
+// Order: hard caps (refused → the delay is untouched) → delay (refused → the cap reservations are
+// refunded) → the caller verifies the password. Every admitted attempt is reserved before the
+// verification, so concurrent attempts on any instance cannot overrun; a correct password then calls
+// `recordSuccess()` (clear pair, refund ip, clear delay). This module holds no state of its own.
+// > Assumed: 5 free attempts, 1 s doubling to 60 s, 15 min reset, 50 per IP (constants here and in
+// > login-delay.ts).
 
 export const LOGIN_MAX_FAILURES = 5;
-export const LOGIN_EMAIL_MAX_FAILURES = 20;
+export const LOGIN_IP_MAX_FAILURES = 50;
 export const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
-export type RateLimitCheck = { limited: false } | { limited: true; retryAfterSec: number };
+/** The non-addresses `clientIpFromRequest` returns when no trusted proxy supplied one (auth/login.ts). */
+const NOT_AN_IP = new Set(['direct', 'unknown']);
+
+export type LoginThrottleScope = Extract<RateScope, 'login.pair' | 'login.ip' | 'login.delay'>;
+export type RateLimitCheck = { limited: false } | { limited: true; retryAfterSec: number; scope: LoginThrottleScope };
 
 function normalize(email: string): string {
   return email.trim().toLowerCase();
 }
 
-/** The two buckets one sign-in attempt counts in: (email, IP) pair first, then the email alone. */
-export function loginBuckets(email: string, ip: string): [RateBucket, RateBucket] {
-  const normalized = normalize(email);
+/** True for an address the trusted proxies supplied; false for the `direct` / `unknown` constants. */
+export function isRealClientIp(ip: string): boolean {
+  return ip !== '' && !NOT_AN_IP.has(ip);
+}
+
+/** The hard-cap buckets one sign-in attempt counts in: none without a real IP; else (email, IP) then IP. */
+export function loginBuckets(email: string, ip: string): RateBucket[] {
+  if (!isRealClientIp(ip)) return [];
   return [
-    { scope: 'login.pair', key: `${normalized}\u0000${ip}`, max: LOGIN_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS },
-    { scope: 'login.email', key: normalized, max: LOGIN_EMAIL_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS },
+    { scope: 'login.pair', key: `${normalize(email)}\u0000${ip}`, max: LOGIN_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS },
+    { scope: 'login.ip', key: ip, max: LOGIN_IP_MAX_FAILURES, windowMs: LOGIN_WINDOW_MS },
   ];
+}
+
+/** The `login.delay` key of an email (lower-cased; the database store keeps only its SHA-256). */
+export function loginDelayKey(email: string): string {
+  return normalize(email);
 }
 
 export class LoginRateLimiter {
@@ -43,26 +65,41 @@ export class LoginRateLimiter {
   }
 
   /**
-   * Check + reserve atomically: when allowed, the attempt is already counted as a failure in both
-   * buckets. Call `recordSuccess` (same `now`) if the password matches.
+   * Check + reserve atomically: when allowed, the attempt is already counted (hard caps and delay).
+   * Call `recordSuccess` (same `now`) if the password matches. A store failure propagates (fail closed).
    */
   async attempt(siteId: string, email: string, ip: string, now: number = Date.now()): Promise<RateLimitCheck> {
-    const check = await this.#resolve().attempt(siteId, loginBuckets(email, ip), now);
-    return check.limited ? { limited: true, retryAfterSec: check.retryAfterSec } : { limited: false };
+    const store = this.#resolve();
+    const buckets = loginBuckets(email, ip);
+    const caps = await store.attempt(siteId, buckets, now);
+    if (caps.limited) return { limited: true, retryAfterSec: caps.retryAfterSec, scope: caps.scope as LoginThrottleScope };
+
+    const delay = await store.attemptDelay(siteId, loginDelayKey(email), now);
+    if (delay.limited) {
+      for (const bucket of buckets) await store.refund(siteId, bucket, now);
+      return { limited: true, retryAfterSec: delay.retryAfterSec, scope: 'login.delay' };
+    }
+    return { limited: false };
   }
 
-  /** Clears the (email, IP) count and refunds the reservation this attempt made on the email cap. */
+  /** A correct password: clear the (email, IP) count, refund this attempt's IP reservation, forget the delay. */
   async recordSuccess(siteId: string, email: string, ip: string, now: number = Date.now()): Promise<void> {
-    const [pair, perEmail] = loginBuckets(email, ip);
     const store = this.#resolve();
-    await store.clear(siteId, pair, now);
-    await store.refund(siteId, perEmail, now);
+    const [pair, perIp] = loginBuckets(email, ip);
+    if (pair) await store.clear(siteId, pair, now);
+    if (perIp) await store.refund(siteId, perIp, now);
+    await store.clearDelay(siteId, loginDelayKey(email));
   }
 }
 
-/** "Too many attempts — try again in N minutes." (N rounded up, at least 1). */
+/**
+ * "Too many attempts — try again in N seconds." under a minute ("1 second" when N = 1), else
+ * "… in N minutes." (rounded up) — spec/ui.md → Sign in.
+ */
 export function rateLimitMessage(retryAfterSec: number): string {
-  const minutes = Math.max(1, Math.ceil(retryAfterSec / 60));
+  const seconds = Math.max(1, Math.ceil(retryAfterSec));
+  if (seconds < 60) return `Too many attempts — try again in ${seconds} second${seconds === 1 ? '' : 's'}.`;
+  const minutes = Math.ceil(seconds / 60);
   return `Too many attempts — try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
 }
 

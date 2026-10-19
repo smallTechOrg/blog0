@@ -22,7 +22,7 @@ vi.mock('@/components/admin/api', async (importOriginal) => {
 });
 
 const noop = () => {};
-const STUB = { kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null } as const;
+const STUB = { kind: 'stub', configured: true, listId: null, listName: null, lastSyncAt: null, healthy: null, message: null, trackingPublic: true } as const;
 
 describe('delete-subscriber confirmation gating', () => {
   it('matches the typed address case-insensitively, ignoring surrounding spaces, and nothing else', () => {

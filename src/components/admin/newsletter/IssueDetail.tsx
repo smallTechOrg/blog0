@@ -26,7 +26,7 @@ import { safeDate } from '../subscribers/subscribers-api';
 import { moveId, postsInvalidMessage, publishedArticles, validateCompose, type ComposeErrors } from './issue-edit';
 import { IssuePreview, type PreviewTab } from './IssuePreview';
 import { POLL_MS } from './IssueList';
-import { IssueStats } from './IssueStats';
+import { IssueStats, TrackingNote } from './IssueStats';
 import {
   ISSUE_STATUS_LABEL,
   issueApi,
@@ -43,11 +43,14 @@ import {
 import { PostPicker } from './PostPicker';
 import { SendDialog } from './SendDialog';
 import { SendLog } from './SendLog';
+import { startStatsAutoRefresh } from './stats-refresh';
 
 // Admin → Newsletter → Issue /admin/newsletter/[id] (spec/ui.md §4 "Issue"; capability
 // newsletter-issues): head, inline edit while draft (title, intro, posts ↑ ↓ ✕ + Add post), actions
 // (Send test to me · Send with the one-click confirm dialog · Refresh stats · Delete draft · Open
 // preview in new tab), HTML/Text preview, send log, stats. Polls every 3 s while `sending`.
+// Stage A: a sent issue's stats refresh on open and every 60 s while the tab is visible
+// (stats-refresh.ts); the trackingPublic note sits under the tiles.
 // States: loading, error + Retry / Sign in again, 404 "That issue isn’t here.", ready.
 
 type Stamped = IssueDetailResponse & { now: Date };
@@ -117,9 +120,32 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
     kind: 'loading',
   });
   const latestIssue = useRef(issue);
+  const onIssueRef = useRef(onIssue);
   useEffect(() => {
     latestIssue.current = issue;
+    onIssueRef.current = onIssue;
   });
+
+  // Stage A: stats auto-refresh for a sent issue. Shares `flight` with the action buttons, so at most
+  // one request runs at a time; a skipped tick simply waits for the next one.
+  const [statsFailed, setStatsFailed] = useState(false);
+  const isSent = issue.status === 'sent';
+  useEffect(() => {
+    if (!isSent) return;
+    let live = true;
+    const stop = startStatsAutoRefresh(() =>
+      runExclusive(flight, async () => {
+        const res = await apiRequest<IssueDetailResponse>(issueApi(issue.id, 'stats'), { method: 'POST' });
+        if (!live) return;
+        setStatsFailed(!res.ok);
+        if (res.ok) onIssueRef.current(res.data.issue);
+      }),
+    );
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [issue.id, isSent]);
   useEffect(() => {
     let live = true;
     void apiRequest<IssuePreviewDto>(issueApi(issue.id, 'preview')).then(async (res) => {
@@ -230,6 +256,7 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
       const res = await apiRequest<IssueDetailResponse>(issueApi(issue.id, 'stats'), { method: 'POST' });
       setBusy(null);
       if (!res.ok) return fail(res);
+      setStatsFailed(false);
       onIssue(res.data.issue);
     });
   }
@@ -378,7 +405,14 @@ function IssueBody({ data, timeZone, onIssue }: { data: Stamped; timeZone: strin
           <h2 className="admin-card__title" id="issue-stats-h">
             Stats
           </h2>
-          {issue.stats ? <IssueStats stats={issue.stats} now={now} timeZone={timeZone} /> : <p className="admin-muted">No stats yet — Refresh stats.</p>}
+          {issue.stats ? (
+            <IssueStats stats={issue.stats} now={now} timeZone={timeZone} trackingPublic={issue.trackingPublic !== false} refreshFailed={statsFailed} />
+          ) : (
+            <>
+              <p className="admin-muted">No stats yet — Refresh stats.</p>
+              {issue.trackingPublic === false ? <TrackingNote /> : null}
+            </>
+          )}
         </section>
       ) : null}
     </>

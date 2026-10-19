@@ -23,4 +23,11 @@ export function isKnownFigure(id: string): id is KnownFigureId {
 }
 
 /** Input to renderArticle(). */
-export interface RenderInput { title: string; dek: string; bodyMd: string }
+export interface RenderInput {
+  title: string;
+  dek: string;
+  bodyMd: string;
+  /** Stage A: width/height per image src as written (`/media/<key>`), looked up before the render
+   *  (src/server/public/image-dims.ts). Only the published page passes it. */
+  imageDims?: ReadonlyMap<string, { width: number; height: number }>;
+}

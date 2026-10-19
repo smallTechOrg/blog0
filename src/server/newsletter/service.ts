@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { SubscriberCounts, SubscriberDetailDto, SubscriberDto, SubscriberListResponse } from '@/lib/api/dto';
+import type { NewsletterDelivery, SubscriberCounts, SubscriberDetailDto, SubscriberDto, SubscriberListResponse } from '@/lib/api/dto';
 
 import { inArray } from 'drizzle-orm';
 
@@ -12,7 +12,7 @@ import { getCurrentSite } from '../site/current';
 
 import { CONFIRM_TOKEN_TTL_MS, CONFIRMATION_CAP_WINDOW_MS, CONFIRMATION_SENDS_PER_DAY, USER_AGENT_MAX } from './constants';
 import { unsubscribeVerifySecrets } from './links';
-import { MailError, sendConfirmationMail } from './mail';
+import { getMailTransport, MailError, sendConfirmationMail } from './mail';
 import { isKnownClientIp } from './rate-limit';
 import * as repo from './repo';
 import type { SubscribeInput } from './schemas';
@@ -57,6 +57,18 @@ export interface SignupResult {
   subscriber: NewsletterSubscriberRow;
   /** Set when a confirmation email was attempted. */
   mail?: { outcome: 'sent' | 'stubbed' | 'failed'; transport: 'smtp' | 'stub' };
+}
+
+/**
+ * Stage A `delivery` of a signup response (spec/api.md POST /api/newsletter): `failed` only when this
+ * request's confirmation was attempted over SMTP and the transport rejected it; otherwise the
+ * environment's success value — `sent` with the SMTP transport, `recorded` with the stub — including
+ * every no-send outcome (confirmed, capped, suppressed) and a dropped bot submission (`result` null),
+ * so the answer never tells addresses apart.
+ */
+export function signupDelivery(result: Pick<SignupResult, 'mail'> | null): NewsletterDelivery {
+  if (result?.mail?.outcome === 'failed' && result.mail.transport === 'smtp') return 'failed';
+  return getMailTransport().kind === 'smtp' ? 'sent' : 'recorded';
 }
 
 /**

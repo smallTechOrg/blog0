@@ -2,6 +2,7 @@
 # blog0 — one non-root image, two commands (spec/architecture.md §12.1, capability container-image):
 #   docker run … blog0:local                     → the web server (Next standalone server.js, port 3410)
 #   docker run … blog0:local node release.mjs    → the release step (migrate + verify + site/admin)
+#   docker exec -it <c> node reset-password.mjs --email <e>  → reset an admin's password (Stage A)
 # Build: docker build -t blog0:local .   (no BLOG0_* runtime value exists at build time)
 
 # Must equal package.json devEngines.runtime.version.
@@ -15,14 +16,14 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm fetch --frozen-lockfile
 
-# ---- 2. build: install offline, Next standalone build + the release-step bundle --------------
+# ---- 2. build: install offline, Next standalone build + the CLI bundles (release, reset-password)
 FROM deps AS build
 COPY . .
 RUN pnpm install --offline --frozen-lockfile
 ENV NEXT_TELEMETRY_DISABLED=1 BLOG0_STANDALONE=1
 RUN pnpm build && pnpm build:release && mkdir -p public
 
-# ---- 3. runtime: standalone server + static assets + migrations + prompts + release.mjs -------
+# ---- 3. runtime: standalone server + static assets + migrations + prompts + the two CLIs ------
 FROM node:${NODE_VERSION}-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
@@ -39,6 +40,7 @@ COPY --from=build /app/public/ ./public/
 COPY --from=build /app/src/server/db/migrations/ ./src/server/db/migrations/
 COPY --from=build /app/src/server/jev/prompts/ ./src/server/jev/prompts/
 COPY --from=build /app/dist/release.mjs ./release.mjs
+COPY --from=build /app/dist/reset-password.mjs ./reset-password.mjs
 # Only the uploads volume and Next's cache are writable by the runtime user (uid 1000).
 RUN mkdir -p /data/storage /app/.next/cache && chown node:node /data/storage /app/.next/cache
 VOLUME /data/storage

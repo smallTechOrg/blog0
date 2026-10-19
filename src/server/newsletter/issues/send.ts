@@ -156,7 +156,7 @@ export async function sendIssue(siteId: string, id: string, actor: IssueActor, o
       user_id: actor.userId ?? undefined,
       request_id: actor.requestId,
     });
-    return issueDetail(db, row);
+    return issueDetail(db, row, sender);
   } catch (err) {
     const message = errorText(err);
     const failed = await db.transaction(async (tx) => {
@@ -177,8 +177,17 @@ export async function sendIssue(siteId: string, id: string, actor: IssueActor, o
       err_code: 'SENDER_FAILED',
       err_message: message,
     });
-    throw new ApiError('SENDER_FAILED', 502, `Couldn’t send: ${message}`, { issue: await issueDetail(db, failed) });
+    throw new ApiError('SENDER_FAILED', 502, `Couldn’t send: ${message}`, { issue: await issueDetail(db, failed, sender) });
   }
+}
+
+const STATS_COUNTERS = ['recipients', 'sent', 'delivered', 'opens', 'clicks', 'bounces', 'unsubscribes'] as const;
+
+/** True when any counter differs from the stored stats (or none were stored); `fetchedAt` is ignored. */
+export function statsChanged(stored: unknown, next: IssueStatsDto): boolean {
+  if (stored === null || typeof stored !== 'object') return true;
+  const old = stored as Partial<Record<(typeof STATS_COUNTERS)[number], unknown>>;
+  return STATS_COUNTERS.some((key) => (old[key] ?? null) !== (next[key] ?? null));
 }
 
 /** POST …/issues/:id/stats — fresh numbers from the provider (never changes the status). */
@@ -197,11 +206,14 @@ export async function refreshStats(siteId: string, id: string, actor: IssueActor
     log.warn('newsletter.issue', { issue_id: row.id, number: row.number, origin: row.origin, action: 'stats', outcome: 'failed', err_code: 'SENDER_FAILED', err_message: errorText(err) });
     throw new ApiError('SENDER_FAILED', 502, `Couldn’t fetch stats: ${errorText(err)}`);
   }
+  // Stage A: `fetchedAt` is always updated, but the send log gains a `stats_fetched` event only when a
+  // counter differs from the stored stats — the issue page refreshes every 60 s while visible.
+  const changed = statsChanged(row.stats, stats);
   const updated = await db.transaction(async (tx) => {
     const next = await repo.updateIssueRow(tx, row.id, { stats });
-    await repo.appendIssueEvent(tx, { siteId, issueId: row.id, kind: 'stats_fetched', actorUserId: actor.userId, details: { stats } });
+    if (changed) await repo.appendIssueEvent(tx, { siteId, issueId: row.id, kind: 'stats_fetched', actorUserId: actor.userId, details: { stats } });
     return next;
   });
-  log.info('newsletter.issue', { issue_id: row.id, number: row.number, origin: row.origin, action: 'stats', outcome: 'ok', campaign_id: row.providerCampaignId, user_id: actor.userId ?? undefined });
-  return issueDetail(db, updated);
+  log.info('newsletter.issue', { issue_id: row.id, number: row.number, origin: row.origin, action: 'stats', outcome: 'ok', campaign_id: row.providerCampaignId, user_id: actor.userId ?? undefined, changed });
+  return issueDetail(db, updated, sender);
 }

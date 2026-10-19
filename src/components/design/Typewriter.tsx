@@ -2,7 +2,7 @@
 
 import { createElement, useEffect, useState } from 'react';
 
-import { cx, prefersReducedMotion, typeClock, typeNow, typeStep } from './motion';
+import { cx, shouldType, typeClock, typeNow, typeStep } from './motion';
 
 /* ------------------------------------------------------------------
    Typewriter — characters land in sequence on load. Every character is
@@ -37,7 +37,9 @@ export function Typewriter({ text: rawText, tag = 'span', className, id, delay =
     }
     let raf = 0;
     let done = false;
-    if (prefersReducedMotion()) {
+    /* Stage A: only the intro types; elsewhere the text is complete at first paint
+       (additions.css) and this only catches the state up. */
+    if (!shouldType()) {
       raf = window.requestAnimationFrame(() => setShown(len));
       return () => window.cancelAnimationFrame(raf);
     }
@@ -64,10 +66,20 @@ export function Typewriter({ text: rawText, tag = 'span', className, id, delay =
     c === ' ' ? (
       ' '
     ) : (
-      <span key={ci} className={cx('typed__c', ci < shown && 'is-in')} aria-hidden="true">
+      <span key={ci} className={cx('typed__c', ci < shown && 'is-in')}>
         {c}
       </span>
     ),
   );
-  return createElement(tag, { className: cx('typed', className), id, 'aria-label': text }, parts);
+  /* Stage A (spec/ui.md §3): the full text once in `.sr`, the animated copy aria-hidden. */
+  return createElement(
+    tag,
+    { className: cx('typed', className), id },
+    <span key="sr" className="sr">
+      {text}
+    </span>,
+    <span key="anim" aria-hidden="true">
+      {parts}
+    </span>,
+  );
 }

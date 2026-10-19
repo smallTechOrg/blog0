@@ -118,13 +118,17 @@ export class SmtpTransport implements MailTransport {
   readonly #from: string;
   readonly #transporter: Transporter;
 
-  constructor(smtp: SmtpConfig) {
+  /**
+   * `options.requireTLS: false` exists for the integration tests' Mailpit sink only (plain SMTP on
+   * 127.0.0.1:1025); configuration never turns STARTTLS off (spec/architecture.md §10 BLOG0_SMTP_PORT).
+   */
+  constructor(smtp: SmtpConfig, options: { requireTLS?: boolean } = {}) {
     this.#from = smtp.from;
     this.#transporter = nodemailer.createTransport({
       host: smtp.host,
       port: smtp.port,
       secure: smtp.port === 465,
-      requireTLS: smtp.port !== 465,
+      requireTLS: smtp.port !== 465 && options.requireTLS !== false,
       auth: smtp.user !== null && smtp.pass !== null ? { user: smtp.user, pass: smtp.pass.reveal() } : undefined,
       connectionTimeout: 10_000,
       socketTimeout: 20_000,

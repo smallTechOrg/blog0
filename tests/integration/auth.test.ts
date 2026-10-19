@@ -218,7 +218,7 @@ describe('admin auth', () => {
       expect(!body.ok && body.error.message).toBe(BAD_CREDENTIALS_MESSAGE);
     });
 
-    it('returns 429 RATE_LIMITED with Retry-After on the 6th failure and refuses even the right password', async () => {
+    it('behind a trusted proxy: 429 RATE_LIMITED + Retry-After on the 6th failure of one (email, IP), even for the right password; another IP is only delayed (Stage A)', async () => {
       setTrustedProxyHops('1');
       await createUserWithPassword(EMAIL, PASSWORD);
       const statuses: number[] = [];
@@ -228,7 +228,6 @@ describe('admin auth', () => {
 
       const sixth = await loginRoute(loginRequest({ email: EMAIL, password: 'wrong-password-6xx' }), ctx);
       const correct = await loginRoute(loginRequest({ email: EMAIL, password: PASSWORD }), ctx);
-      const otherIp = await loginRoute(loginRequest({ email: EMAIL, password: PASSWORD }, { 'x-forwarded-for': '198.51.100.7' }), ctx);
 
       expect(statuses).toEqual([401, 401, 401, 401, 401]);
       expect(sixth.status).toBe(429);
@@ -239,8 +238,13 @@ describe('admin auth', () => {
       if (sixthBody.ok) throw new Error('expected error');
       expect(sixthBody.error.code).toBe('RATE_LIMITED');
       expect(sixthBody.error.message).toBe('Too many attempts — try again in 15 minutes.');
+      expect(sixthBody.error.details).toEqual({ retryAfterSec: retryAfter });
       expect(correct.status).toBe(429);
       expect(correct.headers.get('set-cookie')).toBeNull();
+
+      // the same email from another IP is not locked — only the per-email delay applies
+      await new Promise((r) => setTimeout(r, 1100));
+      const otherIp = await loginRoute(loginRequest({ email: EMAIL, password: PASSWORD }, { 'x-forwarded-for': '198.51.100.7' }), ctx);
       expect(otherIp.status).toBe(200);
     });
 
@@ -286,28 +290,26 @@ describe('admin auth', () => {
       expect(statuses).toEqual([401, 401, 401, 401, 401, 429]);
     });
 
-    it('caps failures per email across rotating IPs (20 per 15 min) even behind a trusted proxy', async () => {
+    it('rotating IPs behind a trusted proxy cannot dodge the per-email delay, and cannot lock the owner out either (Stage A)', async () => {
       setTrustedProxyHops('1');
       await createUserWithPassword(EMAIL, PASSWORD);
       const statuses: number[] = [];
-      for (let i = 0; i < 21; i += 1) {
+      for (let i = 0; i < 8; i += 1) {
         const ip = { 'x-forwarded-for': `198.51.100.${i + 1}` };
         statuses.push((await loginRoute(loginRequest({ email: EMAIL, password: `wrong-password-${i}xx` }, ip), ctx)).status);
       }
-      const correctFromFreshIp = await loginRoute(
-        loginRequest({ email: EMAIL, password: PASSWORD }, { 'x-forwarded-for': '198.51.100.200' }),
-        ctx,
-      );
       const otherAccount = await loginRoute(
         loginRequest({ email: 'nobody@smalltech.in', password: PASSWORD }, { 'x-forwarded-for': '198.51.100.201' }),
         ctx,
       );
 
-      expect(statuses.slice(0, 20).every((s) => s === 401)).toBe(true);
-      expect(statuses[20]).toBe(429);
-      expect(correctFromFreshIp.status).toBe(429);
-      expect(Number(correctFromFreshIp.headers.get('retry-after'))).toBeGreaterThan(14 * 60);
+      expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+      expect(statuses.slice(5)).toEqual([429, 429, 429]);
       expect(otherAccount.status).toBe(401);
+
+      await new Promise((r) => setTimeout(r, 1100));
+      const owner = await loginRoute(loginRequest({ email: EMAIL, password: PASSWORD }, { 'x-forwarded-for': '198.51.100.200' }), ctx);
+      expect(owner.status).toBe(200);
     });
 
     it('rejects invalid bodies with 400 VALIDATION_FAILED and a cross-site POST with 403 FORBIDDEN_ORIGIN', async () => {
@@ -348,7 +350,7 @@ describe('admin auth', () => {
         'bad_credentials',
       ]);
       await loginRoute(loginRequest({ email: 'ghost@smalltech.in', password: 'wrong-password-zz' }), ctx);
-      expect(logs.find('auth.login').at(-1)).toMatchObject({ outcome: 'rate_limited', email_masked: 'g***@smalltech.in' });
+      expect(logs.find('auth.login').at(-1)).toMatchObject({ outcome: 'rate_limited', scope: 'login.delay', email_masked: 'g***@smalltech.in' });
       expect(lines[1]).toMatchObject({ level: 'info', email_masked: 's***@smalltech.in' });
       const everything = JSON.stringify(logs.lines);
       expect(everything).not.toContain(PASSWORD);

@@ -17,9 +17,21 @@ beforeEach(() => {
 });
 
 describe('render cache', () => {
-  it('keys entries by revision id and RENDER_VERSION', () => {
-    expect(RENDER_VERSION).toBe('r1');
-    expect(renderCacheKey('rev-1')).toBe('rev-1:r1');
+  it('keys entries by revision id and RENDER_VERSION (+ ":dims" for a render with image dimensions)', () => {
+    expect(RENDER_VERSION).toBe('r2');
+    expect(renderCacheKey('rev-1')).toBe('rev-1:r2');
+    expect(renderCacheKey('rev-1', true)).toBe('rev-1:r2:dims');
+  });
+
+  it('caches a render with image dimensions apart from the plain render of the same revision', async () => {
+    const md = { title: 'T', dek: 'D', bodyMd: '![a](/media/a.png)' };
+    const plain = await getRenderedRevision('rev-img', md);
+    const dims = await getRenderedRevision('rev-img', { ...md, imageDims: new Map([['/media/a.png', { width: 10, height: 5 }]]) });
+
+    expect(dims).not.toBe(plain);
+    expect(JSON.stringify(dims.blocks)).toContain('width=\\"10\\"');
+    expect(JSON.stringify(plain.blocks)).not.toContain('width=');
+    expect(renderCacheSize()).toBe(2);
   });
 
   it('renders a revision once and returns the same result for later calls', async () => {

@@ -15,6 +15,29 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
+/* Stage A — the intro (boot line typing, wordmark/tagline/About typing, print-in) plays only on
+   the visit's first load of `/` (spec/ui.md §1 rule 4). The root layout's pre-paint script decides
+   it and marks `<html data-intro="1">`; the first client navigation ends it, so every later page
+   renders its text at first paint. */
+export function introActive(): boolean {
+  try {
+    return typeof document !== 'undefined' && document.documentElement.dataset.intro === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Ends the intro for the rest of this document (additions.css then shows every typed char). */
+export function endIntro(): void {
+  if (typeof document === 'undefined') return;
+  delete document.documentElement.dataset.intro;
+}
+
+/** Whether a typed text should animate now: only during the intro, never with reduced motion. */
+export function shouldType(): boolean {
+  return introActive() && !prefersReducedMotion();
+}
+
 function subscribeReduce(cb: () => void): () => void {
   if (typeof window === 'undefined' || !window.matchMedia) return () => {};
   const mq = window.matchMedia(REDUCE_QUERY);

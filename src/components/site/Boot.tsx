@@ -3,7 +3,7 @@
 import { usePathname } from 'next/navigation';
 import { useLayoutEffect, useRef } from 'react';
 
-import { prefersReducedMotion } from '@/components/design/motion';
+import { shouldType } from '@/components/design/motion';
 
 /* ------------------------------------------------------------------
    Boot: "> start of <brand>" types in at the top of every page, and the
@@ -50,32 +50,39 @@ export interface BootProps {
   brand: string;
 }
 
+/* Stage A (spec/ui.md §3 Chrome): only the intro (the visit's first load of `/`) types
+   "> start of <brand>"; every other load and every client navigation shows the current page's
+   command fully written at first paint. The line is read once from its `.sr` copy; the visible
+   copy (and the cursor) are hidden from assistive tech. */
 export function Boot({ brand }: BootProps) {
   const pathname = usePathname();
   const route = bootRouteKey(pathname);
+  const srRef = useRef<HTMLSpanElement>(null);
   const ref = useRef<HTMLSpanElement>(null);
   /* the line chosen for this route — so a dev-mode effect replay retypes the
      same command instead of mistaking itself for a later navigation */
-  const chosen = useRef<{ route: string; line: string } | null>(null);
+  const chosen = useRef<{ route: string; line: string; typed: boolean } | null>(null);
+  const pageLine = bootCommand(route, { first: false, brand });
 
-  /* A layout effect, so the prompt is reset before the first paint (the
-     server HTML carries the whole start line for readers without JS). */
+  /* A layout effect, so the intro's prompt is reset before the first paint (the server HTML
+     carries the page's command written out, for every load that is not the intro). */
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    let line: string;
-    if (chosen.current && chosen.current.route === route) {
-      line = chosen.current.line;
-    } else {
-      line = bootCommand(route, { first: bootFirst, brand });
-      chosen.current = { route, line };
+    const sr = srRef.current;
+    if (!el || !sr) return;
+    let pick = chosen.current;
+    if (!pick || pick.route !== route) {
+      const typed = bootFirst && shouldType();
+      pick = { route, line: typed ? bootCommand(route, { first: true, brand }) : bootCommand(route, { first: false, brand }), typed };
+      chosen.current = pick;
     }
     bootFirst = false;
-    if (prefersReducedMotion()) {
-      el.textContent = line;
+    sr.textContent = pick.line;
+    if (!pick.typed) {
+      el.textContent = pick.line;
       return;
     }
-    /* a new command replaces the old one from the prompt onward */
+    const line = pick.line;
     el.textContent = '>';
     let i = 1;
     const t = window.setInterval(() => {
@@ -87,12 +94,17 @@ export function Boot({ brand }: BootProps) {
 
   if (!SHOW_BOOT_STRIP) return null;
   return (
-    <div className="boot" aria-hidden="true">
+    <div className="boot">
       <div className="boot__in">
-        <span ref={ref} suppressHydrationWarning>
-          {'> start of ' + brand}
+        <span className="sr" ref={srRef} suppressHydrationWarning>
+          {pageLine}
         </span>
-        <span className="boot__us">_</span>
+        <span ref={ref} aria-hidden="true" suppressHydrationWarning>
+          {pageLine}
+        </span>
+        <span className="boot__us" aria-hidden="true">
+          _
+        </span>
       </div>
     </div>
   );

@@ -4,27 +4,50 @@
 // for issues sent in the last 30 days → the 12-month IP prune → retried Listmonk deletes of erased
 // subscribers. One `newsletter.tick` log line.
 // Prints "digest: created #N | not due; suppressions pulled N; stats refreshed N; ips pruned N; erasures retried N";
-// exits 1 when any step failed (the others still ran).
+// exits 1 when any step failed (the others still ran); 2 on a usage error.
+// Stage A: BLOG0_HEARTBEAT_TICK_URL (optional) gets GET <url> after a run that exits 0 and
+// GET <url>/fail after one that exits 1 (5 s timeout; never changes the exit code; a usage error
+// pings nothing). An invalid heartbeat value is reported once (`ops.heartbeat` invalid_url) and never
+// fails the tick (spec/architecture.md §12.3).
 import { runCli } from './lib/cli';
 
+import { HEARTBEAT_ENV } from '../src/server/config';
 import { closeDb, initDb } from '../src/server/db/client';
 import { runTick } from '../src/server/newsletter/issues/tick';
+import { dropInvalidHeartbeatEnv, pingHeartbeatFromEnv } from '../src/server/ops/heartbeat';
 import { getCurrentSite } from '../src/server/site/current';
+
+const USAGE = 'Usage: pnpm newsletter:tick';
 
 runCli('newsletter:tick', async () => {
   const args = process.argv.slice(2).filter((a) => a !== '--');
-  if (args.length > 0) throw new Error(`Unknown argument(s): ${args.join(' ')}\nUsage: pnpm newsletter:tick`);
-  await initDb();
-  try {
-    const site = await getCurrentSite();
-    const r = await runTick(site.id);
-    const digest = r.digestCreated ? `created #${r.digestIssueNumber}` : 'not due';
-    console.log(`digest: ${digest}; suppressions pulled ${r.suppressionsPulled}; stats refreshed ${r.statsRefreshed}; ips pruned ${r.ipsPruned}; erasures retried ${r.erasuresRetried}`);
-    if (r.errors.length > 0) {
-      for (const e of r.errors) console.error(`error: ${e}`);
-      throw new Error(`${r.errors.length} step(s) failed`);
-    }
-  } finally {
-    await closeDb();
+  if (args.length > 0) {
+    console.error(`newsletter:tick failed: Unknown argument(s): ${args.join(' ')}\n${USAGE}`);
+    process.exit(2);
   }
+  // Read the heartbeat before the config loads; then drop invalid heartbeat values so the full config
+  // (getConfig) is not refused because of a monitoring URL.
+  const heartbeatEnv = { [HEARTBEAT_ENV.tick]: process.env[HEARTBEAT_ENV.tick] };
+  dropInvalidHeartbeatEnv(process.env);
+  const ping = (signal: 'success' | 'fail') => pingHeartbeatFromEnv({ job: 'newsletter_tick', env: heartbeatEnv, name: HEARTBEAT_ENV.tick, signal });
+
+  try {
+    await initDb();
+    try {
+      const site = await getCurrentSite();
+      const r = await runTick(site.id);
+      const digest = r.digestCreated ? `created #${r.digestIssueNumber}` : 'not due';
+      console.log(`digest: ${digest}; suppressions pulled ${r.suppressionsPulled}; stats refreshed ${r.statsRefreshed}; ips pruned ${r.ipsPruned}; erasures retried ${r.erasuresRetried}`);
+      if (r.errors.length > 0) {
+        for (const e of r.errors) console.error(`error: ${e}`);
+        throw new Error(`${r.errors.length} step(s) failed`);
+      }
+    } finally {
+      await closeDb();
+    }
+  } catch (error) {
+    await ping('fail');
+    throw error;
+  }
+  await ping('success');
 });

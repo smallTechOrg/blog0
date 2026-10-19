@@ -54,6 +54,7 @@ export async function newsletterStatus(siteId: string, options: { sender?: Newsl
       lastSyncAt: await lastSyncAt(siteId),
       healthy,
       message,
+      trackingPublic: await sender.trackingPublic().catch(() => true),
     },
     mail: mailStatus(),
     counts: await listRepo.countsOf(getDb(), siteId),

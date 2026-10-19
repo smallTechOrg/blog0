@@ -95,6 +95,9 @@ export interface NewsletterSender {
   sendIssue(campaignId: string): Promise<void>;
   fetchStats(campaignId: string): Promise<SenderStats>;
   fetchSuppressions(since: Date): Promise<SenderSuppression[]>;
+  /** Stage A (spec/architecture.md §13.3): false when the provider's public root URL is not reachable
+   *  from a reader's mail client, so opens / clicks can't be counted. Stub: always true. Never throws. */
+  trackingPublic(): Promise<boolean>;
 }
 
 export type SenderErrorCode = 'UNAVAILABLE' | 'HTTP' | 'TIMEOUT' | 'INVALID';

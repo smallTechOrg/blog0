@@ -11,7 +11,7 @@ import { POST as loginRoute } from '@/app/api/auth/login/route';
 import { POST as newsletterRoute } from '@/app/api/newsletter/route';
 import type { Envelope } from '@/lib/api/envelope';
 import { login } from '@/server/auth/login';
-import { LOGIN_EMAIL_MAX_FAILURES, LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS, loginBuckets, resetLoginRateLimiterForTests } from '@/server/auth/rate-limit';
+import { LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS, loginBuckets, resetLoginRateLimiterForTests } from '@/server/auth/rate-limit';
 import { resetConfigForTests } from '@/server/config';
 import { closeDb, createDbHandle, getDb, type DbHandle } from '@/server/db/client';
 import { runMigrations } from '@/server/db/migrate';
@@ -109,7 +109,7 @@ describe('DbRateLimitStore — atomic check-and-count', () => {
       const limited = results.filter((r) => r.limited);
       expect(limited.every((r) => r.limited && r.scope === 'login.pair' && r.retryAfterSec === LOGIN_WINDOW_MS / 1000 - 2)).toBe(true);
       expect((await bucketRows('login.pair'))[0].count).toBe(LOGIN_MAX_FAILURES);
-      expect((await bucketRows('login.email'))[0].count).toBe(LOGIN_MAX_FAILURES);
+      expect((await bucketRows('login.ip'))[0].count).toBe(LOGIN_MAX_FAILURES);
     } finally {
       await other.close();
     }
@@ -154,39 +154,39 @@ describe('login on the database store', () => {
     await createAdmin(getDb(), currentSite.id, { email: EMAIL, password: PASSWORD, displayName: 'Sai' });
   });
 
-  it('5 wrong passwords → the 6th is 429 + Retry-After; still 429 after a restart (new store, new pool); allowed after the window', async () => {
+  it('Stage A: 5 wrong passwords → an immediate 6th is 429 Retry-After 1; still 429 after a restart (new store, new pool); admitted at +1 s', async () => {
     for (let i = 0; i < LOGIN_MAX_FAILURES; i += 1) {
-      expect(await attemptLogin('wrong-password-000', T0 + i * 1000)).toMatchObject({ ok: false, code: 'BAD_CREDENTIALS' });
+      expect(await attemptLogin('wrong-password-000', T0)).toMatchObject({ ok: false, code: 'BAD_CREDENTIALS' });
     }
-    const sixth = await attemptLogin(PASSWORD, T0 + 60_000);
-    expect(sixth).toEqual({ ok: false, code: 'RATE_LIMITED', status: 429, retryAfter: String(LOGIN_WINDOW_MS / 1000 - 60) });
+    expect(await attemptLogin(PASSWORD, T0 + 100)).toEqual({ ok: false, code: 'RATE_LIMITED', status: 429, retryAfter: '1' });
 
-    // simulated restart: a fresh pool and a fresh store instance — the cap is in the database
+    // simulated restart: a fresh pool and a fresh store instance — the delay is in the database
     await closeDb();
     resetRateLimitStoreForTests(new DbRateLimitStore());
-    expect(await attemptLogin(PASSWORD, T0 + 120_000)).toMatchObject({ ok: false, code: 'RATE_LIMITED', retryAfter: String(LOGIN_WINDOW_MS / 1000 - 120) });
+    expect(await attemptLogin(PASSWORD, T0 + 500)).toMatchObject({ ok: false, code: 'RATE_LIMITED', retryAfter: '1' });
 
-    // the window ends at the fixed boundary
-    expect(await attemptLogin(PASSWORD, T0 + LOGIN_WINDOW_MS)).toEqual({ ok: true });
+    expect(await attemptLogin(PASSWORD, T0 + 1000)).toEqual({ ok: true });
   });
 
-  it('a correct password after 3 failures clears the pair row and leaves the per-email count at 3', async () => {
-    for (let i = 0; i < 3; i += 1) await attemptLogin('wrong-password-000', T0 + i * 1000);
+  it('a correct password after 3 failures (real IP) clears the pair row, leaves the per-IP count at 3 and clears the delay', async () => {
+    for (let i = 0; i < 3; i += 1) await attemptLogin('wrong-password-000', T0 + i * 1000, '203.0.113.10');
     expect((await bucketRows('login.pair'))[0].count).toBe(3);
 
-    expect(await attemptLogin(PASSWORD, T0 + 10_000)).toEqual({ ok: true });
+    expect(await attemptLogin(PASSWORD, T0 + 10_000, '203.0.113.10')).toEqual({ ok: true });
 
     expect(await bucketRows('login.pair')).toHaveLength(0);
-    const [perEmail] = await bucketRows('login.email');
-    expect(perEmail.count).toBe(3);
-    expect(perEmail.keyHash).toBe(sha256Hex(EMAIL));
+    expect(await bucketRows('login.delay')).toHaveLength(0);
+    const [perIp] = await bucketRows('login.ip');
+    expect(perIp.count).toBe(3);
+    expect(perIp.keyHash).toBe(sha256Hex('203.0.113.10'));
   });
 
-  it('the per-email cap holds across IPs (20 / 15 min) on the database store', async () => {
-    for (let i = 0; i < LOGIN_EMAIL_MAX_FAILURES; i += 1) {
+  it('the per-email delay holds across IPs on the database store (no hard per-email lock)', async () => {
+    for (let i = 0; i < LOGIN_MAX_FAILURES; i += 1) {
       expect(await attemptLogin('wrong-password-000', T0 + i, `10.0.${i}.1`)).toMatchObject({ code: 'BAD_CREDENTIALS' });
     }
-    expect(await attemptLogin(PASSWORD, T0 + 1000, '192.0.2.1')).toMatchObject({ code: 'RATE_LIMITED', status: 429 });
+    expect(await attemptLogin(PASSWORD, T0 + 100, '192.0.2.1')).toMatchObject({ code: 'RATE_LIMITED', status: 429, retryAfter: '1' });
+    expect(await attemptLogin(PASSWORD, T0 + 1004, '192.0.2.1')).toEqual({ ok: true });
   });
 
   it('the login route answers 429 with Retry-After from the database store (real clock)', async () => {
@@ -239,7 +239,7 @@ describe('newsletter on the database store', () => {
       new Request(`${ORIGIN}/api/newsletter`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', origin: ORIGIN, host: 'localhost:3410', 'x-forwarded-for': ip },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, fillMs: 5000 }),
       }),
       ctx,
     );

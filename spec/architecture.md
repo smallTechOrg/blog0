@@ -994,6 +994,18 @@ Runbook: `docs/deploy.md` → "Reset an admin password".
   `warn` `ops.heartbeat` with `outcome: 'invalid_url'`, job unaffected.
   > **Assumed:** the `/fail` suffix follows the healthchecks.io convention and is always sent on
   > failure; services without it see a harmless 404 (logged `http_error`).
+  > **Assumed (Stage A, A2 build):** `newsletter:tick` loads the full config, so it removes an
+  > invalid heartbeat value from its environment before `getConfig()` (`dropInvalidHeartbeatEnv`)
+  > and reports it once as `invalid_url` — the tick still runs; the web server keeps refusing it at
+  > boot. A tick usage error (unknown argument) now exits 2 (was 1) and pings nothing. `pnpm backup`
+  > holds back its last stdout line until after the ping, so the backup dir stays the last line.
+  > Other A2 choices: `pnpm admin:reset-password` deletes the email's `login.delay` row on every
+  > engine (a no-op without one) and prints `1 session ended` in the singular; the signup
+  > `delivery` success value follows the active transport (`getMailTransport().kind`, so an
+  > injected test transport counts); `SmtpTransport` accepts a test-only `{ requireTLS: false }`
+  > for the Mailpit sink (configuration never disables STARTTLS); `isPublicHost` treats all of
+  > `0.0.0.0/8` as non-public; a successful login refunds its `login.ip` reservation (like the old
+  > per-email refund) besides clearing `login.pair` and the delay.
 
 ### 12.4 CI (`.github/workflows/ci.yml`)
 

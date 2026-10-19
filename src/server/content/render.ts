@@ -15,7 +15,7 @@ import { buildSentences } from './sentences';
 import { computeStats } from './stats';
 
 /** Bump on ANY change to the pipeline's output (keys the render cache). */
-export const RENDER_VERSION = 'r1';
+export const RENDER_VERSION = 'r2';
 
 /** Splits the top-level hast children into html blocks at figure placeholders. */
 function toBlocks(hast: HRoot): Block[] {
@@ -56,7 +56,7 @@ export async function renderArticle(input: RenderInput): Promise<RenderedArticle
   const paragraphs = assignParagraphIds(mdast);
   const sentences = buildSentences(paragraphs);
 
-  const hast = await mdastToHast(mdast);
+  const hast = await mdastToHast(mdast, { imageDims: input.imageDims });
   const blocks = toBlocks(hast);
 
   // Document order (stable sort keeps same-line warnings in emission order).

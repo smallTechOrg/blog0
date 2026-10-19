@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-import { signIn } from './helpers/admin';
+import { originOf, signIn } from './helpers/admin';
 import { withTestDb } from './helpers/db';
 import { LOG_NOT_WIRED_REASON, e2eLogFile, isExternalServer, logFileNotWired, readServerLog } from './helpers/logs';
 
@@ -103,6 +103,34 @@ test('GET / carries a per-request nonce CSP (no HSTS over http) and the theme sc
   );
   expect(scriptNonce).toBe(nonce);
   await expect(page.locator('html')).toHaveAttribute('data-theme', /^(light|dark)$/);
+
+  // Stage A: the JSON-LD block carries the same request nonce and parses as JSON.
+  const ld = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLScriptElement>('script[type="application/ld+json"]')].map((s) => ({ nonce: s.nonce, text: s.textContent ?? '' })),
+  );
+  expect(ld).toHaveLength(1);
+  expect(ld[0].nonce).toBe(nonce);
+  expect(() => JSON.parse(ld[0].text)).not.toThrow();
+  const html = await first.text();
+  // One element in the server HTML (the RSC payload repeats the props, not the element).
+  expect(html.match(/<script type="application\/ld\+json"/g)).toHaveLength(1);
+});
+
+test('sign-in: rapid wrong passwords for one email get the progressive delay in seconds ("Too many attempts — try again in N second(s).")', async ({
+  page,
+}, testInfo) => {
+  const origin = originOf(testInfo);
+  const email = `nobody-${Date.now()}@example.test`;
+  await page.goto('/admin/login');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill('wrong-password-1');
+  // Five free attempts (spec/architecture.md §6), made over the API to keep them inside the window.
+  for (let i = 0; i < 5; i += 1) {
+    const res = await page.request.post('/api/auth/login', { headers: { origin }, data: { email, password: `wrong-${i}` } });
+    expect(res.status(), `attempt ${i + 1}`).toBe(401);
+  }
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.locator('#admin-login-error')).toHaveText(/^Too many attempts — try again in (1 second|\d+ seconds)\.$/);
 });
 
 test('no Content Security Policy console message across home, article, deck, Listen, sign-in and the desk', async ({

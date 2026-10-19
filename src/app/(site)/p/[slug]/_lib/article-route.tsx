@@ -1,8 +1,10 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 
 import { ArticleView, type ArticleInitialMode } from '@/components/reader/ArticleView';
-import { articleRouteMetadata } from '@/server/public/metadata';
+import { JsonLd } from '@/components/site/JsonLd';
+import { articleRouteMetadata, articleStructuredData } from '@/server/public/metadata';
 import { loadArticlePage } from '@/server/public/page-data';
 
 // The three addresses of one article — /p/<slug> (Read), /p/<slug>/tldr (deck open on load) and
@@ -28,7 +30,14 @@ export function articleRoute(initialMode: ArticleInitialMode) {
       const { slug } = await params;
       const page = await loadArticlePage(slug);
       if (!page) notFound();
-      return <ArticleView article={page.article} initialMode={initialMode} brand={page.site.wordmark} />;
+      const nonce = (await headers()).get('x-nonce') ?? undefined;
+      // Stage A: one Article JSON-LD block with the request's CSP nonce (spec/ui.md §3).
+      return (
+        <>
+          <JsonLd data={articleStructuredData(page)} nonce={nonce} />
+          <ArticleView article={page.article} initialMode={initialMode} brand={page.site.wordmark} />
+        </>
+      );
     },
   };
 }

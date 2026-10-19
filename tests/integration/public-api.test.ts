@@ -207,7 +207,7 @@ describe('article route metadata', () => {
       publishedTime: day(3).toISOString(),
       modifiedTime: day(7).toISOString(),
     });
-    expect((read.twitter as Record<string, unknown>).card).toBe('summary');
+    expect((read.twitter as Record<string, unknown>).card).toBe('summary_large_image'); // Stage A item 2 (spec/ui.md §3)
     expect((tldr.openGraph as Record<string, unknown>).url).toBe(`${BASE}/p/og-test/tldr`);
     expect(tldr.alternates?.canonical).toBe(`${BASE}/p/og-test`);
   });
