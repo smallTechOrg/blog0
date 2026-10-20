@@ -28,7 +28,7 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    `data-theme` on `<html>` (`suppressHydrationWarning`). **Owner decision (UI review
    2026-10-20) — the page typewriter:** on EVERY arrival at `/`, `/archive` or `/about` (a document
    load or a client navigation; never under reduced motion) every visible character of the page —
-   tabs, wordmark, tagline, About, Featured, Latest, footer — types in ONE sequence, left to right
+   tabs, wordmark, tagline, About, Featured, Latest, footer, field placeholders — types in ONE sequence, left to right
    and top to bottom (document order; inside `[data-type-visual]`, the masthead, on-screen order
    row by row, since its grid moves the wordmark above or beside the tabs by width), at
    `TYPE_CHAR_MS` per character; whitespace is free. Implementation
@@ -43,7 +43,8 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    faster, and if the typing point has gone above the visible window (under the sticky masthead)
    everything above the window lands at once and typing continues from the window's first line;
    scrolling up changes nothing; text added after load (See More) is not held back; without the Highlight API
-   the page is simply complete. Every other page renders complete at first paint. There is no
+   the page is simply complete. On a typing page the design's headline word reveal and dek fade
+   are off (the typewriter is the only animation). Every other page renders complete at first paint. There is no
    once-per-visit intro, hold or `.ln` stagger any more.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
    400), JetBrains Mono (400/500), exposed as CSS variables and wired in `additions.css`:

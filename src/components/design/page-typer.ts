@@ -1,9 +1,9 @@
 // The page typewriter (owner decision, UI review 2026-10-20): on Home, Archive and About every
-// visible character of the page — masthead, tabs, featured, latest, footer — types in one
-// sequence, left to right and top to bottom, at one constant speed. The text is in the DOM from
-// the first frame; only the not-yet-typed tail is painted transparent, through the CSS Custom
-// Highlight API (`::highlight(blog0-untyped)` in additions.css), so React's DOM is never touched
-// and nothing reflows. Text that appears after the page loads is not held back. Without that
+// visible character of the page — masthead, tabs, featured, latest, footer, field placeholders —
+// types in one sequence, left to right and top to bottom, at one constant speed. The text is in
+// the DOM from the first frame; only the not-yet-typed tail is painted transparent, through the
+// CSS Custom Highlight API (`::highlight(blog0-untyped)` in additions.css), so React's DOM is
+// never touched and nothing reflows (a placeholder is rewritten, then put back whole). Text that appears after the page loads is not held back. Without that
 // API, or with reduced motion, the page is simply complete.
 
 /** One character every TYPE_CHAR_MS, everywhere on the page. */
@@ -42,29 +42,43 @@ export function cursorAt(texts: readonly string[], n: number): { index: number; 
  *  beside the tabs by width) text types in on-screen order: row by row, then left to right. */
 const VISUAL_SELECTOR = '[data-type-visual]';
 
-function box(t: Text): Range {
-  const r = document.createRange();
-  r.selectNodeContents(t);
-  return r;
+/** What types: a text node, or a field's placeholder (typed by rewriting the attribute). */
+export type TypedItem = Text | HTMLInputElement | HTMLTextAreaElement;
+
+function isText(it: TypedItem): it is Text {
+  return it.nodeType === 3;
 }
 
-/** The root's rendered text nodes in reading order: document order, except visual order inside
- *  a `[data-type-visual]` block. */
-export function typedTextNodes(root: HTMLElement): Text[] {
-  const out: Text[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+function rectOf(it: TypedItem): DOMRect {
+  if (!isText(it)) return it.getBoundingClientRect();
+  const r = document.createRange();
+  r.selectNodeContents(it);
+  return r.getBoundingClientRect();
+}
+
+/** The root's rendered texts and field placeholders in reading order: document order, except
+ *  visual order inside a `[data-type-visual]` block. */
+export function typedItems(root: HTMLElement): TypedItem[] {
+  const out: TypedItem[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.nodeType === 1) {
+      const f = n as HTMLElement;
+      if ((f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) && weight(f.placeholder) && !f.closest(SKIP_SELECTOR) && f.getClientRects().length) out.push(f);
+      continue;
+    }
     const t = n as Text;
     const el = t.parentElement;
     if (!el || !weight(t.data) || el.closest(SKIP_SELECTOR) || el.getClientRects().length === 0) continue;
     out.push(t);
   }
+  const host = (it: TypedItem) => (isText(it) ? it.parentElement! : it).closest(VISUAL_SELECTOR);
   for (let i = 0; i < out.length; ) {
-    const block = out[i].parentElement!.closest(VISUAL_SELECTOR);
+    const block = host(out[i]);
     let j = i + 1;
-    while (j < out.length && block && out[j].parentElement!.closest(VISUAL_SELECTOR) === block) j++;
+    while (j < out.length && block && host(out[j]) === block) j++;
     if (block && j - i > 1) {
-      const keyed = out.slice(i, j).map((t) => ({ t, b: box(t).getBoundingClientRect() }));
+      const keyed = out.slice(i, j).map((t) => ({ t, b: rectOf(t) }));
       /* same row when the vertical centres are within half a line */
       keyed.sort((x, y) => {
         const dy = x.b.top + x.b.height / 2 - (y.b.top + y.b.height / 2);
@@ -111,28 +125,39 @@ export interface TypePageOptions {
 export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => void {
   const api = registry();
   if (!api) return () => {};
-  const nodes = typedTextNodes(root);
-  const texts = nodes.map((t) => t.data);
+  const items = typedItems(root);
+  const texts = items.map((it) => (isText(it) ? it.data : it.placeholder));
   if (!cursorAt(texts, 0)) return () => {};
   const { reg } = api;
-  /* characters before each text, for skipping ahead */
+  /* characters before each item, for skipping ahead */
   const before: number[] = [];
-  texts.reduce((n, t, i) => ((before[i] = n), n + weight(t)), 0);
-  /* one range per untyped text; the text being typed has a range over its untyped tail */
-  const ranges = nodes.map((t) => {
+  const total = texts.reduce((n, t, i) => ((before[i] = n), n + weight(t)), 0);
+  /* one range per untyped text (the one being typed: over its untyped tail); a placeholder is
+     typed by rewriting it, and put back whole when typing stops */
+  const ranges = items.map((it) => {
+    if (!isText(it)) return null;
     const r = document.createRange();
-    r.selectNodeContents(t);
+    r.selectNodeContents(it);
     return r;
   });
-  const hl = new api.Highlight(...ranges);
+  const hl = new api.Highlight(...ranges.filter((r): r is Range => r !== null));
   reg.set(HIGHLIGHT_NAME, hl);
+  items.forEach((it) => {
+    if (!isText(it)) it.placeholder = '';
+  });
   let typed = 0; // characters landed (fractional)
   let last = performance.now();
   let lastY = window.scrollY;
   let downAt = -Infinity; // last scroll-down event
-  let done = 0; // texts fully typed
+  let done = 0; // items fully typed
   let raf = 0;
   let stopped = false;
+
+  function land(i: number) {
+    const it = items[i];
+    if (isText(it)) hl.delete(ranges[i]!);
+    else it.placeholder = texts[i];
+  }
 
   function onScroll() {
     const y = window.scrollY;
@@ -146,6 +171,7 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     window.cancelAnimationFrame(raf);
     window.removeEventListener('scroll', onScroll);
     reg.delete(HIGHLIGHT_NAME);
+    for (; done < items.length; done++) land(done);
   }
 
   function tick() {
@@ -156,9 +182,9 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
       const at = cursorAt(texts, typed);
       if (at) {
         const top = Math.max(0, opts.windowTop?.() ?? 0);
-        const bottomOf = (i: number) => (i === at.index ? ranges[i] : box(nodes[i])).getBoundingClientRect().bottom;
-        const i = firstVisible(bottomOf, at.index, nodes.length, top);
-        if (i > at.index) typed = before[i] ?? before[before.length - 1] + weight(texts[texts.length - 1]);
+        const bottomOf = (i: number) => (i === at.index && ranges[i] ? ranges[i].getBoundingClientRect() : rectOf(items[i])).bottom;
+        const i = firstVisible(bottomOf, at.index, items.length, top);
+        if (i > at.index) typed = before[i] ?? total;
         else rate = SCROLL_SPEEDUP;
       }
     }
@@ -166,12 +192,14 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     last = now;
     const at = cursorAt(texts, typed);
     if (!at) return stop();
-    for (; done < at.index; done++) hl.delete(ranges[done]);
-    if (nodes[at.index].isConnected && ranges[at.index].startOffset !== at.offset) {
-      hl.delete(ranges[at.index]);
+    for (; done < at.index; done++) land(done);
+    const it = items[at.index];
+    if (!isText(it)) it.placeholder = texts[at.index].slice(0, at.offset);
+    else if (it.isConnected && ranges[at.index]!.startOffset !== at.offset) {
+      hl.delete(ranges[at.index]!);
       const r = document.createRange();
-      r.setStart(nodes[at.index], at.offset);
-      r.setEnd(nodes[at.index], nodes[at.index].length);
+      r.setStart(it, at.offset);
+      r.setEnd(it, it.length);
       ranges[at.index] = r;
       hl.add(r);
     }
