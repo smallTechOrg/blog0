@@ -1,0 +1,249 @@
+/* ============================================================
+   additions.css — new rules only (spec/ui.md §5). Loaded after the
+   verbatim design.css; built only from the design's tokens.
+   ============================================================ */
+
+/* --- fonts: next/font self-hosts the design's three families (div. 23) --- */
+:root {
+  --font-head: var(--nf-head), 'Helvetica Neue', Arial, sans-serif;
+  --font-body: var(--nf-body), Georgia, 'Times New Roman', serif;
+  --font-mono: var(--nf-mono), ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* --- the design's #root is #blog0-root here (spec/ui.md §1 rule 3) --- */
+#blog0-root { position: relative; z-index: 1; }
+
+/* The page typewriter (spec/ui.md §1 rule 4; components/design/page-typer.ts): on Home, Archive
+   and About the whole page prints in, in reading order — text, placeholders, lines, boxes, images
+   and icons. Until PageTyper takes over (html[data-typer]) the server HTML paints nothing of the
+   root but its layout, so nothing flashes in first; after that the untyped text is the
+   blog0-untyped highlight and unprinted ink carries data-ink="0". */
+html[data-typing="1"]:not([data-typer]) #blog0-root,
+html[data-typing="1"]:not([data-typer]) #blog0-root * {
+  color: transparent !important; text-decoration-color: transparent !important; text-shadow: none !important;
+  border-color: transparent !important; background-color: transparent !important; background-image: none !important;
+  box-shadow: none !important; outline-color: transparent !important;
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+html[data-typing="1"]:not([data-typer]) #blog0-root :is(img, svg, canvas, video, iframe),
+html[data-typing="1"]:not([data-typer]) #blog0-root *::before,
+html[data-typing="1"]:not([data-typer]) #blog0-root *::after,
+html[data-typing="1"]:not([data-typer]) #blog0-root ::placeholder { opacity: 0 !important; }
+/* PageTyper holds transitions while it measures the paint (one frame) */
+html[data-typer-measure] #blog0-root, html[data-typer-measure] #blog0-root * { transition: none !important; }
+::highlight(blog0-untyped) { color: transparent; text-decoration-color: transparent; text-shadow: none; }
+#blog0-root [data-ink="0"] {
+  border-color: transparent !important; background-color: transparent !important; background-image: none !important;
+  box-shadow: none !important; outline-color: transparent !important;
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+#blog0-root :is(img, svg, canvas, video, iframe)[data-ink="0"],
+#blog0-root [data-ink="0"]::before,
+#blog0-root [data-ink="0"]::after { opacity: 0 !important; }
+/* lines and boxes draw left to right; images and icons print top to bottom in steps */
+#blog0-root [data-ink="line"] { animation: inkLine 180ms linear both !important; }
+#blog0-root [data-ink="scan"] { animation: inkScan 320ms steps(8, end) both !important; }
+@keyframes inkLine { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes inkScan { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+
+/* The typewriter is the only animation on a typing page: the design's headline word reveal and
+   dek fade would replay text the typewriter has already typed once it scrolls into view. */
+html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
+  opacity: 1; transform: none; filter: none; animation: none;
+}
+
+/* --- Stage A: --faint at WCAG AA (spec/ui.md §5, §6) -----------------
+   The design's --faint is ~3:1 on the paper. Same hue, the nearest value
+   reaching 4.5:1 against both --bg and --surface of each theme
+   (tests/unit/site/contrast.test.ts). design.css keeps the originals. */
+:root { --faint: #6D7077; }
+:root[data-theme="dark"] { --faint: #8D887E; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --faint: #8D887E; }
+}
+
+/* --- paragraphs (the pipeline's .para replaces the design's .sent; div. 2) --- */
+.para { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* A reader's paragraph is tappable (paragraph share): the article page
+   (.artwrap) and any host that opts in with [data-para-share]. The editor's
+   live preview is neither, so its paragraphs stay inert. */
+.artwrap .para, [data-para-share] .para { position: relative; cursor: pointer; }
+/* hover shows a 2px accent rule in the left gutter instead of the design's
+   dotted underline (pointer devices only) */
+@media (hover: hover) {
+  .artwrap .para:hover::before, [data-para-share] .para:hover::before {
+    content: ''; position: absolute; left: -14px; top: 0.35em; bottom: 0.35em;
+    width: 2px; background: var(--accent); border-radius: 1px;
+  }
+}
+/* same fill as the design's .sent.is-hl, without the underline */
+.para.is-hl { background: var(--accent-soft); border-radius: 2px; }
+/* Listen: the paragraph being read — a SOFT highlight, deliberately subtler than
+   the share highlight above (half its fill, a faint rule instead of the solid accent one). The
+   tokens are scoped to the Listen view so they resolve per theme. */
+.listenview { --listen-live-bg: var(--accent-softer); --listen-live-rule: var(--accent-soft); }
+.para.is-live {
+  background: var(--listen-live-bg); border-radius: 2px;
+  box-shadow: -2px 0 0 0 var(--listen-live-rule); /* the left rule, without moving the text */
+  transition: background .3s ease, box-shadow .3s ease;
+}
+@media (prefers-reduced-motion: reduce) { .para.is-live { transition: none; } }
+
+/* --- Markdown beyond the design (div. 11) ----------------------------- */
+.prose del { color: var(--muted); }
+.prose .table-scroll {
+  overflow-x: auto; margin: 30px 0 14px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--surface);
+}
+.prose table {
+  border-collapse: collapse; width: 100%; font-family: var(--font-head); font-size: 15px; line-height: 1.5;
+}
+.prose > table { display: block; overflow-x: auto; margin: 30px 0 14px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); }
+.prose .table-scroll table { min-width: 560px; }
+.prose th, .prose td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.prose thead th { font-size: 13.5px; font-weight: 600; color: var(--muted); background: var(--surface-2); }
+.prose tbody tr:last-child td { border-bottom: 0; }
+
+.prose code {
+  font-family: var(--font-mono); font-size: 0.9em;
+  background: var(--surface-2); border-radius: 2px; padding: 0.1em 0.3em;
+}
+.prose pre { margin: 24px 0; }
+.prose pre.shiki, .prose pre {
+  font-family: var(--font-mono); font-size: 14.5px; line-height: 1.6;
+  padding: 16px; border: 1px solid var(--border); border-radius: 4px; overflow: auto;
+  background: var(--surface);
+}
+.prose pre code { font-size: inherit; background: transparent; padding: 0; border-radius: 0; }
+/* Shiki dual theme (defaultColor: false): every token carries both colours as
+   variables; the site's data-theme picks one. */
+.shiki, .shiki span { color: var(--shiki-light); background-color: var(--shiki-light-bg); }
+[data-theme="dark"] .shiki, [data-theme="dark"] .shiki span {
+  color: var(--shiki-dark) !important; background-color: var(--shiki-dark-bg) !important;
+}
+[data-theme="light"] .shiki, [data-theme="light"] .shiki span {
+  color: var(--shiki-light) !important; background-color: var(--shiki-light-bg) !important;
+}
+
+/* footnotes — the design's "Notes" section */
+.prose .footnotes {
+  margin-top: 42px; padding-top: 6px; border-top: 1px solid var(--border);
+  font-size: 15.5px; line-height: 1.6; color: var(--text);
+}
+.prose .footnotes h2.footnotes-label {
+  position: static; width: auto; height: auto; overflow: visible; clip: auto; white-space: normal;
+}
+.prose .footnotes ol { padding-left: 1.4em; }
+.prose .footnotes li p { margin: 0 0 .4em; }
+.prose sup { line-height: 0; }
+.prose sup a, .prose sup a.inline { color: var(--accent-ink); border-bottom: 0; font-family: var(--font-head); font-size: 0.8em; padding: 0 1px; }
+.prose a[data-footnote-backref] { color: var(--accent-ink); border-bottom: 0; font-family: var(--font-head); }
+
+/* task lists */
+.prose .contains-task-list { list-style: none; padding-left: 0.2em; }
+.prose .task-list-item input[type="checkbox"] {
+  margin: 0 0.55em 0 0; vertical-align: -0.1em; accent-color: var(--accent);
+}
+
+/* --- StubNotice: a labelled "not built yet" panel --------------------- */
+.stub {
+  margin: 0 0 18px; padding: 14px 18px;
+  border: 1px dashed var(--border-strong); border-radius: 3px; background: var(--surface);
+  font-family: var(--font-head); font-size: 14.5px; line-height: 1.5; color: var(--muted);
+}
+.stub__label { color: var(--accent-ink); font-weight: 600; }
+
+/* --- capsule: the design references disabled modes ------------------- */
+.mode:disabled { opacity: .45; cursor: not-allowed; }
+
+/* --- deck above the article's sticky strip ---------------------------
+   Design divergence 26 (spec/architecture.md "## Design divergences (ask user)",
+   "TLDR deck stacking order"): .modebar is sticky at
+   z-index 45 and the deck is fixed at z-index 40, so the article strip covers
+   the deck's own "TL;DR | title" strip and its Pause and X can't be clicked.
+   The design's comments say the deck's strip is the one meant to show, under
+   the site header (z-index 50). */
+.tdeck { z-index: 46; }
+
+/* --- share menu inside the open deck (div. 3) --------------------------
+   The deck's end-slide Share opens the .hlmenu inside .tdeck; it sits above
+   the deck's own strips so closing the menu never means closing the deck. */
+.tdeck .hlmenu { z-index: 47; }
+
+/* --- Listen (spec/ui.md §3 Listen + §5) ---------------------------------
+   The article's Listen view puts the player beside the text (divergence 28):
+   two columns at ≥ 960 px with the lead (tag, title, player) sticky under the
+   strip; one column below, the lead pinned at the top with the title capped
+   at two lines. The card overlay keeps the design's single-column frame. */
+.listenview--synced {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px;
+  max-width: 1140px; align-items: start; justify-content: center; min-height: auto;
+  padding-top: 24px;
+}
+.listenview--synced .listenview__lead {
+  position: sticky; top: calc(var(--booth) + var(--headh) + 56px); z-index: 2;
+  background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 0;
+}
+.listenview--synced .listenview__lead h1 {
+  font-size: clamp(22px, 5vw, 30px); margin: 0 0 16px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.listenview--synced .listenview__text { min-width: 0; }
+.listenview--synced .listenview__text .readbody { margin: 0; }
+.listenview--synced .para[data-pid] { cursor: pointer; }
+.listenview--synced .para[data-pid]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* clicks seek here, so the share gutter hint stays off */
+.listenview--synced .para:hover::before { content: none; }
+@media (min-width: 960px) {
+  .listenview--synced {
+    grid-template-columns: minmax(280px, 360px) minmax(0, 700px); gap: 40px; padding-top: 40px;
+  }
+  .listenview--synced .listenview__lead {
+    background: transparent; border-bottom: 0; padding: 0;
+  }
+  .listenview--synced .listenview__lead h1 {
+    font-size: clamp(26px, 2.6vw, 34px); margin: 0 0 24px; display: block; overflow: visible;
+  }
+}
+.audio__play:disabled { opacity: .45; cursor: not-allowed; }
+/* "Follow audio": in the sticky lead, shown only while auto-follow is paused */
+.listenview__follow { margin-top: 12px; }
+.listenview__follow[hidden] { display: none; }
+
+
+/* Newsletter link pages (spec/ui.md §3): one card centred in main — design.css has no `.surface`, so
+   the card styling lives here (tokens only). */
+.nl-page {
+  max-width: 560px; margin: 64px auto; padding: 32px 36px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+}
+.nl-page h1 { font-size: clamp(24px, 3vw, 32px); line-height: 1.2; margin: 14px 0 12px; }
+.nl-page p { font-size: 17px; line-height: 1.55; margin: 0 0 24px; }
+
+/* Newsletter link pages: the action button (fix pass) and its error line. */
+.nl-page .btn {
+  display: inline-flex; align-items: center; cursor: pointer;
+  font-family: var(--font-head); font-size: 15px; font-weight: 500; color: #fff;
+  background: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 10px 22px;
+}
+.nl-page .btn:hover:not(:disabled) { filter: brightness(1.08); }
+.nl-page .btn:disabled { opacity: .6; cursor: default; }
+.nl-page__err { margin: 14px 0 0; color: var(--danger, #b3261e); font-size: 15px; }
+.priv-contact { margin-top: 24px; }
+
+/* Admin: non-blocking warning line (fix pass: missing postal address). */
+.admin-warn {
+  margin: 12px 0; padding: 10px 14px; font-size: 14px; line-height: 1.45;
+  border: 1px solid var(--warn, #b7791f); border-left-width: 4px; border-radius: 3px; background: var(--surface);
+}
+.admin-warn a { text-decoration: underline; }
+.admin-btn--danger { color: var(--danger, #b3261e); border-color: var(--danger, #b3261e); }
+
+/* --- Stage A: inline image dimensions (spec/architecture.md §4) -------
+   width/height come from media_asset so the page reserves the box before
+   the image loads; height:auto keeps the ratio in a narrower column. */
+.prose img[width][height] { height: auto; }
+
+/* --- Stage A: newsletter honeypot (spec/ui.md §3 "Newsletter form") ---
+   off-screen, never display:none (some bots skip hidden fields). */
+.ft-hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
