@@ -18,7 +18,7 @@ export function PageTyper() {
   useLayoutEffect(() => {
     setTypingRoute(route);
     const root = document.getElementById('blog0-root');
-    const stop = shouldType() && root ? typePage(root) : () => {};
+    const stop = shouldType() && root ? typePage(root, { windowTop: () => document.querySelector('.sitehead')?.getBoundingClientRect().bottom ?? 0 }) : () => {};
     document.documentElement.setAttribute('data-typer', '');
     return stop;
   }, [route]);

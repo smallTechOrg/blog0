@@ -42,10 +42,10 @@ export function cursorAt(texts: readonly string[], n: number): { index: number; 
  *  beside the tabs by width) text types in on-screen order: row by row, then left to right. */
 const VISUAL_SELECTOR = '[data-type-visual]';
 
-function box(t: Text): DOMRect {
+function box(t: Text): Range {
   const r = document.createRange();
   r.selectNodeContents(t);
-  return r.getBoundingClientRect();
+  return r;
 }
 
 /** The root's rendered text nodes in reading order: document order, except visual order inside
@@ -64,7 +64,7 @@ export function typedTextNodes(root: HTMLElement): Text[] {
     let j = i + 1;
     while (j < out.length && block && out[j].parentElement!.closest(VISUAL_SELECTOR) === block) j++;
     if (block && j - i > 1) {
-      const keyed = out.slice(i, j).map((t) => ({ t, b: box(t) }));
+      const keyed = out.slice(i, j).map((t) => ({ t, b: box(t).getBoundingClientRect() }));
       /* same row when the vertical centres are within half a line */
       keyed.sort((x, y) => {
         const dy = x.b.top + x.b.height / 2 - (y.b.top + y.b.height / 2);
@@ -85,15 +85,39 @@ function registry(): { reg: HighlightRegistry; Highlight: new (...r: Range[]) =>
   return w.CSS?.highlights && w.Highlight ? { reg: w.CSS.highlights, Highlight: w.Highlight } : null;
 }
 
+/* Scrolling down (owner, UI review 2026-10-20): while the reader scrolls down, typing runs
+   SCROLL_SPEEDUP times faster; if the typing point has scrolled above the visible window,
+   everything above the window lands at once and typing carries on from the window's first line.
+   Scrolling up changes nothing. */
+export const SCROLL_SPEEDUP = 4;
+/** A scroll-down counts as "scrolling" for this long after its last event. */
+export const SCROLL_HOLD_MS = 180;
+
+/** Index of the first text at or after `from` whose box reaches below `top` (the window's top
+ *  edge under the sticky masthead), or `bottoms.length` when none does. */
+export function firstVisible(bottoms: (i: number) => number, from: number, count: number, top: number): number {
+  let i = from;
+  while (i < count && bottoms(i) <= top) i++;
+  return i;
+}
+
+export interface TypePageOptions {
+  /** The visible window's top edge in viewport px (e.g. the sticky masthead's bottom). */
+  windowTop?: () => number;
+}
+
 /** Types `root` in from the first character. Returns a stop function that leaves it complete.
- *  Scrolling does not interrupt it (owner, UI review 2026-10-20). */
-export function typePage(root: HTMLElement): () => void {
+ *  Scrolling never interrupts it; scrolling down speeds it up or skips it ahead (above). */
+export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => void {
   const api = registry();
   if (!api) return () => {};
   const nodes = typedTextNodes(root);
   const texts = nodes.map((t) => t.data);
   if (!cursorAt(texts, 0)) return () => {};
   const { reg } = api;
+  /* characters before each text, for skipping ahead */
+  const before: number[] = [];
+  texts.reduce((n, t, i) => ((before[i] = n), n + weight(t)), 0);
   /* one range per untyped text; the text being typed has a range over its untyped tail */
   const ranges = nodes.map((t) => {
     const r = document.createRange();
@@ -102,21 +126,45 @@ export function typePage(root: HTMLElement): () => void {
   });
   const hl = new api.Highlight(...ranges);
   reg.set(HIGHLIGHT_NAME, hl);
-  const t0 = performance.now();
+  let typed = 0; // characters landed (fractional)
+  let last = performance.now();
+  let lastY = window.scrollY;
+  let downAt = -Infinity; // last scroll-down event
   let done = 0; // texts fully typed
   let raf = 0;
   let stopped = false;
+
+  function onScroll() {
+    const y = window.scrollY;
+    if (y > lastY) downAt = performance.now();
+    lastY = y;
+  }
 
   function stop() {
     if (stopped) return;
     stopped = true;
     window.cancelAnimationFrame(raf);
+    window.removeEventListener('scroll', onScroll);
     reg.delete(HIGHLIGHT_NAME);
   }
 
   function tick() {
     if (stopped) return;
-    const at = cursorAt(texts, (performance.now() - t0) / TYPE_CHAR_MS);
+    const now = performance.now();
+    let rate = 1;
+    if (now - downAt < SCROLL_HOLD_MS) {
+      const at = cursorAt(texts, typed);
+      if (at) {
+        const top = Math.max(0, opts.windowTop?.() ?? 0);
+        const bottomOf = (i: number) => (i === at.index ? ranges[i] : box(nodes[i])).getBoundingClientRect().bottom;
+        const i = firstVisible(bottomOf, at.index, nodes.length, top);
+        if (i > at.index) typed = before[i] ?? before[before.length - 1] + weight(texts[texts.length - 1]);
+        else rate = SCROLL_SPEEDUP;
+      }
+    }
+    typed += ((now - last) / TYPE_CHAR_MS) * rate;
+    last = now;
+    const at = cursorAt(texts, typed);
     if (!at) return stop();
     for (; done < at.index; done++) hl.delete(ranges[done]);
     if (nodes[at.index].isConnected && ranges[at.index].startOffset !== at.offset) {
@@ -131,5 +179,6 @@ export function typePage(root: HTMLElement): () => void {
   }
 
   raf = window.requestAnimationFrame(tick);
+  window.addEventListener('scroll', onScroll, { passive: true });
   return stop;
 }

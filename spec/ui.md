@@ -39,7 +39,10 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    until `PageTyper` sets `data-typer` (or a 2.5 s timeout does), `additions.css` paints the
    root's text transparent (icons excepted) so nothing flashes. A client navigation re-decides the
    mark (`setTypingRoute`, `motion.ts`) and types again. Scrolling never interrupts the typing
-   (owner, UI review 2026-10-20); text added after load (See More) is not held back; without the Highlight API
+   (owner, UI review 2026-10-20); while the reader scrolls DOWN it types `SCROLL_SPEEDUP` (4) times
+   faster, and if the typing point has gone above the visible window (under the sticky masthead)
+   everything above the window lands at once and typing continues from the window's first line;
+   scrolling up changes nothing; text added after load (See More) is not held back; without the Highlight API
    the page is simply complete. Every other page renders complete at first paint. There is no
    once-per-visit intro, hold or `.ln` stagger any more.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
