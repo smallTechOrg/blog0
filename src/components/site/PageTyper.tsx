@@ -23,7 +23,7 @@ export function PageTyper() {
     const html = document.documentElement;
     html.setAttribute('data-typer-measure', '');
     html.setAttribute('data-typer', '');
-    const stop = shouldType() && root ? typePage(root, { windowTop: () => document.querySelector('.sitehead')?.getBoundingClientRect().bottom ?? 0 }) : () => {};
+    const stop = shouldType() && root ? typePage(root, { windowTop: () => document.querySelector('.sitehead')?.getBoundingClientRect().bottom ?? 0, pinned: document.querySelector('.sitehead') }) : () => {};
     void document.body.offsetWidth; // apply the hidden ink before transitions come back
     html.removeAttribute('data-typer-measure');
     return stop;

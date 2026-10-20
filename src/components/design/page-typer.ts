@@ -169,6 +169,9 @@ export function firstVisible(bottoms: (i: number) => number, from: number, count
 export interface TypePageOptions {
   /** The visible window's top edge in viewport px (e.g. the sticky masthead's bottom). */
   windowTop?: () => number;
+  /** A pinned block (the sticky masthead): always in view, so it is never skipped as read — it
+   *  types first, and any skip ahead happens once the typing has left it. */
+  pinned?: Element | null;
 }
 
 /** Types `root` in from the first character. Returns a stop function that leaves it complete.
@@ -201,9 +204,10 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
   let last = performance.now();
   let lastY = window.scrollY;
   let downAt = -Infinity; // last scroll-down event
-  /* the first frame also skips ahead (no speed-up): a reload keeps the reader's scroll position,
-     and what is above the window counts as read */
+  /* the first frames also skip ahead (no speed-up) once the pinned masthead has typed: a reload
+     keeps the reader's scroll position, and what is above the window counts as read */
   let first = true;
+  const isPinned = (i: number) => !!opts.pinned && opts.pinned.contains(elOf(items[i]));
   let done = 0; // items fully reached
   let raf = 0;
   let stopped = false;
@@ -255,14 +259,20 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
       const at = cursorAt(texts, typed);
       if (at) {
         const top = Math.max(0, opts.windowTop?.() ?? 0);
-        const bottomOf = (i: number) => (i === at.index && ranges[i] ? ranges[i].getBoundingClientRect() : rectOf(items[i])).bottom;
+        /* a text counts as read once its bottom is above the window; ink (a box, rule or image)
+           once its top is — what it holds is then judged on its own */
+        const bottomOf = (i: number) => {
+          if (isPinned(i)) return Infinity;
+          const r = i === at.index && ranges[i] ? ranges[i].getBoundingClientRect() : rectOf(items[i]);
+          return items[i].kind === 'ink' ? r.top : r.bottom;
+        };
         const i = firstVisible(bottomOf, at.index, items.length, top);
         if (i > at.index) {
           for (; done < i; done++) finish(done);
           typed = before[i] ?? total;
         } else if (scrolling) rate = SCROLL_SPEEDUP;
-      }
-      first = false;
+        if (!isPinned(at.index)) first = false;
+      } else first = false;
     }
     typed += ((now - last) / TYPE_CHAR_MS) * rate;
     last = now;
