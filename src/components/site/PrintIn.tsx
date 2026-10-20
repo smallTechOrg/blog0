@@ -3,9 +3,10 @@
 import { usePathname } from 'next/navigation';
 import { useLayoutEffect, useRef } from 'react';
 
-import { endIntro, introActive, prefersReducedMotion } from '@/components/design/motion';
+import { endIntro, introActive, prefersReducedMotion, setTypingRoute } from '@/components/design/motion';
 
-import { BOOT_LINE_MS } from './Boot';
+/** Gap between one block landing and the next (design `BOOT_LINE_MS`, kept verbatim). */
+export const BOOT_LINE_MS = 70;
 
 /* Selector list verbatim from the design's usePrintIn. */
 const PRINT_SELECTOR =
@@ -28,17 +29,24 @@ function releaseHold() {
 
    Stage A (spec/ui.md §1 rule 4, §3 Chrome): the print-in is part of the intro — it runs only on
    the visit's first load of `/` (`html[data-intro="1"]`). Any later route change ends the intro,
-   and every other page renders at first paint: no `.ln` stagger. */
+   and every other page renders at first paint: no `.ln` stagger. The same route change decides
+   whether the typed lines type again (`setTypingRoute`: /archive and /about do). */
 export function PrintIn() {
   const pathname = usePathname();
   /* opening the deck rewrites /p/<slug> to /p/<slug>/tldr in place — that is
      the same page, not a new one, so it must not print again */
   const route = pathname.replace(/\/tldr$/, '');
-  const firstRoute = useRef<string | null>(null);
+  /* the route of the previous commit: a change ends the intro and re-decides the typing mark
+     (so going /archive → / clears it even when / was the first route of the document) */
+  const lastRoute = useRef<string | null>(null);
 
   useLayoutEffect(() => {
-    if (firstRoute.current === null) firstRoute.current = route;
-    else if (firstRoute.current !== route) endIntro();
+    const prev = lastRoute.current;
+    lastRoute.current = route;
+    if (prev !== null && prev !== route) {
+      endIntro();
+      setTypingRoute(route);
+    }
     if (!introActive() || prefersReducedMotion()) {
       releaseHold();
       return;

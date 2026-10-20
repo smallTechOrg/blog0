@@ -117,7 +117,8 @@ export function Masthead({ wordmark, tagline }: MastheadProps) {
             <span className="brandmark__logo" aria-hidden="true" />
             <Wordmark text={wordmark} />
           </Link>
-          <Typewriter tag="span" className="tagline" text={tagline} delay={480} />
+          {/* the design's 480 ms lead, doubled with the slower typing (UI review 2026-10-20) */}
+          <Typewriter tag="span" className="tagline" text={tagline} delay={960} />
         </div>
         <div className="tools">
           <button

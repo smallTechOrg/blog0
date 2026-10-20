@@ -7,13 +7,14 @@ import { useRef } from 'react';
 import { Icon } from '@/components/design/Icon';
 import type { SiteViewModel } from '@/lib/view-models';
 
-import { useAsciiHand, useEof } from './AsciiHand';
+import { useAsciiHand } from './AsciiHand';
 import { NewsletterForm } from './NewsletterForm';
 
 /* ============================================================
    Footer — one block: newsletter first, then contact, social, sitemap
    (design Footer). Brand values come from the site record (div. 25);
-   X / LinkedIn only when the site has their URLs, no RSS (div. 12).
+   X / LinkedIn only when the site has their URLs, no RSS (div. 12). No
+   "> end of <brand>" line (dropped with the boot strip, UI review 2026-10-20).
    ============================================================ */
 export interface FooterProps {
   site: SiteViewModel;
@@ -23,9 +24,7 @@ export function Footer({ site }: FooterProps) {
   const router = useRouter();
   const footRef = useRef<HTMLElement>(null);
   const cvRef = useRef<HTMLCanvasElement>(null);
-  const eofRef = useRef<HTMLSpanElement>(null);
   useAsciiHand(footRef, cvRef);
-  useEof(footRef, eofRef, site.wordmark);
   const head = site.wordmark.slice(0, -1);
   const tail = site.wordmark.slice(-1);
 
@@ -101,10 +100,6 @@ export function Footer({ site }: FooterProps) {
           </span>
           <i aria-hidden="true" />
           <Link href="/privacy">Privacy</Link>
-        </p>
-        <p className="ft-eof" aria-hidden="true">
-          <span ref={eofRef} />
-          <span className="ft-us">_</span>
         </p>
       </div>
     </footer>

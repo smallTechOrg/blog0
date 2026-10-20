@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
-import { cx, shouldType, typeClock, typeNow } from './motion';
+import { cx, shouldType, typeClock, typeNow, useTypeRun } from './motion';
 
 /* The wordmark types itself in, and its final round letter keeps turning
    until the reader scrolls — an idle state for the landing, not a
@@ -14,12 +14,15 @@ export interface WordmarkProps {
   plain?: boolean;
 }
 
-const WORDMARK_STEP_MS = 60;
+/** Owner decision (UI review 2026-10-20): the design's 60 ms/char, slowed to about half speed. */
+export const WORDMARK_STEP_MS = 110;
 
 export function Wordmark({ text: rawText, plain }: WordmarkProps) {
   const text = String(rawText);
   // Starts at 0 on the server and while hydrating; the effect catches up to the page clock.
   const [shown, setShown] = useState(0);
+  /* a new run (arriving on /archive or /about) re-runs the effect, so the wordmark types again */
+  const run = useTypeRun();
 
   /* same page clock as every other typed line, so the masthead and the
      About block below it read as one sequence rather than two */
@@ -28,7 +31,7 @@ export function Wordmark({ text: rawText, plain }: WordmarkProps) {
     const len = text.length;
     let raf = 0;
     let done = false;
-    /* Stage A: outside the intro (and with reduced motion) the wordmark is complete at first
+    /* Outside a typing document (and with reduced motion) the wordmark is complete at first
        paint — additions.css shows the chars before hydration; this only catches the state up. */
     if (!shouldType()) {
       raf = window.requestAnimationFrame(() => setShown(len));
@@ -44,7 +47,7 @@ export function Wordmark({ text: rawText, plain }: WordmarkProps) {
       done = true;
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, [text, plain]);
+  }, [text, plain, run]);
 
   if (plain) return <span className="wordmark">{text}</span>;
 

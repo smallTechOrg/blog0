@@ -28,7 +28,7 @@ link previews — pre-filled with the five smallTech articles.
 | Sitemap/robots | published article URLs | crawlers |
 | Seeded articles | 5 published posts | database |
 | Seeded decks | 5 published TLDR decks (4–8 verbatim lines each) | database |
-| Boot strip | `> start of blog0`, then one typed command per navigation | browser |
+| Boot strip | **dropped** (owner, UI review 2026-10-20) — no strip, no footer `> end of blog0` | — |
 
 ## External Calls
 | System | Operation | On Failure |
@@ -51,14 +51,16 @@ link previews — pre-filled with the five smallTech articles.
   Listen only when published audio exists (opens the compact player over the list).
 - Old design links (`/#<id>`, `/#<id>/tldr`, `/#hl=…`, `/#archive`, `/#about`) land on the
   matching real page.
-- The brand everywhere is **blog0** (wordmark with the spinning nought, boot and footer lines,
+- The brand everywhere is **blog0** (wordmark with the spinning nought, footer lines,
   titles, copyright); contact mail stays `hello@logzero.blog`; the full design About text is
   seeded; no RSS link or feed.
-- The boot strip is on. **Stage A (supersedes the per-navigation typing):** the intro — boot line
-  `> start of blog0` typed, then the page printing in — plays only when a visit's first page load
-  is the home page; every other load and navigation shows the page's command (`> cd ~`,
-  `> ls archive`, `> cat about`, `> open <slug>`) and all text complete at first paint (HOW:
-  `spec/ui.md` §1 rule 4, §3 Chrome).
+- **No boot strip and no footer `> end of blog0` line** (owner decision, UI review 2026-10-20).
+  **Stage A:** the intro — the wordmark/tagline/About typing, then the page printing in — plays
+  only when a visit's first page load is the home page. **Typing on Archive and About (owner,
+  2026-10-20):** every arrival at `/archive` or `/about` (load or client navigation) types the
+  wordmark and tagline again on a fresh clock, with no hold (text in the HTML at first paint);
+  every other load and navigation shows all text complete at first paint. The typewriter runs at
+  about half the design's speed (HOW: `spec/ui.md` §1 rules 2 and 4, §3 Chrome).
 - **Stage A:** link previews use the default share card (designer-replaceable file) as a large
   image; animated text is announced once in full to screen readers; small "faint" text meets
   4.5:1 contrast in both themes.
@@ -80,9 +82,9 @@ link previews — pre-filled with the five smallTech articles.
 - [ ] After `pnpm seed:tldr` with a real key: exactly 5 `ai_generation` rows exist (one per slug, status `succeeded`), every seeded article has a published deck of 4–8 lines each byte-identical to a sentence of its article, and a second run prints `decks: 0 seeded (0 calls)` with no new rows.
 - [ ] `pnpm seed:tldr` with no real key (integration test runs it with the key blanked in-process): 0 `ai_generation` rows, 5 published decks built from `src/server/seed/decks/*.json`, every line verbatim in its article; a fixture line deliberately mangled in the test is dropped with a logged warning and the deck still publishes.
 - [ ] The committed fixture files are valid: a unit test loads each `src/server/seed/decks/<slug>.json`, renders the matching seed post, and asserts every fixture line matches an eligible sentence exactly (a fixture drifting from the article fails the unit gate).
-- [ ] `/` HTML contains the wordmark text `blog0` and the whole word `log0` (regex `\blog0\b`) nowhere in the rendered page; the footer renders `> end of blog0` and `© 2026 blog0`.
-- [ ] In Chromium (Stage A): a fresh context opening `/` has `html[data-printing]` at first paint and shows `> start of blog0` fully typed within 2 s; reloading `/` in the same tab, or a fresh context opening `/p/humans-are-software`, `/archive`, `/about`, `/privacy` or `/admin/login`, has no `data-printing` attribute at any point and the headline / wordmark text is visible in the first screenshot; navigating to Archive shows `> ls archive` immediately (no typing).
-- [ ] Stage A: the home and article HTML contain the wordmark text once inside `.sr` and the animated copy under `aria-hidden="true"`; the boot line likewise.
+- [ ] `/` HTML contains the wordmark text `blog0` and the whole word `log0` (regex `\blog0\b`) nowhere in the rendered page; the footer renders `© 2026 blog0` and no `> end of blog0`; no `.boot` element anywhere.
+- [ ] In Chromium (Stage A): a fresh context opening `/` has `html[data-printing]` at first paint and `data-intro` + `data-typing`, and the wordmark's 5 characters land within 3 s; reloading `/` in the same tab, or a fresh context opening `/p/humans-are-software`, `/privacy` or `/admin/login`, has no `data-printing`/`data-typing` attribute at any point and the headline / wordmark text is visible in the first screenshot; navigating to Archive (or loading `/archive` / `/about`) sets `data-typing`, never `data-printing`, and the wordmark and tagline type in again; with scripts off `/archive` shows the complete wordmark.
+- [ ] Stage A: the home and article HTML contain the wordmark text once inside `.sr` and the animated copy under `aria-hidden="true"`.
 - [ ] Stage A: `/` and `/p/humans-are-software` HTML contain `og:image` = `<base>/og-default.png` with `og:image:width` 1200 / `og:image:height` 630, `twitter:card` = `summary_large_image`, and `<link rel="icon">` for `/favicon.svg` and `/favicon-32.png`; `public/og-default.png` is a 1200×630 PNG under 60 KB (unit test reads the IHDR); `/favicon.ico` → 200.
 - [ ] Stage A: `/p/humans-are-software` has one `script[type="application/ld+json"]` carrying the request's CSP nonce whose JSON parses to `@type: Article` with `headline`, `description`, `datePublished`, `dateModified`, `author.@type = Person`, `publisher.logo.url` ending `/logo.png`, absolute `url` and `image`; `/` has `Organization` + `WebSite`. Unit: `serializeJsonLd({ headline: '</script><script>alert(1)</script>' })` contains no `<` and round-trips through `JSON.parse`.
 - [ ] `<title>` on `/` is `blog0`, on `/archive` is `Archive — blog0`, on `/about` is `About — blog0`.

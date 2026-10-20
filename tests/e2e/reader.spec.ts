@@ -20,7 +20,7 @@ import {
 
 // Reader walk (capabilities reader-site, article-reading, paragraph-share; full path): the public
 // site under the brand blog0 with the 5 seeded design articles and their fixture decks (seeded by
-// global-setup.ts — 0 LLM calls on this walk). Home (boot strip, wordmark, About, Featured,
+// global-setup.ts — 0 LLM calls on this walk). Home (wordmark, About, Featured,
 // Latest), card TLDR → deck over the list, Archive + topic filter, About, newsletter →
 // Admin → Subscribers, Admin → Site → About text, paragraph / article / deck share (desktop menu
 // and stubbed native sheet on mobile), deep links, theme persistence, legacy hash links, OG tags,
@@ -80,14 +80,14 @@ async function settledScrollY(page: Page): Promise<number> {
   return last;
 }
 
-/** The boot strip's line as read by assistive tech (its `.sr` copy holds the whole line at once). */
-async function bootLine(page: Page) {
-  return page.locator('.boot__in span.sr');
+/** The masthead wordmark's typed characters that have landed. */
+function wordmarkIn(page: Page) {
+  return page.locator('.sitehead .wordmark .typed__c.is-in');
 }
 
-/** The visible, animated copy of the boot line. */
-function bootVisible(page: Page) {
-  return page.locator('.boot__in span[aria-hidden="true"]').first();
+/** The last character of the typed tagline (it starts 960 ms into a typing run). */
+function taglineLastChar(page: Page) {
+  return page.locator('.sitehead .tagline .typed__c').last();
 }
 
 /** WCAG contrast of two `rgb(…)` colours. */
@@ -126,7 +126,7 @@ test.describe('reader site (blog0)', () => {
     expect(generations[0].n).toBe(0);
   });
 
-  test('home: wordmark blog0, boot strip "> start of blog0", no whole-word log0, title, footer brand', async ({ page, request }) => {
+  test('home: wordmark blog0, no boot strip, no whole-word log0, title, footer brand without "> end of"', async ({ page, request }) => {
     const res = await request.get('/');
     expect(res.status()).toBe(200);
     const html = await res.text();
@@ -136,47 +136,68 @@ test.describe('reader site (blog0)', () => {
 
     await page.goto('/');
     await expect(page).toHaveTitle('blog0');
-    await expect(await bootLine(page)).toHaveText('> start of blog0', { timeout: 2_000 });
+    // The boot strip is gone (UI review 2026-10-20): nothing above the masthead, no "> start of".
+    await expect(page.locator('.boot, .boot__in')).toHaveCount(0);
+    expect(html).not.toContain('&gt; start of');
+    expect(html).not.toContain('> start of');
     // Stage A: animated text is read once from its .sr copy; the animated copy is aria-hidden.
     await expect(page.locator('.sitehead .wordmark > .sr')).toHaveText('blog0');
     await expect(page.locator('.sitehead .wordmark > span[aria-hidden="true"]')).toHaveCount(1);
     await expect(page.locator('.sitehead .tagline > .sr')).not.toBeEmpty();
-    await expect(page.locator('.boot')).not.toHaveAttribute('aria-hidden', 'true');
     await expect(page.locator('.sitehead .wordmark .typed__c.is-in')).toHaveCount(5);
     await expect(page.locator('.sitehead .wordmark__o')).toHaveText('0');
 
     await page.locator('.site-footer').scrollIntoViewIfNeeded();
     await expect(page.locator('.ft-copy')).toContainText(/© 2026\s+blog0/);
-    await expect(page.locator('.ft-eof span').first()).toHaveText('> end of blog0', { timeout: 5_000 });
+    // The footer's "> end of blog0" line is gone with the strip.
+    await expect(page.locator('.ft-eof, .ft-us')).toHaveCount(0);
+    expect(html).not.toContain('end of blog0');
     // No RSS anywhere (div. 12).
     await expect(page.locator('a[href*="rss"], a[href*="feed.xml"], link[type="application/rss+xml"]')).toHaveCount(0);
   });
 
-  test('intro only on the visit’s first load of /: typed boot line + print-in; reload, other pages and later visits render at first paint', async ({ browser }) => {
+  test('intro only on the visit’s first load of /: typed wordmark + print-in; reload and later visits render at first paint; /archive and /about type again', async ({ browser }) => {
     // Visit 1 starts on home → the intro plays.
     const visit = await browser.newContext();
     try {
       const page = await visit.newPage();
       await page.goto('/');
       await expect(page.locator('html')).toHaveAttribute('data-intro', '1');
-      await expect(bootVisible(page)).toHaveText('> start of blog0', { timeout: 3_000 });
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
+      await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
       expect(await page.evaluate(() => sessionStorage.getItem('blog0.intro'))).toBe('1');
 
-      // Reload in the same visit: no intro, the page's command and every typed char at once.
+      // Reload in the same visit: no intro, no typing, every typed char at once.
       await page.reload();
       expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
+      expect(await page.evaluate(() => document.documentElement.dataset.typing ?? null)).toBeNull();
       expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
-      await expect(bootVisible(page)).toHaveText('> cd ~');
       expect(await page.locator('.ln').count()).toBe(0);
       const opacities = await page.locator('.sitehead .typed__c, .abt .typed__c').evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity));
       expect(opacities.length).toBeGreaterThan(5);
       expect(new Set(opacities)).toEqual(new Set(['1']));
 
-      // A client navigation in the same visit: written out, no stagger.
+      // A client navigation to the Archive: no stagger and no hold, but the wordmark and tagline
+      // type in again on a fresh clock (owner decision, UI review 2026-10-20).
       await page.locator('.sitehead').getByRole('link', { name: 'Archive' }).click();
       await expect(page).toHaveURL(/\/archive$/);
-      await expect(bootVisible(page)).toHaveText('> ls archive');
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
+      expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
       expect(await page.locator('.ln').count()).toBe(0);
+      await expect(taglineLastChar(page)).not.toHaveClass(/is-in/); // the tagline has not landed yet
+      await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
+      await expect(taglineLastChar(page)).toHaveClass(/is-in/, { timeout: 6_000 });
+      // The text was in the HTML all along: the .sr copy, the headline, and no hold on the root.
+      await expect(page.locator('.sitehead .wordmark > .sr')).toHaveText('blog0');
+      await expect(page.getByRole('heading', { level: 1, name: 'Archive' })).toBeVisible();
+
+      // Home again: not the intro any more, so no typing and no stagger.
+      await page.locator('.sitehead .brandlink').click();
+      await expect(page).toHaveURL(/\/$/);
+      // (the URL changes before React commits the new route; the mark is cleared in that commit)
+      await expect(page.locator('html')).not.toHaveAttribute('data-typing', '1');
+      expect(await page.locator('.ln').count()).toBe(0);
+      await expect(wordmarkIn(page)).toHaveCount(5);
     } finally {
       await visit.close();
     }
@@ -187,23 +208,33 @@ test.describe('reader site (blog0)', () => {
       const page = await other.newPage();
       await page.goto(`/p/${SEEDED.humans.slug}`);
       expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
+      expect(await page.evaluate(() => document.documentElement.dataset.typing ?? null)).toBeNull();
       expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
-      await expect(bootVisible(page)).toHaveText(`> open ${SEEDED.humans.slug}`);
       expect(await page.locator('.ln').count()).toBe(0);
       await page.goto('/');
       expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
-      await expect(bootVisible(page)).toHaveText('> cd ~');
+      expect(await page.evaluate(() => document.documentElement.dataset.typing ?? null)).toBeNull();
+      await expect(wordmarkIn(page)).toHaveCount(5);
+
+      // A document load of /about types too (no intro, no hold).
+      await page.goto('/about');
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
+      expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
+      expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
+      await expect(page.getByRole('heading', { level: 1, name: 'About blog0' })).toBeVisible();
+      await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
+      await expect(taglineLastChar(page)).toHaveClass(/is-in/, { timeout: 6_000 });
     } finally {
       await other.close();
     }
 
-    // First paint without scripts (no intro decided): the server HTML already shows the page command
-    // and the complete wordmark.
+    // First paint without scripts (nothing decided): even on /archive the server HTML shows the
+    // complete wordmark — the typing only ever reveals text that is already there.
     const noJs = await browser.newContext({ javaScriptEnabled: false });
     try {
       const raw = await noJs.newPage();
       await raw.goto('/archive');
-      await expect(raw.locator('.boot__in span[aria-hidden="true"]').first()).toHaveText('> ls archive');
+      await expect(raw.locator('.boot, .boot__in')).toHaveCount(0);
       const chars = raw.locator('.sitehead .wordmark .typed__c');
       expect(await chars.evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity))).toEqual(['1', '1', '1', '1', '1']);
     } finally {
@@ -297,16 +328,17 @@ test.describe('reader site (blog0)', () => {
     expect(Math.abs((await settledScrollY(page)) - scrollBefore)).toBeLessThanOrEqual(2);
   });
 
-  test('Archive: masthead nav types "> ls archive", month groups, topic filter, opening a row types "> open <slug>"', async ({ page }) => {
+  test('Archive: masthead nav types the wordmark again, month groups, topic filter, opening a row stops the typing', async ({ page }) => {
     const published = await publishedArticles();
     const opEd = published.filter((p) => p.topic === 'Op-Ed');
     await page.goto('/');
-    await expect(await bootLine(page)).toHaveText('> start of blog0', { timeout: 2_000 });
+    await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
 
     await page.locator('.sitehead').getByRole('link', { name: 'Archive' }).click();
 
     await expect(page).toHaveURL(/\/archive$/);
-    await expect(await bootLine(page)).toHaveText('> ls archive', { timeout: 2_000 });
+    await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
+    await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
     await expect(page).toHaveTitle('Archive — blog0');
     await expect(page.locator('.pagehead p')).toHaveText(`${published.length} articles, newest first.`);
     await expect(page.locator('.archive-month', { hasText: 'September 2026' })).toBeVisible();
@@ -329,7 +361,8 @@ test.describe('reader site (blog0)', () => {
 
     await page.locator('.archive-row__link', { hasText: SEEDED.humans.title }).click();
     await expect(page).toHaveURL(new RegExp(`/p/${SEEDED.humans.slug}$`));
-    await expect(await bootLine(page)).toHaveText(`> open ${SEEDED.humans.slug}`, { timeout: 3_000 });
+    await expect(page.locator('html')).not.toHaveAttribute('data-typing', '1');
+    await expect(wordmarkIn(page)).toHaveCount(5);
     await expect(page.locator('.readhead h1')).toHaveAttribute('aria-label', SEEDED.humans.title);
   });
 

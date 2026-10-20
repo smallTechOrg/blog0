@@ -2,7 +2,7 @@
 
 import { createElement, useEffect, useState } from 'react';
 
-import { cx, shouldType, typeClock, typeNow, typeStep } from './motion';
+import { cx, shouldType, typeClock, typeNow, typeStep, useTypeRun } from './motion';
 
 /* ------------------------------------------------------------------
    Typewriter — characters land in sequence on load. Every character is
@@ -25,6 +25,8 @@ export function Typewriter({ text: rawText, tag = 'span', className, id, delay =
   // Server HTML and the hydrating render both start at 0 (the CSS shows everything under reduced
   // motion); the first frame catches up to the shared clock.
   const [shown, setShown] = useState(0);
+  /* a new run (arriving on /archive or /about) re-runs the effect, so the line types again */
+  const run = useTypeRun();
 
   useEffect(() => {
     const len = text.length;
@@ -37,8 +39,8 @@ export function Typewriter({ text: rawText, tag = 'span', className, id, delay =
     }
     let raf = 0;
     let done = false;
-    /* Stage A: only the intro types; elsewhere the text is complete at first paint
-       (additions.css) and this only catches the state up. */
+    /* Only a typing document (the intro, /archive, /about) types; elsewhere the text is complete
+       at first paint (additions.css) and this only catches the state up. */
     if (!shouldType()) {
       raf = window.requestAnimationFrame(() => setShown(len));
       return () => window.cancelAnimationFrame(raf);
@@ -53,7 +55,7 @@ export function Typewriter({ text: rawText, tag = 'span', className, id, delay =
       done = true;
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, [text, delay]);
+  }, [text, delay, run]);
 
   /* Spaces are emitted as bare text nodes, not as spans.
 

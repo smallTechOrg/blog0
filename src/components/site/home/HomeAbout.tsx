@@ -10,6 +10,9 @@ import { Typewriter } from '@/components/design/Typewriter';
    from the first frame and only its opacity changes, so the block takes
    its full height immediately and the featured card below it never gets
    pushed under the fold — which is what a fade-in reveal used to do.
+
+   Delays are the design's (700 / 900 / 1180 / 1460 + 240 per paragraph)
+   doubled, with the slower typing (owner decision, UI review 2026-10-20).
    ============================================================ */
 export interface HomeAboutProps {
   strap: string;
@@ -21,16 +24,16 @@ export function HomeAbout({ strap, stand, bodyParagraphs }: HomeAboutProps) {
   return (
     <section className="home-sec" id="about" aria-labelledby="about-h">
       <div className="sechead">
-        <Typewriter tag="h2" id="about-h" text="About Us" delay={700} />
+        <Typewriter tag="h2" id="about-h" text="About Us" delay={1400} />
       </div>
       <div className="abt">
         <div className="abt__lead">
-          <Typewriter tag="p" className="abt__strap" text={strap} delay={900} />
-          <Typewriter tag="p" className="abt__stand" text={stand} delay={1180} />
+          <Typewriter tag="p" className="abt__strap" text={strap} delay={1800} />
+          <Typewriter tag="p" className="abt__stand" text={stand} delay={2360} />
         </div>
         <div className="abt__body">
           {bodyParagraphs.map((t, i) => (
-            <Typewriter key={i} tag="p" text={t} delay={1460 + i * 240} />
+            <Typewriter key={i} tag="p" text={t} delay={2920 + i * 480} />
           ))}
         </div>
       </div>

@@ -13,13 +13,6 @@
 /* --- the design's #root is #blog0-root here (spec/ui.md §1 rule 3) --- */
 #blog0-root { position: relative; z-index: 1; }
 
-/* --- boot strip on (div. 6) -------------------------------------------
-   The design ships the strip at --booth: 0px and never renders it. It is on
-   here, so the sticky header, mode bar, pinned Featured head and stack all
-   measure from under it. 28px is the strip's own line: 13px/1.4 mono +
-   7px top padding + 1px rule, rounded up. */
-:root { --booth: 28px; }
-
 /* The design renders on the client, so its print-in starts from an empty
    page. Server-rendered HTML would paint first and then vanish when the
    print-in hides it; the theme script marks the first load, this holds the
@@ -27,10 +20,11 @@
    A timeout in the script lifts it anyway if hydration never comes. */
 html[data-printing] #blog0-root { visibility: hidden; }
 
-/* Stage A — the intro (spec/ui.md §1 rule 4): the typed wordmark, tagline and About lines only
-   type on the visit's first load of / (the pre-paint script sets html[data-intro="1"]). Every
-   other page shows them complete at first paint, before any script runs. */
-html:not([data-intro="1"]) .typed__c { opacity: 1; transition: none; }
+/* Typed text (spec/ui.md §1 rule 4, §3 Chrome): the wordmark, tagline and About lines type on a
+   typing document — the intro, and any arrival on /archive or /about (the pre-paint script or
+   PrintIn sets html[data-typing="1"]). Every other page shows them complete at first paint,
+   before any script runs; with scripts off, so do /archive and /about. */
+html:not([data-typing="1"]) .typed__c { opacity: 1; transition: none; }
 
 /* --- Stage A: --faint at WCAG AA (spec/ui.md §5, §6) -----------------
    The design's --faint is ~3:1 on the paper. Same hue, the nearest value

@@ -15,10 +15,10 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
-/* Stage A — the intro (boot line typing, wordmark/tagline/About typing, print-in) plays only on
-   the visit's first load of `/` (spec/ui.md §1 rule 4). The root layout's pre-paint script decides
-   it and marks `<html data-intro="1">`; the first client navigation ends it, so every later page
-   renders its text at first paint. */
+/* Stage A — the intro (wordmark/tagline/About typing, print-in) plays only on the visit's first
+   load of `/` (spec/ui.md §1 rule 4). The root layout's pre-paint script decides it and marks
+   `<html data-intro="1">`; the first client navigation ends it, so every later page renders at
+   first paint. */
 export function introActive(): boolean {
   try {
     return typeof document !== 'undefined' && document.documentElement.dataset.intro === '1';
@@ -27,15 +27,78 @@ export function introActive(): boolean {
   }
 }
 
-/** Ends the intro for the rest of this document (additions.css then shows every typed char). */
+/** Ends the intro for the rest of this document. */
 export function endIntro(): void {
   if (typeof document === 'undefined') return;
   delete document.documentElement.dataset.intro;
 }
 
-/** Whether a typed text should animate now: only during the intro, never with reduced motion. */
+/* Typing scope (owner decision, UI review 2026-10-20): the typed lines (wordmark, tagline, Home's
+   About) type during the intro AND every time the reader arrives on /archive or /about — a
+   document load (the pre-paint script marks `<html data-typing="1">`, additions.css then lets
+   `.typed__c` start hidden) or a client navigation (`setTypingRoute` below marks it and restarts
+   the clock). Everywhere else the text is complete at first paint. No visibility hold is ever
+   put on those pages: the text is in the HTML, the animation only reveals its characters. */
+export const TYPE_ROUTES = ['/archive', '/about'] as const;
+
+export function isTypeRoute(pathname: string): boolean {
+  const p = String(pathname || '').replace(/\/+$/, '') || '/';
+  return (TYPE_ROUTES as readonly string[]).includes(p);
+}
+
+/** `<html data-typing="1">`: typed text may start hidden and type in on this document. */
+export function typingActive(): boolean {
+  try {
+    return typeof document !== 'undefined' && document.documentElement.dataset.typing === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a typed text should animate now: on a typing document, never with reduced motion. */
 export function shouldType(): boolean {
-  return introActive() && !prefersReducedMotion();
+  return typingActive() && !prefersReducedMotion();
+}
+
+/** Origin of the page's single typing clock (see typeClock below). */
+let TYPE_T0: number | null = null;
+
+/* Every typed line reads the run counter, so a new run (a navigation onto a typing route) re-runs
+   their effects and they type again from a fresh clock origin. */
+let TYPE_RUN = 0;
+const runListeners = new Set<() => void>();
+
+function subscribeRun(cb: () => void): () => void {
+  runListeners.add(cb);
+  return () => runListeners.delete(cb);
+}
+
+/** The current typing run (0 on the server and until the first client navigation starts one). */
+export function useTypeRun(): number {
+  return useSyncExternalStore(
+    subscribeRun,
+    () => TYPE_RUN,
+    () => 0,
+  );
+}
+
+/** Starts a new typing run: resets the shared clock and re-triggers every typed line. */
+export function startTypeRun(): void {
+  TYPE_T0 = typeNow();
+  TYPE_RUN += 1;
+  runListeners.forEach((cb) => cb());
+}
+
+/** Called on every client route change: marks typing routes (and restarts the run) or clears the
+ *  mark so the next page renders its typed text complete. */
+export function setTypingRoute(pathname: string): void {
+  if (typeof document === 'undefined') return;
+  if (isTypeRoute(pathname) && !prefersReducedMotion()) {
+    document.documentElement.dataset.typing = '1';
+    startTypeRun();
+  } else {
+    delete document.documentElement.dataset.typing;
+  }
 }
 
 function subscribeReduce(cb: () => void): () => void {
@@ -104,8 +167,6 @@ export function dekDelay(text: string, by: SplitBy = 'word'): number {
    line now measures against a single origin: a line that mounts late
    catches up to where the sequence already is instead of restarting,
    which is what makes the whole page land as one choreographed beat. */
-let TYPE_T0: number | null = null;
-
 export function typeNow(): number {
   return typeof window !== 'undefined' && window.performance && window.performance.now
     ? window.performance.now()
@@ -118,12 +179,15 @@ export function typeClock(): number {
 }
 
 /* Long lines type faster, so every line takes about the same beat
-   however many characters it holds. */
-export const TYPE_RUN_MS = 820;
+   however many characters it holds. Owner decision (UI review 2026-10-20): about half the
+   design's per-character speed — the design's 820 ms run and 7–26 ms per-char bounds doubled. */
+export const TYPE_RUN_MS = 1600;
+export const TYPE_STEP_MIN_MS = 14;
+export const TYPE_STEP_MAX_MS = 52;
 
 export function typeStep(len: number): number {
-  if (!len) return 26;
-  return Math.max(7, Math.min(26, TYPE_RUN_MS / len));
+  if (!len) return TYPE_STEP_MAX_MS;
+  return Math.max(TYPE_STEP_MIN_MS, Math.min(TYPE_STEP_MAX_MS, TYPE_RUN_MS / len));
 }
 
 export function cx(...parts: Array<string | false | null | undefined | 0>): string {

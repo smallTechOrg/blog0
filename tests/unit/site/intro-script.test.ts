@@ -50,6 +50,7 @@ describe('pre-paint theme + intro script', () => {
   it('first load of / → intro: data-intro=1 and data-printing (lifted by a timeout), visit marked', () => {
     const r = run({ path: '/' });
     expect(r.dataset.intro).toBe('1');
+    expect(r.dataset.typing).toBe('1');
     expect(r.attrs['data-printing']).toBe('');
     expect(r.session.get(INTRO_KEY)).toBe('1');
     expect(r.timers).toHaveLength(1);
@@ -57,15 +58,32 @@ describe('pre-paint theme + intro script', () => {
     expect(r.attrs).not.toHaveProperty('data-printing');
   });
 
-  it('a later load of / in the same visit → no intro, no hold', () => {
+  it('a later load of / in the same visit → no intro, no hold, no typing', () => {
     const r = run({ path: '/', seen: true });
     expect(r.dataset.intro).toBeUndefined();
+    expect(r.dataset.typing).toBeUndefined();
     expect(r.attrs).not.toHaveProperty('data-printing');
+  });
+
+  it('any load of /archive or /about → typing (no intro, no hold), even later in the visit', () => {
+    for (const path of ['/archive', '/about', '/archive/']) {
+      const r = run({ path, seen: true });
+      expect(r.dataset.typing, path).toBe('1');
+      expect(r.dataset.intro, path).toBeUndefined();
+      expect(r.attrs, path).not.toHaveProperty('data-printing');
+      expect(r.timers, path).toHaveLength(0);
+    }
+  });
+
+  it('reduced motion → /archive and /about never type', () => {
+    expect(run({ path: '/archive', reduced: true }).dataset.typing).toBeUndefined();
+    expect(run({ path: '/about', reduced: true }).dataset.typing).toBeUndefined();
   });
 
   it('a visit that starts on an article → no intro, but the visit is marked (going home later shows no intro)', () => {
     const r = run({ path: '/p/humans-are-software' });
     expect(r.dataset.intro).toBeUndefined();
+    expect(r.dataset.typing).toBeUndefined();
     expect(r.attrs).not.toHaveProperty('data-printing');
     expect(r.session.get(INTRO_KEY)).toBe('1');
   });
@@ -73,6 +91,7 @@ describe('pre-paint theme + intro script', () => {
   it('reduced motion → no intro even on the first load of /', () => {
     const r = run({ path: '/', reduced: true });
     expect(r.dataset.intro).toBeUndefined();
+    expect(r.dataset.typing).toBeUndefined();
     expect(r.attrs).not.toHaveProperty('data-printing');
   });
 

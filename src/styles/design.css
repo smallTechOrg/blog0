@@ -486,31 +486,18 @@ img, svg { max-width: 100%; }
 .ft-copy i { width: 1px; height: 14px; background: var(--f-soft); }
 .ft-copy .brandmark__logo { width: 15px; height: 15px; margin-right: 5px; vertical-align: -3px; }
 .ft-copy span { display: inline-flex; align-items: center; }
-.ft-eof { margin: 0; min-height: 20px; color: var(--f-text); }
 
-/* --- boot line + line-by-line load ------------------------------------
-   The page opens the way the footer closes it: a typed "> start of log0"
-   at the very top, then every block prints in turn, top to bottom, like
-   a terminal writing the page out. The footer's "> end of log0" is the
-   matching last line. */
-.boot {
-  position: sticky; top: 0; z-index: 51; height: var(--booth);
-  background: var(--bg-head);
-  -webkit-backdrop-filter: saturate(150%) blur(14px); backdrop-filter: saturate(150%) blur(14px);
-  border-bottom: 1px solid var(--border);
-  font: 400 13px/1.4 var(--font-mono); color: var(--accent-ink);
-}
-.boot__in { max-width: 1240px; margin: 0 auto; padding: 7px 20px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.boot__us { display: inline-block; margin-left: 1px; color: var(--accent); animation: ftBlink 1s steps(1) infinite; }
+/* --- line-by-line load --------------------------------------------------
+   Every block prints in turn, top to bottom, like a terminal writing the
+   page out. (The design's boot strip "> start of log0" and the footer's
+   "> end of log0" are not rendered — dropped, UI review 2026-10-20 — so
+   their rules are gone with them.) */
 /* steps(), not a fade — each line lands whole, the way a terminal prints */
 .ln { opacity: 0; animation: lnIn 1ms steps(1, end) forwards; }
 @keyframes lnIn { to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .boot__us { animation: none; }
   .ln { opacity: 1; animation: none; }
 }
-.ft-us { display: inline-block; margin-left: 1px; color: var(--f-accent); animation: ftBlink 1s steps(1) infinite; }
-@keyframes ftBlink { 50% { opacity: 0; } }
 .site-footer a:focus-visible, .site-footer button:focus-visible { outline: 2px solid var(--f-accent); outline-offset: 3px; }
 @media (min-width: 800px) {
   .site-footer { padding: 56px 40px calc(28px + env(safe-area-inset-bottom, 0px)); }
@@ -519,7 +506,7 @@ img, svg { max-width: 100%; }
   .ft-right .ft-icons, .ft-right .ft-logo { justify-content: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ft-zero, .ft-us { animation: none; }
+  .ft-zero { animation: none; }
   .ft-ascii { transition: none; }
   .ft-go:hover, .ft-topics button:hover { transform: none; }
 }

@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
-import { Boot } from '@/components/site/Boot';
 import { Footer } from '@/components/site/Footer';
 import { Masthead } from '@/components/site/Masthead';
 import { PrintIn } from '@/components/site/PrintIn';
@@ -11,9 +10,9 @@ import { publishedTopics } from '@/server/public/home';
 import { siteDefaultMetadata } from '@/server/public/metadata';
 import { getCurrentSite } from '@/server/site/current';
 
-// Public chrome (spec/ui.md §3 "Chrome"): #blog0-root → Boot strip (divergence 6) → Masthead →
-// page → Footer, with the print-in running on every route change. Brand values come from the
-// site record.
+// Public chrome (spec/ui.md §3 "Chrome"): #blog0-root → Masthead → page → Footer, with PrintIn
+// driving the intro and the per-route typing. Brand values come from the site record. (The boot
+// strip was dropped — owner decision, UI review 2026-10-20.)
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +29,6 @@ export default async function SiteLayout({ children }: { children: ReactNode }) 
 
   return (
     <div id="blog0-root">
-      <Boot brand={vm.wordmark} />
       <Masthead wordmark={vm.wordmark} tagline={vm.tagline} />
       {children}
       <Footer site={vm} />

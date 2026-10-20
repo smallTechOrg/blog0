@@ -1,4 +1,5 @@
-// Footer motion hooks, ported from spec/design/design-app.js (useAsciiHand, useEof).
+// Footer motion hook, ported from spec/design/design-app.js (useAsciiHand). The design's useEof
+// ("> end of <brand>") was dropped with the boot strip (owner decision, UI review 2026-10-20).
 import { useEffect, type RefObject } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
@@ -159,47 +160,4 @@ export function useAsciiHand(footRef: RefObject<HTMLElement | null>, cvRef: RefO
       if (io) io.disconnect();
     };
   }, [footRef, cvRef]);
-}
-
-/* "> end of <wordmark>" types itself in once the footer is on screen */
-export function useEof(
-  footRef: RefObject<HTMLElement | null>,
-  eofRef: RefObject<HTMLElement | null>,
-  wordmark: string,
-): void {
-  useEffect(() => {
-    const foot = footRef.current;
-    const el = eofRef.current;
-    if (!foot || !el) return;
-    const line = '> end of ' + wordmark;
-    let started = false;
-    let t: number | undefined;
-    function type() {
-      if (started) return;
-      started = true;
-      if (prefersReducedMotion()) {
-        el!.textContent = line;
-        return;
-      }
-      let i = 0;
-      t = window.setInterval(() => {
-        el!.textContent = line.slice(0, ++i);
-        if (i >= line.length) window.clearInterval(t);
-      }, 45);
-    }
-    let io: IntersectionObserver | null = null;
-    if ('IntersectionObserver' in window) {
-      io = new IntersectionObserver(
-        (es) => {
-          if (es.some((e) => e.isIntersecting)) type();
-        },
-        { threshold: 0.2 },
-      );
-      io.observe(foot);
-    } else type();
-    return () => {
-      window.clearInterval(t);
-      if (io) io.disconnect();
-    };
-  }, [footRef, eofRef, wordmark]);
 }

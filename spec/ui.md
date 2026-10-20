@@ -17,8 +17,11 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    restyle inside `design.css`; put every new or overriding rule in `src/styles/additions.css`
    (loaded after it) or `src/styles/admin.css`.
 2. Components keep the design's **class names, DOM structure, text, constants and timings**
-   (e.g. `TDECK_STEP_MS = 720`, `TDECK_WHEEL = 90`, `TDECK_SWIPE = 56`, `TYPE_RUN_MS = 820`,
-   `SPLIT_STAGGER = 55`, `BOOT_LINE_MS = 70`, dwell/type formulas). Translate `h(...)` calls into
+   (e.g. `TDECK_STEP_MS = 720`, `TDECK_WHEEL = 90`, `TDECK_SWIPE = 56`, `SPLIT_STAGGER = 55`,
+   `BOOT_LINE_MS = 70`, dwell/type formulas). **Owner decision (UI review 2026-10-20):** the
+   typewriter runs at about half the design's speed — `TYPE_RUN_MS = 1600`, per-char bounds
+   14–52 ms (design 820 / 7–26), the wordmark 110 ms/char (design 60), and the typed lines' lead
+   delays doubled (tagline 960 ms; Home About 1400 / 1800 / 2360 / 2920 + 480 per paragraph). Translate `h(...)` calls into
    TSX one-for-one; replace `var` hooks with typed hooks; keep comments that explain WHY.
 3. The design's `#root` becomes `<div id="blog0-root">` (used by `PrintIn`'s selector root).
 4. The root layout injects, before paint, the design's theme script extended with persistence:
@@ -30,10 +33,16 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    `data-printing` on `<html>` (`additions.css` hides `#blog0-root` while it is set) so server HTML
    never flashes before the print-in; `PrintIn` removes it in its layout effect once the lines are
    staged, and a 2.5 s timeout in the script removes it if hydration never arrives. Every other
-   load and every client navigation (article, archive, about, privacy, newsletter pages, admin, and
-   `/` after the first load) renders text at first paint: no `data-printing`, no `.ln` stagger,
-   no typing (§3 Chrome). The decision is exposed as `document.documentElement.dataset.intro =
-   '1'` for the client components. > **Assumed:** the intro is tied to the visit's first document
+   load and every client navigation (article, privacy, newsletter pages, admin, and `/` after the
+   first load) renders text at first paint: no `data-printing`, no `.ln` stagger, no typing (§3
+   Chrome). The decision is exposed as `document.documentElement.dataset.intro = '1'` for the
+   client components. **Owner decision (UI review 2026-10-20) — typing on Archive and About:**
+   the same script also sets `data-typing="1"` for the intro and for any load of `/archive` or
+   `/about` (never under reduced motion); on a client navigation `PrintIn` calls `setTypingRoute`
+   (`motion.ts`), which sets/clears the mark and restarts the shared type clock (`startTypeRun`;
+   `Wordmark`/`Typewriter` re-run on `useTypeRun()`), so the wordmark and tagline type again on
+   every arrival at Archive or About. `additions.css`: `html:not([data-typing="1"]) .typed__c {
+   opacity: 1 }` — no hold on those pages: the text is in the HTML, the animation only reveals it. > **Assumed:** the intro is tied to the visit's first document
    load (a visit that starts on an article never sees it); the owner reviews it in the UI round.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
    400), JetBrains Mono (400/500), exposed as CSS variables and wired in `additions.css`:
@@ -56,7 +65,7 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 | `Wordmark` | `components/design/Wordmark.tsx` | nought spin; `plain` variant |
 | `Masthead` | `components/site/Masthead.tsx` | nav Archive + Subscribe; theme toggle; **no search** (div. 4); compact-on-scroll |
 | `Footer`, `NewsletterForm`, `useAsciiHand`, `useEof` | `components/site/Footer.tsx`, `NewsletterForm.tsx`, `AsciiHand.ts` | |
-| `Boot`, `bootCommand` | `components/site/Boot.tsx` | rendered (div. 6); `--booth: 28px` |
+| `Boot`, `bootCommand`, `useEof` | — | **dropped** (owner, UI review 2026-10-20): no boot strip, no footer `> end of` line; `--booth` stays the design's `0px` |
 | `usePrintIn` | `components/site/PrintIn.tsx` (client hook component keyed by pathname) | selector list verbatim, root `#blog0-root` |
 | `PostCard` (+ quick TLDR/Listen) | `components/site/PostCard.tsx` | variants `post`, `card`, `card-lead`; quick buttons open overlays via `SummaryHost` |
 | `Home` (About, Featured stack, Latest, See More) | `app/(site)/page.tsx` + `components/site/home/*` | `FEATURED_MAX=4`, `FEED_BATCH=5`, stack observer |
@@ -81,25 +90,23 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 ## 3. Public screens
 
 ### Chrome (`app/(site)/layout.tsx`)
-`<div id="blog0-root">` → `Boot` strip (sticky one-line terminal above the header, `aria-hidden`;
-lines per div. 6 / `spec/capabilities/reader-site.md`) → `Masthead` (wordmark **blog0** types in
-on the page clock, last char spins forever unless reduced motion; tagline types after 480 ms;
+`<div id="blog0-root">` → `Masthead` (wordmark **blog0** types in on the page clock, last char
+spins forever unless reduced motion; tagline types after 960 ms;
 compacts after 56 px scroll with hysteresis) → page → `Footer` (ASCII canvas, newsletter, topics,
-contact mail, X/LinkedIn icons only when the site has URLs, no RSS, "> end of blog0" typed on
-view, `© <year> blog0 | smallTech`). `PrintIn` runs on every pathname change. The theme toggle
+contact mail, X/LinkedIn icons only when the site has URLs, no RSS, `© <year> blog0 | smallTech`;
+no `> end of blog0` line and no boot strip — owner decision, UI review 2026-10-20). `PrintIn` runs on every pathname change. The theme toggle
 flips `data-theme` and persists it.
 
-**Stage A — intro scope.** When `html[data-intro="1"]` (§1 rule 4): the boot strip types `> start
-of blog0`, the wordmark and tagline type in, and `PrintIn` staggers the page. Otherwise: the boot
-strip shows the current page's command (`> cd ~`, `> ls archive`, `> cat about`, `> open <slug>`)
-fully written, the wordmark and tagline render complete, Home's `Typewriter` texts render
-complete, and `PrintIn` is a no-op. Unchanged everywhere: the nought spin, the footer `> end of
-blog0` typed on view, deck typing (interactive surfaces).
+**Stage A — intro scope.** When `html[data-intro="1"]` (§1 rule 4): the wordmark, tagline and
+Home's `Typewriter` texts type in, and `PrintIn` staggers the page. When `html[data-typing="1"]`
+without the intro (any arrival at `/archive` or `/about`): the wordmark and tagline type in, no
+stagger, no hold. Otherwise: the wordmark, tagline and Home's `Typewriter` texts render complete
+and `PrintIn` is a no-op. Unchanged everywhere: the nought spin, deck typing (interactive
+surfaces).
 
-**Stage A — accessible animated text.** Every typed or spun text (`Wordmark`, tagline, `Boot` line,
+**Stage A — accessible animated text.** Every typed or spun text (`Wordmark`, tagline,
 `Typewriter`) renders `<span class="sr">{full text}</span><span aria-hidden="true">{animated
-copy}</span>`; the boot strip drops its outer `aria-hidden` so its sr text is read once; the
-`.sr` rule is the design's visually-hidden rule.
+copy}</span>`; the `.sr` rule is the design's visually-hidden rule.
 
 **Stage A — head and share metadata** (root layout + `generateMetadata`, `metadataBase =
 BLOG0_PUBLIC_BASE_URL`): icons `/favicon.svg` (`image/svg+xml`), `/favicon-32.png` (32×32),
@@ -594,7 +601,7 @@ browsing/restore is deferred (`spec/capabilities/revision-history.md`).
 ## 5. CSS additions (`src/styles/additions.css`) — only new rules, tokens only
 
 - Font variable wiring (porting rule 5).
-- `:root { --booth: 28px }` (boot strip on, div. 6); `.hlmenu` inside `.tdeck` gets `z-index: 47`;
+- `.hlmenu` inside `.tdeck` gets `z-index: 47`;
   `.tdeck { z-index: 46 }` (div. 26).
 - `.para` hover gutter rule; `.para.is-hl` (same as `.sent.is-hl`: `--accent-soft` fill — the
   share highlight); `.para.is-live` (Listen, **soft**): tokens scoped to the Listen view —
