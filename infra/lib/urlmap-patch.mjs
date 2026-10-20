@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 
-/** Listmonk's public subscriber surface (= deploy/local/Caddyfile, the local stand-in). */
+/** Listmonk's public subscriber surface (everything else on the news host is answered 404 by the url map). */
 export const NEWS_PUBLIC_PATHS = Object.freeze([
   '/link/*',
   '/campaign/*',

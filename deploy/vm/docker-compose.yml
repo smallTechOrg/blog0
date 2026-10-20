@@ -44,7 +44,7 @@ services:
     image: listmonk/listmonk:v5.1.0 # pinned; keep in step with `listmonk` below and the root docker-compose.yml
     command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config ''"]
     env_file: [listmonk.env]
-    environment: { TZ: Etc/UTC, PUID: '1000', PGID: '1000' }
+    environment: { LISTMONK_app__address: '0.0.0.0:9000', TZ: Etc/UTC, PUID: '1000', PGID: '1000' } # app.address is read by --install too
     mem_limit: 192m
     logging: *logging
     restart: 'no'

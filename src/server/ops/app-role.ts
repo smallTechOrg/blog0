@@ -9,7 +9,10 @@ import type postgres from 'postgres';
 // ensureAppRole() after the migrations when BLOG0_APP_DB_ROLE + BLOG0_APP_DB_PASSWORD are set.
 // Idempotent: creates the role when missing, (re)sets its password (rotation = change the secret and
 // re-run), re-grants on every run, and sets default privileges for tables/sequences the owner creates
-// later. Never prints the password.
+// later. Never prints the password. The owner need NOT be a superuser (Cloud SQL's is not): only CREATEROLE
+// (+ the ADMIN option it receives on roles it creates) — so an existing role is altered with `login
+// password` only (naming NOSUPERUSER/NOCREATEDB/NOREPLICATION in an ALTER needs those attributes), and a
+// role that already carries an elevated attribute is refused rather than silently kept.
 
 export const APP_ROLE_RE = /^[a-z_][a-z0-9_]{0,62}$/;
 /** Schemas the app reads/writes: `public` (every table) and `drizzle` (readiness reads the ledger). */
@@ -59,15 +62,22 @@ export async function ensureAppRole(sql: postgres.Sql, settings: AppRoleSettings
   const [{ owner, db }] = await sql<{ owner: string; db: string }[]>`select current_user as owner, current_database() as db`;
   if (owner === role) throw new AppRoleError('BLOG0_APP_DB_ROLE must differ from the migration (owner) user');
 
-  const [existing] = await sql<{ rolsuper: boolean }[]>`select rolsuper from pg_roles where rolname = ${role}`;
+  const [existing] = await sql<
+    { rolsuper: boolean; rolcreatedb: boolean; rolcreaterole: boolean; rolreplication: boolean; rolbypassrls: boolean }[]
+  >`select rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls from pg_roles where rolname = ${role}`;
   if (existing?.rolsuper) throw new AppRoleError(`role ${role} is a superuser — refusing to use it as the restricted app role`);
+  if (existing && (existing.rolcreatedb || existing.rolcreaterole || existing.rolreplication || existing.rolbypassrls)) {
+    throw new AppRoleError(
+      `role ${role} has elevated attributes (CREATEDB/CREATEROLE/REPLICATION/BYPASSRLS) — refusing to use it as the restricted app role`,
+    );
+  }
   const status: AppRoleStatus = existing ? 'updated' : 'created';
 
   const r = ident(role);
   const o = ident(owner);
   const statements: string[] = [
     existing
-      ? `alter role ${r} with login nosuperuser nocreatedb nocreaterole noreplication password ${literal(password)}`
+      ? `alter role ${r} with login password ${literal(password)}`
       : `create role ${r} with login nosuperuser nocreatedb nocreaterole noreplication password ${literal(password)}`,
     `grant connect on database ${ident(db)} to ${r}`,
   ];

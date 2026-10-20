@@ -2,11 +2,15 @@
 # Post-deploy smoke test (Stage B, spec/architecture.md §12.7; `pnpm deploy:smoke -- …`).
 #
 #   scripts/deploy-smoke.sh [--insecure] <base-url> <news-url>
-#     e.g. scripts/deploy-smoke.sh https://example.com https://news.example.com
+#     e.g. scripts/deploy-smoke.sh https://blog0.smalltech.in https://news.blog0.smalltech.in
+#   scripts/deploy-smoke.sh --direct <blog0-url> <listmonk-url>
+#     e.g. on the VM / locally: --direct http://127.0.0.1:3410 http://127.0.0.1:9000
 #
-# Both URLs must be https://. Without --insecure curl verifies the certificates — that IS the TLS
-# check (--insecure is for the local Caddy CA only). BLOG0_SMOKE_RESOLVE=<ip> pins both hosts to that
-# address (curl --resolve; offline / before DNS). Read-only: GETs only, nothing is created.
+# Public mode: both URLs must be https:// (through the shared load balancer). Without --insecure curl
+# verifies the certificates — that IS the TLS check. BLOG0_SMOKE_RESOLVE=<ip> pins both hosts to that
+# address (curl --resolve; before DNS). --direct talks to the containers' own ports (http or https):
+# the news-denied check is skipped there (Listmonk's own port serves its whole surface; the url map
+# denies the rest in public mode). Read-only: GETs only, nothing is created.
 # Checks (each prints `deploy-smoke: <check> ok`; the first failure prints
 # `deploy-smoke: FAIL <check> (<detail>)` and exits 1; all green → `deploy-smoke: PASS`, exit 0):
 #   1 ready          GET <base>/api/health/ready → 200 with "status":"ready"
@@ -15,22 +19,24 @@
 #   4 confirm        /newsletter/confirm?t=bogus → 303 to …status=invalid; /newsletter/confirmed?status=invalid → 404
 #   5 unsubscribe    /api/newsletter/unsubscribe?t=bogus → 303 to /newsletter/unsubscribe?t=bogus
 #   6 news-public    <news>/link/<nil>/<nil>/<nil> and /campaign/<nil>/<nil>/px.png → < 500, no X-Blog0-Edge
-#   7 news-denied    <news>/ /admin /admin/login /api/settings /subscription/form /public/static/.env → 404 + X-Blog0-Edge: denied
+#   7 news-denied    (public mode only) <news>/ /admin /admin/login /api/settings /public/static/.env → 404 (the url map's fault-injection 404 or Listmonk's own)
 # Exit 2 = usage.
 set -euo pipefail
 
 say() { echo "deploy-smoke: $*"; }
 usage() {
-  echo "usage: scripts/deploy-smoke.sh [--insecure] <base-url> <news-url>   (both https://; BLOG0_SMOKE_RESOLVE=<ip> optional)" >&2
+  echo "usage: scripts/deploy-smoke.sh [--insecure|--direct] <base-url> <news-url>   (public mode: both https://; BLOG0_SMOKE_RESOLVE=<ip> optional)" >&2
   exit 2
 }
 
 INSECURE=0
+DIRECT=0
 POS=()
 for a in "$@"; do
   case "$a" in
     --) ;;
     --insecure) INSECURE=1 ;;
+    --direct) DIRECT=1 ;;
     -h | --help) usage ;;
     -*) usage ;;
     *) POS+=("$a") ;;
@@ -39,11 +45,15 @@ done
 [[ ${#POS[@]} -eq 2 ]] || usage
 BASE="${POS[0]%/}"
 NEWS="${POS[1]%/}"
-[[ "$BASE" =~ ^https://[^/]+$ && "$NEWS" =~ ^https://[^/]+$ ]] || usage
-
-CURL=(curl -sS -m 20 --proto '=https')
+if ((DIRECT)); then
+  [[ "$BASE" =~ ^https?://[^/]+$ && "$NEWS" =~ ^https?://[^/]+$ ]] || usage
+  CURL=(curl -sS -m 20)
+else
+  [[ "$BASE" =~ ^https://[^/]+$ && "$NEWS" =~ ^https://[^/]+$ ]] || usage
+  CURL=(curl -sS -m 20 --proto '=https')
+fi
 ((INSECURE)) && CURL+=(--insecure)
-if [[ -n "${BLOG0_SMOKE_RESOLVE:-}" ]]; then
+if [[ -n "${BLOG0_SMOKE_RESOLVE:-}" ]] && ((DIRECT == 0)); then
   for u in "$BASE" "$NEWS"; do
     hostport="${u#https://}"
     host="${hostport%%:*}"
@@ -115,7 +125,7 @@ loc="$(header location)"
 [[ "$loc" == */newsletter/unsubscribe\?t=bogus ]] || fail "Location '${loc}' is not /newsletter/unsubscribe?t=bogus"
 say "unsubscribe ok"
 
-# 6. Listmonk's public tracking paths reach Listmonk (not Caddy's deny rule)
+# 6. Listmonk's public tracking paths reach Listmonk (through the url map's news matcher)
 CHECK=news-public
 NIL=00000000-0000-0000-0000-000000000000
 for p in "/link/${NIL}/${NIL}/${NIL}" "/campaign/${NIL}/${NIL}/px.png"; do
@@ -125,13 +135,16 @@ for p in "/link/${NIL}/${NIL}/${NIL}" "/campaign/${NIL}/${NIL}/px.png"; do
 done
 say "news-public ok"
 
-# 7. everything else on the news host is denied at the edge
-CHECK=news-denied
-for p in / /admin /admin/login /api/settings /subscription/form /public/static/.env; do
-  fetch "${NEWS}${p}"
-  [[ "$CODE" == 404 ]] || fail "GET ${NEWS}${p} → ${CODE}, expected 404"
-  [[ "$(header x-blog0-edge)" == denied ]] || fail "GET ${NEWS}${p} lacks X-Blog0-Edge: denied"
-done
-say "news-denied ok"
+# 7. everything else on the news host is denied by the url map (public mode only)
+if ((DIRECT == 0)); then
+  CHECK=news-denied
+  for p in / /admin /admin/login /api/settings /subscription/form /public/static/.env; do
+    fetch "${NEWS}${p}"
+    [[ "$CODE" == 404 ]] || fail "GET ${NEWS}${p} → ${CODE}, expected 404"
+  done
+  say "news-denied ok"
+else
+  say "news-denied skipped (--direct)"
+fi
 
 say PASS

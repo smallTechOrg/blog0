@@ -365,11 +365,11 @@ blog0 deploys as one non-root container image (`Dockerfile`) with a separate rel
 drill, rotating `BLOG0_SESSION_SECRET`, health probes, logs, reverse proxy + TLS, scaling — is
 [`docs/deploy.md`](docs/deploy.md).
 
-**Deploy to GCP** (one Compute Engine VM running Docker + Cloud SQL for PostgreSQL 18 + a GCS
-bucket for media + Google Workspace SMTP): follow [`docs/deploy-gcp.md`](docs/deploy-gcp.md) —
-owner inputs checklist, exact `gcloud` commands, first release, smoke test, restore drill,
-upgrades, rollback, costs. Prove the kit locally first with `pnpm deploy:local` and
-`pnpm pg:compat -- 18`.
+**Deploy to GCP** (deploy as code: one e2-micro VM running Docker behind the shared HTTPS load balancer,
+shared Cloud SQL, Google Workspace SMTP): `bash infra/bootstrap.sh` once, then the `provision` and `deploy`
+GitHub workflows do everything (GitHub Actions builds the images; no keys, no builds on the VM). Only the
+GoDaddy A records and Workspace DKIM are manual — see [`docs/deploy-gcp.md`](docs/deploy-gcp.md) (flow, live
+inventory with delete commands, rollback, restore, costs). Prove it locally first with `pnpm deploy:local`.
 
 Prove the image end to end locally (Docker running, e.g. `colima start`; Postgres + `.env` as for
 the tests):

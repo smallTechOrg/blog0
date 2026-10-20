@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
-# `pnpm deploy:local [-- --keep]` — the GCP deploy kit end to end on this machine (Stage B,
-# spec/architecture.md §12.7). Runs deploy/docker-compose.prod.yml + deploy/docker-compose.local.yml
-# as compose project `blog0-prodlocal` (own volumes, own Postgres, Mailpit as Listmonk's ONLY SMTP;
-# the dev stack `blog0` — Listmonk :9000, Postgres :5433 — is never touched). No cloud call, no real mail.
+# `pnpm deploy:local [-- --keep]` - the GCP deploy kit end to end on this machine (spec/architecture.md
+# §12.7). It runs the REAL deploy/vm/deploy-remote.sh (the script .github/workflows/deploy.yml runs on
+# blog0-vm) against deploy/vm/docker-compose.yml + deploy/local/docker-compose.yml as compose project
+# `blog0-prodlocal`: own volumes, a TLS Postgres 17 as the Cloud SQL stand-in, Mailpit as Listmonk's ONLY
+# SMTP. The dev stack `blog0` (Listmonk :9000, Postgres :5433) and :3410 are never touched. No cloud call,
+# no real mail. Env files come from deploy/vm/render-env.sh with the dev-only values of deploy/local/render.env.
 #
 # Steps (each prints `deploy-local: <step>`):
-#   1 config     compose config -q: prod alone (env templates) and prod + local
-#   2 up         build blog0 + scheduler images, up -d --wait (release runs first)
-#   3 release    docker compose run --rm release again → "0 pending: OK" (idempotent)
-#   4 seed       site posts + fixture TLDR decks from the host (0 AI calls); a media file in the volume
-#   5 listmonk   deploy/listmonk-settings.sh (root URL news.localtest.me:8443, SMTP → mailpit:1025)
-#   6 tracking   list + subscriber + campaign ({{ TrackLink }} + {{ TrackView }}) → Mailpit; the
-#                captured news-host URLs through Caddy: click → 3xx to the target, pixel → 200 image/png,
-#                List-Unsubscribe page (+ its assets) → 200; Listmonk counts the view + click
-#   7 scheduler  node /app/newsletter-tick.mjs, media-backup.sh (file mirrored), supercronic -test
-#   8 smoke      BLOG0_SMOKE_RESOLVE=127.0.0.1 scripts/deploy-smoke.sh --insecure …  → PASS
-#   9 non-root   blog0 and scheduler run as uid 1000; the listmonk process + uploads volume are uid 1000 (PUID)
+#   1 config     render env files; compose config -q (VM compose alone and + local override)
+#   2 build      docker build --target app / scheduler (tagged like the Artifact Registry images)
+#   3 deploy     deploy-remote.sh: release (owner role, restricted role blog0_app) -> content seed ->
+#                Listmonk install/upgrade -> API user -> settings -> up -d --wait; no secret in its output
+#   4 redeploy   the same sha again: idempotent (0 pending, seed skipped, token kept)
+#   5 db-role    blog0 runs as blog0_app over TLS: seeded articles readable, DROP/ALTER refused
+#   6 listmonk   enabled SMTP = mailpit:1025 only; settings applied
+#   7 tracking   list + subscriber + campaign ({{ TrackLink }} + {{ TrackView }}) -> Mailpit; the captured
+#                news-host URLs against Listmonk's port: click -> 3xx to the target, pixel -> 200 image/png,
+#                List-Unsubscribe page (+ its assets) -> 200; Listmonk counts the view + click
+#   8 scheduler  node /app/newsletter-tick.mjs, media-backup.sh (file mirrored), supercronic -test
+#   9 smoke      scripts/deploy-smoke.sh --direct http://127.0.0.1:3490 http://127.0.0.1:3491 -> PASS
+#  10 non-root   blog0 and scheduler run as uid 1000; the listmonk process + uploads volume are uid 1000
 # Exit 0 = `deploy-local: PASS`; 3 = PENDING DOCKER (never a pass); anything else = FAIL.
-# The stack is torn down (down -v) on exit unless --keep. Ports: 8080/8443 (Caddy), 127.0.0.1:3491
-# (Listmonk admin), :3494 (Postgres), :3495 (Mailpit UI/API).
+# The stack is torn down (down -v, images removed) on exit unless --keep. Ports (127.0.0.1): 3490 blog0,
+# 3491 Listmonk, 3494 Postgres, 3495 Mailpit.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -37,13 +41,14 @@ for a in "$@"; do
   esac
 done
 
-BLOG=https://blog.localtest.me:8443
-NEWS=https://news.localtest.me:8443
-NEWS_HOSTPORT=news.localtest.me:8443
+BLOG=http://127.0.0.1:3490
 LISTMONK=http://127.0.0.1:3491
+NEWS_HOSTPORT=news.localtest.me
 MAILPIT=http://127.0.0.1:3495
-PG_HOST_URL=postgres://blog0:blog0@127.0.0.1:3494/blog0
-LOCAL_ENV=deploy/local/listmonk.env
+RUN="${ROOT}/var/deploy-local"
+STAGE="${RUN}/stage"
+DIR="${RUN}/opt"
+TAG="$(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo 0123456789ab)"
 STEP=start
 
 say() { echo "deploy-local: $*"; }
@@ -52,7 +57,7 @@ step() {
   say "$*"
 }
 fail() {
-  say "FAIL ${STEP}${1:+ — $1}"
+  say "FAIL ${STEP}${1:+ - $1}"
   exit 1
 }
 
@@ -60,29 +65,36 @@ if ! docker info >/dev/null 2>&1; then
   echo "PENDING DOCKER: docker daemon not reachable (start it: colima start, then pnpm deploy:local)"
   exit 3
 fi
+if docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose); elif command -v docker-compose >/dev/null 2>&1; then COMPOSE=(docker-compose); else fail "docker compose (v2.24+) is required"; fi
+command -v jq >/dev/null 2>&1 || fail "jq is required (deploy/vm/render-env.sh)"
 
-compose_bin() {
-  if docker compose version >/dev/null 2>&1; then
-    docker compose "$@"
-  elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose "$@"
-  else
-    fail "neither 'docker compose' nor 'docker-compose' is available"
-  fi
+# Dev-only inputs (deploy/local/render.env): exported for render-env.sh and the assertions below.
+set -a
+# shellcheck source=render.env
+source deploy/local/render.env
+set +a
+
+dc() {
+  "${COMPOSE[@]}" --project-directory "$DIR" -f "${DIR}/docker-compose.yml" -f "${DIR}/docker-compose.local.yml" \
+    --env-file "${DIR}/compose.env" "$@"
 }
-dc() { compose_bin -p "$PROJECT" -f deploy/docker-compose.prod.yml -f deploy/docker-compose.local.yml --env-file deploy/local/compose.env "$@"; }
-
+IMG_APP="" IMG_SCHED=""
 WORK="$(mktemp -d -t deploy-local.XXXXXX)"
 cleanup() {
   local status=$?
   if [[ "$KEEP" == 1 ]]; then
-    say "--keep: stack left running (down: docker compose -p ${PROJECT} -f deploy/docker-compose.prod.yml -f deploy/docker-compose.local.yml --env-file deploy/local/compose.env down -v)"
-  elif [[ "$STEP" != start && "$STEP" != config ]]; then
-    if [[ $status -ne 0 ]]; then
-      dc logs --tail 25 release blog0 listmonk caddy scheduler 2>&1 | tail -n 120 || true
+    say "--keep: stack left running (down: docker compose -p ${PROJECT} --project-directory ${DIR} -f ${DIR}/docker-compose.yml -f ${DIR}/docker-compose.local.yml --env-file ${DIR}/compose.env down -v)"
+  else
+    if [[ -f "${DIR}/compose.env" ]]; then
+      if [[ $status -ne 0 && "$STEP" != start && "$STEP" != config ]]; then
+        dc logs --tail 25 blog0 listmonk scheduler postgres 2>&1 | grep -viE 'password|token' | tail -n 100 || true
+      fi
+      say "teardown (down -v)"
+      dc down -v --remove-orphans >/dev/null 2>&1 || true
     fi
-    say "teardown (down -v)"
-    dc down -v --remove-orphans >/dev/null 2>&1 || true
+    [[ -n "$IMG_APP" ]] && docker rmi "${IMG_APP}:${TAG}" >/dev/null 2>&1 || true
+    [[ -n "$IMG_SCHED" ]] && docker rmi "${IMG_SCHED}:${TAG}" >/dev/null 2>&1 || true
+    rm -rf "$RUN" 2>/dev/null || true
   fi
   rm -rf "$WORK"
   exit $status
@@ -94,59 +106,97 @@ trap 'exit 143' TERM
 json() { # <file> <expression over d>
   node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const v=(function(d){return eval(process.argv[2])})(d);process.stdout.write(v===undefined||v===null?"":typeof v==="object"?JSON.stringify(v):String(v))' "$1" "$2"
 }
+local_url() { # a captured https://news.localtest.me/… URL -> Listmonk's own port
+  printf '%s' "${1/https:\/\/${NEWS_HOSTPORT}/${LISTMONK}}"
+}
+
+# Renders the stage exactly as .github/workflows/deploy.yml does, with the local differences:
+# media backup to a volume, direct 127.0.0.1 ports (never :3410 / the dev Listmonk :9000).
+make_stage() {
+  rm -rf "$STAGE"
+  mkdir -p "$STAGE" "$DIR"
+  bash deploy/vm/render-env.sh "$STAGE" "$TAG" >/dev/null || fail "render-env.sh"
+  sed -i.bak 's#^MEDIA_BACKUP_DEST=.*#MEDIA_BACKUP_DEST=/backup/media#' "${STAGE}/compose.env" && rm -f "${STAGE}/compose.env.bak"
+  {
+    echo "BLOG0_HTTP_BIND=127.0.0.1"
+    echo "BLOG0_HOST_PORT=3490"
+    echo "LISTMONK_HTTP_BIND=127.0.0.1"
+    echo "LISTMONK_HOST_PORT=3491"
+  } >>"${STAGE}/compose.env"
+  cp deploy/vm/docker-compose.yml deploy/vm/deploy-remote.sh deploy/listmonk-api.sh deploy/listmonk-settings.sh "$STAGE/"
+  cp deploy/local/docker-compose.yml "${DIR}/docker-compose.local.yml"
+  cp deploy/local/init-db.sh "${DIR}/init-db.sh"
+}
+run_deploy() { # -> $WORK/deploy.out; fails with the (secret-free) output on error
+  BLOG0_DEPLOY_DIR="$DIR" BLOG0_DEPLOY_LOCAL=1 BLOG0_COMPOSE_EXTRA="${DIR}/docker-compose.local.yml" \
+    bash "${STAGE}/deploy-remote.sh" "$TAG" >"${WORK}/deploy.out" 2>&1 || {
+    sed 's/^/  | /' "${WORK}/deploy.out"
+    fail "deploy-remote.sh exited non-zero"
+  }
+  sed 's/^/  | /' "${WORK}/deploy.out"
+  # No secret value may appear in the deploy output.
+  for v in BLOG0_DB_OWNER_PASSWORD BLOG0_DB_APP_PASSWORD LISTMONK_DB_PASSWORD LISTMONK_ADMIN_PASSWORD BLOG0_ADMIN_PASSWORD BLOG0_SMTP_PASS BLOG0_SESSION_SECRET; do
+    ! grep -qF -- "${!v}" "${WORK}/deploy.out" || fail "the value of ${v} appears in the deploy output"
+  done
+  if [[ -d "$STAGE" ]] && ls "$STAGE"/*.env >/dev/null 2>&1; then fail "the stage still holds env files after the deploy"; fi
+}
 
 # --- 1. config ------------------------------------------------------------------------------------
-step config "compose config -q (prod alone with the env templates; prod + local)"
-mkdir -p "${WORK}/prod"
-cp deploy/docker-compose.prod.yml deploy/Caddyfile "${WORK}/prod/"
-cp deploy/blog0.env.example "${WORK}/prod/blog0.env"
-cp deploy/listmonk.env.example "${WORK}/prod/listmonk.env"
-compose_bin -f "${WORK}/prod/docker-compose.prod.yml" --env-file deploy/compose.env.example config -q || fail "prod compose config"
-dc config -q || fail "prod + local compose config"
+step config "render env files; compose config -q (VM compose; + local override)"
+for p in 3490 3491 3494 3495; do
+  if [[ -z "$(docker ps -q --filter "label=com.docker.compose.project=${PROJECT}" 2>/dev/null)" ]] && (exec 3<>"/dev/tcp/127.0.0.1/${p}") 2>/dev/null; then
+    fail "port ${p} is already in use"
+  fi
+done
+make_stage
+cp "${STAGE}"/*.env "${STAGE}/docker-compose.yml" "$DIR/"
+dc config -q || fail "VM + local compose config"
+"${COMPOSE[@]}" --project-directory "$DIR" -f "${DIR}/docker-compose.yml" --env-file "${DIR}/compose.env" config -q || fail "VM compose config"
 [[ "$(dc config --format json | json /dev/stdin 'd.name')" == "$PROJECT" ]] || fail "project name is not ${PROJECT}"
-# Ports must be free unless this project already holds them (a --keep run).
-if [[ -z "$(dc ps -q 2>/dev/null)" ]]; then
-  for p in 8080 8443 3491 3494 3495; do
-    if (exec 3<>"/dev/tcp/127.0.0.1/${p}") 2>/dev/null; then fail "port ${p} is already in use"; fi
-  done
-fi
+ls -l "${STAGE}"/*.env | awk '{print $1}' | grep -vqx -- '-rw-------' && fail "an env file is not mode 600"
+IMG_APP="$(sed -n 's/^BLOG0_IMAGE=//p' "${DIR}/compose.env")"
+IMG_SCHED="$(sed -n 's/^BLOG0_SCHEDULER_IMAGE=//p' "${DIR}/compose.env")"
+rm -f "${DIR}"/blog0.env "${DIR}"/release.env "${DIR}"/listmonk.env "${DIR}"/compose.env "${DIR}"/docker-compose.yml
 
-# --- 2. build + up --------------------------------------------------------------------------------
-step up "build blog0:prodlocal + blog0-scheduler:prodlocal, up -d --wait"
-dc build release || fail "build the blog0 image"
-dc build scheduler || fail "build the scheduler image"
-dc up -d --build --wait --wait-timeout 300 || fail "compose up"
-dc ps --format '{{.Service}} {{.State}} {{.Status}}' | sed 's/^/  /'
-dc logs release 2>&1 | grep -q '0 pending: OK' || fail "the release service did not report '0 pending: OK'"
+# --- 2. build -------------------------------------------------------------------------------------------
+step build "docker build --target app + scheduler (${IMG_APP}:${TAG})"
+docker build -q --target app -t "${IMG_APP}:${TAG}" . >/dev/null || fail "build the app image"
+docker build -q --target scheduler -t "${IMG_SCHED}:${TAG}" . >/dev/null || fail "build the scheduler image"
 
-# --- 3. release is idempotent -------------------------------------------------------------------------
-step release "docker compose run --rm release (second run)"
-out="$(dc run --rm -T release 2>&1)" || {
-  echo "$out"
-  fail "release exited non-zero"
-}
-echo "$out" | grep -E '^(release|site)' | sed 's/^/  /'
-grep -q '0 pending: OK' <<<"$out" || fail "release output lacks '0 pending: OK'"
+# --- 3. deploy ------------------------------------------------------------------------------------------
+step deploy "deploy-remote.sh ${TAG} (first deploy)"
+run_deploy
+grep -q 'app role blog0_app ok (created)' "${WORK}/deploy.out" || fail "first deploy did not create the app role"
+grep -q '5 posts created' "${WORK}/deploy.out" || fail "first deploy did not seed the 5 posts"
+[[ -f "${DIR}/listmonk-api.env" ]] || fail "listmonk-api.env missing"
+[[ "$(ls -l "${DIR}/listmonk-api.env" | awk '{print $1}')" == "-rw-------" ]] || fail "listmonk-api.env is not mode 600"
+grep -q '^BLOG0_LISTMONK_API_TOKEN=.' "${DIR}/listmonk-api.env" || fail "listmonk-api.env has no token"
 
-# --- 4. seed (host → 127.0.0.1:3494; stubs only: nothing can reach a relay or the dev Listmonk) ------
-step seed "posts + fixture TLDR decks (0 AI calls) + a media file"
-seed_env=(
-  BLOG0_DATABASE_URL="$PG_HOST_URL" BLOG0_SITE_SLUG=blog0 BLOG0_NEWSLETTER_SENDER=stub BLOG0_SMTP_HOST=
-  BLOG0_LISTMONK_URL= BLOG0_LISTMONK_API_USER= BLOG0_LISTMONK_API_TOKEN= BLOG0_LISTMONK_LIST_ID=
-  BLOG0_HEARTBEAT_BACKUP_URL= BLOG0_HEARTBEAT_TICK_URL= BLOG0_LOG_FILE= BLOG0_STORAGE_DIR="${WORK}/storage"
-)
-env "${seed_env[@]}" pnpm -s db:seed:posts || fail "pnpm db:seed:posts"
-env "${seed_env[@]}" pnpm -s seed:tldr -- --source fixture || fail "pnpm seed:tldr -- --source fixture"
-dc exec -T blog0 node -e "require('fs').writeFileSync('/data/storage/verify-media.txt','ok')" || fail "write /data/storage/verify-media.txt"
+# --- 4. redeploy (idempotent) ---------------------------------------------------------------------------------------
+step redeploy "deploy-remote.sh ${TAG} again"
+make_stage
+run_deploy
+grep -q '0 pending: OK' "${WORK}/deploy.out" || fail "redeploy: not 0 pending"
+grep -q 'app role blog0_app ok (updated)' "${WORK}/deploy.out" || fail "redeploy: app role not 'updated'"
+grep -q 'article(s).*skipped' "${WORK}/deploy.out" || fail "redeploy: the content seed did not skip"
+grep -q 'token kept' "${WORK}/deploy.out" || fail "redeploy: the Listmonk API token was not kept"
 
-# --- 5. Listmonk settings (SMTP → Mailpit only) -----------------------------------------------------
-step listmonk "deploy/listmonk-settings.sh ${LISTMONK}"
-bash deploy/listmonk-settings.sh --env-file "$LOCAL_ENV" "$LISTMONK" || fail "listmonk-settings.sh"
+# --- 5. the runtime DB role ---------------------------------------------------------------------------------------------
+step db-role "blog0 connects as blog0_app over TLS; DDL refused"
+psql_app() { dc exec -T -e "PGPASSWORD=${BLOG0_DB_APP_PASSWORD}" -e PGSSLMODE=require postgres psql -h 127.0.0.1 -U blog0_app -d blog0 -tAq "$@"; }
+[[ "$(psql_app -c "select ssl from pg_stat_ssl where pid = pg_backend_pid()")" == t ]] || fail "the app role's connection is not TLS"
+n="$(psql_app -c "select count(*) from article")"
+[[ "$n" -ge 5 ]] || fail "expected >= 5 seeded articles, found ${n}"
+! psql_app -c 'drop table article' >/dev/null 2>&1 || fail "blog0_app was able to DROP a table"
+! psql_app -c 'alter table article add column x int' >/dev/null 2>&1 || fail "blog0_app was able to ALTER a table"
+! psql_app -c 'truncate article' >/dev/null 2>&1 || fail "blog0_app was able to TRUNCATE a table"
+dc exec -T blog0 sh -c 'echo "$BLOG0_DATABASE_URL"' | grep -q '^postgres://blog0_app:' || fail "the blog0 container does not connect as blog0_app"
+say "  article rows ${n}; TLS on; DROP/ALTER/TRUNCATE refused"
 
-# --- 6. tracking through Caddy's news host ------------------------------------------------------------
-step tracking "campaign → Mailpit → open + click through ${NEWS_HOSTPORT}"
-ADMIN_USER="$(sed -n 's/^LISTMONK_ADMIN_USER=//p' "$LOCAL_ENV")"
-ADMIN_PASSWORD="$(sed -n 's/^LISTMONK_ADMIN_PASSWORD=//p' "$LOCAL_ENV")"
+# --- 6. Listmonk settings ----------------------------------------------------------------------------------------------------
+step listmonk "settings applied (SMTP -> mailpit only)"
+ADMIN_USER="$LISTMONK_ADMIN_USER"
+ADMIN_PASSWORD="$LISTMONK_ADMIN_PASSWORD"
 JAR="${WORK}/jar"
 page="$(curl -sS -m 10 -c "$JAR" -b "$JAR" "${LISTMONK}/admin/login")" || fail "GET /admin/login"
 nonce="$(printf '%s' "$page" | grep -oE 'name="nonce"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)"/\1/')"
@@ -163,10 +213,15 @@ lm() { # <method> <path> <out> [json]
   fi
   [[ "$c" == 2* ]] || fail "$1 $2 → ${c}: $(head -c 300 "$3")"
 }
-# Enabled SMTP must be exactly the sink before anything is sent.
 lm GET /api/settings "${WORK}/s.json"
 smtp="$(json "${WORK}/s.json" 'd.data.smtp.filter(s=>s.enabled).map(s=>s.host+":"+s.port).join(",")')"
 [[ "$smtp" == "mailpit:1025" ]] || fail "Listmonk's enabled SMTP is '${smtp}', expected exactly mailpit:1025"
+[[ "$(json "${WORK}/s.json" 'd.data["app.root_url"]')" == "https://${NEWS_HOSTPORT}" ]] || fail "app.root_url is not https://${NEWS_HOSTPORT}"
+[[ "$(json "${WORK}/s.json" 'd.data["app.message_sliding_window_rate"]')" == 1800 ]] || fail "sliding window is not 1800"
+say "  SMTP mailpit:1025 only; root_url https://${NEWS_HOSTPORT}; 1800/24h"
+
+# --- 7. tracking ------------------------------------------------------------------------------------
+step tracking "campaign -> Mailpit -> open + click against Listmonk (${LISTMONK})"
 RCPT="verify-$(date +%s)@localtest.me"
 lm POST /api/lists "${WORK}/l.json" '{"name":"deploy-local-verify","type":"private","optin":"single"}'
 LIST_ID="$(json "${WORK}/l.json" 'd.data.id')"
@@ -203,34 +258,33 @@ UNSUB="$(grep -E '/subscription/' "${WORK}/urls.txt" | head -n 1 || true)"
 [[ -n "$LINK" ]] || fail "no ${NEWS_HOSTPORT}/link/… URL in the message"
 [[ -n "$PIXEL" ]] || fail "no ${NEWS_HOSTPORT}/…/px.png URL in the message"
 [[ -n "$UNSUB" ]] || fail "no ${NEWS_HOSTPORT}/subscription/… URL (List-Unsubscribe) in the message"
-EDGE=(curl -sS -m 10 --insecure --resolve "${NEWS_HOSTPORT}:127.0.0.1" --resolve "blog.localtest.me:8443:127.0.0.1")
-IFS='|' read -r code ctype loc < <("${EDGE[@]}" -o /dev/null -w '%{http_code}|%{content_type}|%{redirect_url}\n' "$LINK")
+EDGE=(curl -sS -m 10)
+IFS='|' read -r code ctype loc < <("${EDGE[@]}" -o /dev/null -w '%{http_code}|%{content_type}|%{redirect_url}\n' "$(local_url "$LINK")")
 [[ "$code" == 3* && "$loc" == "$TARGET" ]] || fail "click ${LINK} → ${code} ${loc} (expected 3xx to ${TARGET})"
 say "  click: ${code} → ${loc}"
-IFS='|' read -r code ctype < <("${EDGE[@]}" -o "${WORK}/px" -w '%{http_code}|%{content_type}\n' "$PIXEL")
+IFS='|' read -r code ctype < <("${EDGE[@]}" -o "${WORK}/px" -w '%{http_code}|%{content_type}\n' "$(local_url "$PIXEL")")
 [[ "$code" == 200 && "$ctype" == image/png* ]] || fail "pixel ${PIXEL} → ${code} ${ctype}"
 say "  open pixel: ${code} ${ctype}"
 # Every other captured news-host URL (e.g. the default template's "view in browser" /campaign/<c>/<s>)
-# must also reach Listmonk (no edge denial, < 400).
+# must also reach Listmonk (< 400).
 while IFS= read -r u; do
   [[ -n "$u" && "$u" != "$LINK" ]] || continue
-  hdrs="$("${EDGE[@]}" -o /dev/null -D - "$u")" || fail "GET ${u}"
+  hdrs="$("${EDGE[@]}" -o /dev/null -D - "$(local_url "$u")")" || fail "GET ${u}"
   c="$(head -n 1 <<<"$hdrs" | awk '{print $2}')"
-  ! grep -qi '^x-blog0-edge:' <<<"$hdrs" || fail "${u} was denied by the edge"
   ((c < 400)) || fail "${u} → ${c}"
 done <"${WORK}/urls.txt"
-say "  every captured news-host URL reaches Listmonk through the edge"
+say "  every captured news-host URL reaches Listmonk"
 UNSUB_PAGE="${UNSUB%%\?*}"
-IFS='|' read -r code ctype < <("${EDGE[@]}" -o "${WORK}/unsub.html" -w '%{http_code}|%{content_type}\n' "$UNSUB_PAGE")
+IFS='|' read -r code ctype < <("${EDGE[@]}" -o "${WORK}/unsub.html" -w '%{http_code}|%{content_type}\n' "$(local_url "$UNSUB_PAGE")")
 [[ "$code" == 200 ]] || fail "unsubscribe page ${UNSUB_PAGE} → ${code}"
 say "  unsubscribe page (GET only, nothing submitted): ${code}"
-# The page's own assets must pass the edge too.
+# The page's own assets are served too.
 assets="$(grep -oE '(href|src)="[^"]+"' "${WORK}/unsub.html" | sed -E 's/^(href|src)="([^"]+)"$/\2/' | grep -E "^(/|https://${NEWS_HOSTPORT}/)" | grep -vE '^/subscription/|/subscription/' | sort -u || true)"
 for a in $assets; do
-  [[ "$a" == /* ]] && a="${NEWS}${a}"
+  [[ "$a" == /* ]] && a="${LISTMONK}${a}"
   c="$("${EDGE[@]}" -o /dev/null -w '%{http_code}' "$a")"
-  say "  page asset ${a#"${NEWS}"} → ${c}"
-  [[ "$c" == 200 ]] || fail "unsubscribe page asset ${a} → ${c} through the edge"
+  say "  page asset ${a#"${LISTMONK}"} → ${c}"
+  [[ "$c" == 200 ]] || fail "unsubscribe page asset ${a} → ${c} "
 done
 # Listmonk recorded the open and the click.
 deadline=$((SECONDS + 30))
@@ -244,10 +298,12 @@ while :; do
 done
 say "  Listmonk campaign ${CAMP_ID}: views ${views}, clicks ${clicks}"
 
-# --- 7. scheduler -----------------------------------------------------------------------------------
+
+# --- 8. scheduler -----------------------------------------------------------------------------------
 step scheduler "newsletter tick, media backup, crontab"
+dc exec -T blog0 node -e "require('fs').writeFileSync('/data/storage/verify-media.txt','ok')" || fail "write /data/storage/verify-media.txt"
 out="$(dc exec -T scheduler node /app/newsletter-tick.mjs 2>&1)" || {
-  echo "$out"
+  echo "$out" | grep -viE 'password|token'
   fail "node /app/newsletter-tick.mjs exited non-zero"
 }
 grep -E '^digest: ' <<<"$out" | sed 's/^/  /' || fail "tick printed no 'digest:' line"
@@ -260,20 +316,20 @@ echo "  $out"
 dc exec -T scheduler supercronic -test /app/scheduler/crontab >/dev/null 2>&1 || fail "supercronic -test /app/scheduler/crontab"
 say "  media mirrored to /backup/media; crontab valid"
 
-# --- 8. smoke ---------------------------------------------------------------------------------------
-step smoke "scripts/deploy-smoke.sh --insecure ${BLOG} ${NEWS}"
-BLOG0_SMOKE_RESOLVE=127.0.0.1 bash scripts/deploy-smoke.sh --insecure "$BLOG" "$NEWS" || fail "deploy-smoke"
+# --- 9. smoke ---------------------------------------------------------------------------------------
+step smoke "scripts/deploy-smoke.sh --direct ${BLOG} ${LISTMONK}"
+bash scripts/deploy-smoke.sh --direct "$BLOG" "$LISTMONK" || fail "deploy-smoke"
 
-# --- 9. non-root ------------------------------------------------------------------------------------
+# --- 10. non-root -----------------------------------------------------------------------------------
 step non-root "uid of blog0, scheduler and listmonk"
 for s in blog0 scheduler; do
   uid="$(dc exec -T "$s" id -u | tr -d '\r')"
   [[ "$uid" == 1000 ]] || fail "${s} runs as uid ${uid}, expected 1000"
 done
-# Listmonk: the image entrypoint starts as root and drops to PUID:PGID (1000) via su-exec — check the
+# Listmonk: the image entrypoint starts as root and drops to PUID:PGID (1000) via su-exec - check the
 # running `listmonk` process and the uploads volume, not `exec id` (which is root by design).
-lm="$(dc exec -T listmonk sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = listmonk ] && stat -c %u "$p"; done; stat -c %u /listmonk/uploads' | tr -d '\r' | sort -u | tr '\n' ' ')"
-[[ "$lm" == "1000 " ]] || fail "listmonk process / uploads owned by uid(s) '${lm}', expected 1000"
+lmuid="$(dc exec -T listmonk sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = listmonk ] && stat -c %u "$p"; done; stat -c %u /listmonk/uploads' | tr -d '\r' | sort -u | tr '\n' ' ')"
+[[ "$lmuid" == "1000 " ]] || fail "listmonk process / uploads owned by uid(s) '${lmuid}', expected 1000"
 say "  blog0 1000, scheduler 1000, listmonk 1000 (process + uploads)"
 
 STEP=done

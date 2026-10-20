@@ -17,10 +17,13 @@ next-env.d.ts
 .env.local
 # docker-compose `--profile app` env file (runbook); var/listmonk-dev.env is covered by var/ below
 blog0.env
-# Stage B deploy kit: the real env files beside their templates (deploy/*.env.example) never get
-# committed; deploy/local/*.env are committed dev-only values for `pnpm deploy:local`.
+# GCP deploy: rendered env files never get committed (deploy/local/render.env is the committed dev-only
+# input of `pnpm deploy:local`); the bootstrap's generated secrets, first-admin note and LB backups stay local.
 /deploy/*.env
-!/deploy/local/*.env
+/deploy/vm/*.env
+var/prod/
+var/prod-admin.txt
+var/lb-backup-*
 
 # runtime data (storage, backups)
 var/

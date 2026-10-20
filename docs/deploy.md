@@ -1,6 +1,6 @@
 # Deploying blog0
 
-> **Google Cloud (VM + Docker + Cloud SQL):** the step-by-step runbook is [`docs/deploy-gcp.md`](deploy-gcp.md); this file stays the platform-neutral reference.
+> **Google Cloud (deploy as code):** bootstrap, the `provision` / `deploy` workflows, inventory, rollback and restore are in [`docs/deploy-gcp.md`](deploy-gcp.md); this file stays the platform-neutral reference.
 
 blog0 ships as **one OCI image** (`Dockerfile`, non-root uid 1000, `node:22.23.1-slim`) that any
 container platform can run. The same image has two commands:
@@ -646,7 +646,7 @@ and API keys are never logged. Level: `BLOG0_LOG_LEVEL` (default `info`).
 
 ## Reverse proxy
 
-Terminate TLS in a reverse proxy / load balancer (Caddy, nginx, Traefik, a platform ingress) and
+Terminate TLS in a reverse proxy / load balancer (a cloud HTTPS load balancer, nginx, Traefik, a platform ingress) and
 forward to container port 3410:
 
 - **`BLOG0_PUBLIC_BASE_URL=https://<your host>`** — the session cookie gets `Secure`, responses
@@ -663,17 +663,5 @@ forward to container port 3410:
 - **Read timeout ≥ 120 s** (TLDR Generate is one long request; nginx `proxy_read_timeout 120s;`).
 - Do not strip `Range` / `Content-Range` (audio seeking uses 206 responses on `/media/…`).
 
-Minimal Caddy example (automatic TLS):
-
-```caddy
-blog.example.com {
-  request_body {
-    max_size 51MB
-  }
-  reverse_proxy 127.0.0.1:3410 {
-    transport http {
-      read_timeout 120s
-    }
-  }
-}
-```
+Any proxy that honours the points above works (the GCP deploy uses Google's HTTPS load balancer: managed
+certificate, 60 s backend timeout, `BLOG0_TRUSTED_PROXY_HOPS=2`).

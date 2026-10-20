@@ -840,6 +840,8 @@ No labelled stubs are introduced.
 
 ### Production deployment kit (Stage B) — owner-approved exception to the freeze
 
+**Deploy as code (supersedes the Caddy / cloud-sql-proxy / on-VM-build parts below; rules in `spec/architecture.md` §12.7):** `infra/bootstrap.sh` (once) + `provision.yml` + `deploy.yml` (GitHub Actions build, WIF, IAP ssh, shared LB `zero-vanguard`, shared Cloud SQL) — `docs/deploy-gcp.md`; proven locally by `pnpm deploy:local`.
+
 **Owner (2026-10-19):** one GCP VM running Docker, Cloud SQL Postgres (blog0 + Listmonk in
 separate databases on one instance), Listmonk kept, Google Workspace `smtp.gmail.com:587` with an
 app password, own domain. Autonomous run; every open choice is an `Assumed:` in

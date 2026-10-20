@@ -137,6 +137,49 @@ describe('release + BLOG0_APP_DB_ROLE (restricted runtime role)', () => {
     ).rejects.toThrow(/set together/);
   });
 
+  it('works when the owner is NOT a superuser (Cloud SQL: blog0_owner has CREATEROLE only): created, then updated', async () => {
+    const suffix = randomBytes(4).toString('hex');
+    const ownerRole = `blog0_owner_it_${suffix}`;
+    const ownerPassword = `pw-${randomBytes(12).toString('hex')}`;
+    const appRole = `blog0_app_ns_${suffix}`;
+    const dbName = `${new URL(OWNER_URL).pathname.slice(1)}_ns_${suffix}`;
+    const admin = owner(); // the test cluster's (super)user
+    const toDb = (user: string, password: string) => {
+      const url = new URL(OWNER_URL);
+      url.pathname = `/${dbName}`;
+      url.username = user;
+      url.password = password;
+      return url.toString();
+    };
+    try {
+      await admin.unsafe(`create role "${ownerRole}" login createrole password '${ownerPassword}'`);
+      await admin.unsafe(`create database "${dbName}" owner "${ownerRole}"`);
+      const run = async () => {
+        const lines: string[] = [];
+        await runRelease({
+          env: { BLOG0_DATABASE_URL: toDb(ownerRole, ownerPassword), BLOG0_APP_DB_ROLE: appRole, BLOG0_APP_DB_PASSWORD: PASSWORD },
+          slug: 'blog0',
+          out: (line) => lines.push(line),
+        });
+        return lines;
+      };
+      expect(await run()).toContain(`app role ${appRole} ok (created)`);
+      expect(await run()).toContain(`app role ${appRole} ok (updated)`);
+      const asNs = postgres(toDb(appRole, PASSWORD), { max: 1, connect_timeout: 5, onnotice: () => {} });
+      try {
+        await asNs`select count(*) from site`;
+        await expect(asNs.unsafe('drop table site')).rejects.toThrow(/must be (the )?owner/);
+      } finally {
+        await asNs.end({ timeout: 5 });
+      }
+    } finally {
+      await admin.unsafe(`drop database if exists "${dbName}" with (force)`);
+      await admin.unsafe(`drop role if exists "${appRole}"`);
+      await admin.unsafe(`drop role if exists "${ownerRole}"`);
+      await admin.end({ timeout: 5 });
+    }
+  }, 120_000);
+
   it('refuses the owner itself as the app role', async () => {
     const ownerName = decodeURIComponent(new URL(OWNER_URL).username) || process.env.USER || '';
     if (!/^[a-z_][a-z0-9_]*$/.test(ownerName)) return; // owner from a socket default: nothing to assert

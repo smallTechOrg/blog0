@@ -172,8 +172,24 @@ ensure_sa_role() { # <sa-email> <member> <role>
 }
 ensure_sa_role "$DEPLOYER_EMAIL" "$WIF_PRINCIPAL" roles/iam.workloadIdentityUser
 ensure_sa_role "$VM_SA_EMAIL" "serviceAccount:${DEPLOYER_EMAIL}" roles/iam.serviceAccountUser
-for role in roles/compute.instanceAdmin.v1 roles/compute.loadBalancerAdmin roles/compute.securityAdmin \
-  roles/iap.tunnelResourceAccessor roles/compute.osAdminLogin; do
+# VM-level powers (instanceAdmin, osAdminLogin) are IAM-conditioned to instances named blog0-*, so the
+# deployer cannot touch the other live VMs in this shared project even by mistake.
+ensure_project_role_instances_only() { # <member> <role>
+  local policy cond
+  cond="resource.type != \"compute.googleapis.com/Instance\" || resource.name.startsWith(\"projects/${GCP_PROJECT}/zones/${GCP_ZONE}/instances/blog0-\")"
+  policy="$(gcloud projects get-iam-policy "$GCP_PROJECT" --format=json)"
+  if jq -e --arg r "$2" --arg m "$1" '[.bindings[]? | select(.role == $r and .condition.title == "blog0-instances-only") | .members[]] | index($m)' <<<"$policy" >/dev/null; then
+    say "iam project ${2} (blog0-* instances only) → ${1#serviceAccount:}: exists"
+  else
+    run g projects add-iam-policy-binding "$GCP_PROJECT" --member "$1" --role "$2" \
+      --condition="expression=${cond},title=blog0-instances-only,description=blog0 deployer: blog0-* instances only"
+    say "iam project ${2} (blog0-* instances only) → ${1#serviceAccount:}: added"
+  fi
+}
+for role in roles/compute.instanceAdmin.v1 roles/compute.osAdminLogin; do
+  ensure_project_role_instances_only "serviceAccount:${DEPLOYER_EMAIL}" "$role"
+done
+for role in roles/compute.loadBalancerAdmin roles/compute.securityAdmin roles/iap.tunnelResourceAccessor; do
   ensure_project_role "serviceAccount:${DEPLOYER_EMAIL}" "$role"
 done
 for role in roles/cloudsql.client roles/logging.logWriter roles/monitoring.metricWriter; do
@@ -260,6 +276,8 @@ gen() { # <kind>
     b64s) openssl rand -base64 32 | tr -d '\n' ;;
     hex) openssl rand -hex 24 ;;
     pw) openssl rand -base64 30 | tr -d '\n/+=' | cut -c1-28 ;;
+    # Cloud SQL's password policy wants lower + upper + digit + a symbol; '-' stays URL- and shell-safe.
+    dbpw) printf '%s-Zq7' "$(openssl rand -base64 30 | tr -d '\n/+=' | cut -c1-26)" ;;
   esac
 }
 CHANGED_LOCAL=0
@@ -303,9 +321,9 @@ ensure_fixed() {
 ensure_generated BLOG0_SESSION_SECRET b64
 ensure_generated BLOG0_UNSUBSCRIBE_SECRET b64s
 ensure_generated BLOG0_NEWSLETTER_WEBHOOK_SECRET b64s
-ensure_generated BLOG0_DB_OWNER_PASSWORD hex
-ensure_generated BLOG0_DB_APP_PASSWORD hex
-ensure_generated LISTMONK_DB_PASSWORD hex
+ensure_generated BLOG0_DB_OWNER_PASSWORD dbpw
+ensure_generated BLOG0_DB_APP_PASSWORD dbpw
+ensure_generated LISTMONK_DB_PASSWORD dbpw
 ensure_fixed LISTMONK_ADMIN_USER blog0-admin
 ensure_generated LISTMONK_ADMIN_PASSWORD hex
 ensure_generated BLOG0_ADMIN_PASSWORD pw

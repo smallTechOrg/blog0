@@ -2,10 +2,11 @@
 # Idempotent Listmonk settings for the blog0 deploy (Stage B, spec/architecture.md §12.7).
 #
 #   deploy/listmonk-settings.sh [--env-file <file>] <listmonk-url>
-#     prod  (from the laptop, through the IAP SSH tunnel `-L 9000:localhost:9000` — the VM has no node;
-#           docs/deploy-gcp.md §9.4): deploy/listmonk-settings.sh --env-file deploy/listmonk.env http://localhost:9000
-#     local deploy/listmonk-settings.sh --env-file deploy/local/listmonk.env http://127.0.0.1:3491
-#
+#     VM    (deploy/vm/deploy-remote.sh, inside the `listmonk-ops` container on the compose network, whose
+#           env file is listmonk.env): bash /ops/listmonk-settings.sh http://listmonk:9000
+#     local (deploy/local/verify.sh runs deploy-remote.sh, so the same call)
+#     by hand through the IAP tunnel (docs/deploy-gcp.md → Listmonk admin):
+#           deploy/listmonk-settings.sh --env-file <listmonk.env> http://localhost:9000
 # Values come from the environment; --env-file fills only variables the shell has not set (KEY=value
 # lines, `#` comments, no quoting — the docker env-file format). Read:
 #   LISTMONK_ADMIN_USER / LISTMONK_ADMIN_PASSWORD   the Super Admin (session login, as scripts/listmonk-dev.sh)

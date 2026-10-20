@@ -1,0 +1,74 @@
+# blog0 GCP provisioning as code (spec/architecture.md §12.7; docs/deploy-gcp.md). Runs infra/provision.sh
+# as the blog0-deployer service account through Workload Identity Federation (no keys). Idempotent;
+# creates only blog0-* resources; the shared load balancer is changed additively with a backup first.
+# Prerequisite (once, by the owner): `bash infra/bootstrap.sh` — it sets the repository variables used here.
+name: provision
+
+on:
+  push:
+    branches: [main, feature/blog0-20261012-1519-v0.1]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/provision.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: blog0-provision
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: provision (infra/provision.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ZONE: ${{ vars.GCP_ZONE }}
+      GCP_INSTANCE: ${{ vars.GCP_INSTANCE }}
+      GCP_VM_SA: ${{ vars.GCP_VM_SA }}
+      SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+      NEWS_DOMAIN: ${{ vars.NEWS_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the repository variables
+        run: |
+          missing=""
+          for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_VM_SA SITE_DOMAIN NEWS_DOMAIN GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::repository variables not set:$missing - run 'bash infra/bootstrap.sh' first (docs/deploy-gcp.md)"
+            exit 1
+          fi
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Provision
+        run: bash infra/provision.sh
+
+      - name: Upload the load-balancer backup
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lb-backup
+          path: var/lb-backup-*
+          if-no-files-found: ignore
+          retention-days: 30
