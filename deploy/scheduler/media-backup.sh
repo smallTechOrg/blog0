@@ -55,6 +55,12 @@ status=$?
 set -e
 duration=$(($(now_ms) - t0))
 if [[ "$status" -eq 0 ]]; then
+  # A tiny status object next to the mirror (outside `media/`, so the sync never deletes it): proves the
+  # write path to the destination even while there are no uploads yet, and shows when the last run was.
+  STATUS_DEST="${MEDIA_BACKUP_STATUS_DEST:-${DEST%/*}/_status}"
+  printf 'last media backup (UTC): %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" |
+    rclone rcat "${STATUS_DEST}/last-media-backup.txt" --config /dev/null >/dev/null 2>&1 ||
+    echo '{"event":"ops.media_backup","outcome":"status_marker_failed"}'
   log_line ok "$duration"
   ping_heartbeat success
   exit 0
