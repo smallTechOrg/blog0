@@ -86,7 +86,7 @@ function registry(): { reg: HighlightRegistry; Highlight: new (...r: Range[]) =>
 }
 
 /** Types `root` in from the first character. Returns a stop function that leaves it complete.
- *  Scrolling or a key press finishes it at once (the reader has moved on). */
+ *  Scrolling does not interrupt it (owner, UI review 2026-10-20). */
 export function typePage(root: HTMLElement): () => void {
   const api = registry();
   if (!api) return () => {};
@@ -112,9 +112,6 @@ export function typePage(root: HTMLElement): () => void {
     stopped = true;
     window.cancelAnimationFrame(raf);
     reg.delete(HIGHLIGHT_NAME);
-    window.removeEventListener('wheel', stop);
-    window.removeEventListener('touchmove', stop);
-    window.removeEventListener('keydown', stop);
   }
 
   function tick() {
@@ -134,8 +131,5 @@ export function typePage(root: HTMLElement): () => void {
   }
 
   raf = window.requestAnimationFrame(tick);
-  window.addEventListener('wheel', stop, { passive: true });
-  window.addEventListener('touchmove', stop, { passive: true });
-  window.addEventListener('keydown', stop);
   return stop;
 }
