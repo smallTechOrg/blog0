@@ -95,7 +95,7 @@ export function Masthead({ wordmark, tagline }: MastheadProps) {
 
   return (
     <header className="sitehead" ref={headRef}>
-      <div className="sitehead__in">
+      <div className="sitehead__in" data-type-visual="">
         <nav className="tabs" aria-label="Main">
           {/* About lives on the homepage, so the nav is Archive + Subscribe */}
           <Link href="/archive" className={cx('tab', pathname === '/archive' && 'is-on')}>
@@ -117,8 +117,7 @@ export function Masthead({ wordmark, tagline }: MastheadProps) {
             <span className="brandmark__logo" aria-hidden="true" />
             <Wordmark text={wordmark} />
           </Link>
-          {/* the design's 480 ms lead, doubled with the slower typing (UI review 2026-10-20) */}
-          <Typewriter tag="span" className="tagline" text={tagline} delay={960} />
+          <Typewriter tag="span" className="tagline" text={tagline} />
         </div>
         <div className="tools">
           <button

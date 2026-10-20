@@ -1,87 +1,15 @@
-'use client';
+import { createElement } from 'react';
 
-import { createElement, useEffect, useState } from 'react';
-
-import { cx, shouldType, typeClock, typeNow, typeStep, useTypeRun } from './motion';
-
-/* ------------------------------------------------------------------
-   Typewriter — characters land in sequence on load. Every character is
-   in the DOM from the first frame and only its visibility changes, so
-   the line keeps its final width and nothing around it reflows as it
-   types. Reduced motion gets the whole string at once.
-   ------------------------------------------------------------------ */
+/* A typed line. The typing itself is page-wide (page-typer.ts types every visible character of
+   Home, Archive and About in reading order), so this is the plain text in its tag — kept as a
+   component for the design's `.typed` hook. */
 export interface TypewriterProps {
   text: string;
   tag?: 'span' | 'p' | 'h1' | 'h2' | 'h3';
   className?: string;
   id?: string;
-  /** ms after the page clock's origin before this line starts typing. */
-  delay?: number;
 }
 
-export function Typewriter({ text: rawText, tag = 'span', className, id, delay = 0 }: TypewriterProps) {
-  const text = String(rawText || '');
-  const chars = text.split('');
-  // Server HTML and the hydrating render both start at 0 (the CSS shows everything under reduced
-  // motion); the first frame catches up to the shared clock.
-  const [shown, setShown] = useState(0);
-  /* a new run (arriving on /archive or /about) re-runs the effect, so the line types again */
-  const run = useTypeRun();
-
-  useEffect(() => {
-    const len = text.length;
-    const step = typeStep(len);
-    /* mounting late is not a reason to start from the beginning */
-    function caughtUp(): number {
-      const el = typeNow() - (typeClock() + delay);
-      if (el <= 0) return 0;
-      return Math.min(len, Math.floor(el / step));
-    }
-    let raf = 0;
-    let done = false;
-    /* Only a typing document (the intro, /archive, /about) types; elsewhere the text is complete
-       at first paint (additions.css) and this only catches the state up. */
-    if (!shouldType()) {
-      raf = window.requestAnimationFrame(() => setShown(len));
-      return () => window.cancelAnimationFrame(raf);
-    }
-    function tick() {
-      const want = caughtUp();
-      setShown(want);
-      if (want < len && !done) raf = window.requestAnimationFrame(tick);
-    }
-    raf = window.requestAnimationFrame(tick);
-    return () => {
-      done = true;
-      if (raf) window.cancelAnimationFrame(raf);
-    };
-  }, [text, delay, run]);
-
-  /* Spaces are emitted as bare text nodes, not as spans.
-
-     A line split into per-character inline spans has nowhere to wrap if
-     the spaces sit inside spans too: the browser sees one unbreakable run
-     and a long line shoots off the side of the screen. A real text node
-     between the characters is what gives it a break opportunity, and a
-     space has no glyph, so nothing is lost by leaving it out of the fade. */
-  const parts = chars.map((c, ci) =>
-    c === ' ' ? (
-      ' '
-    ) : (
-      <span key={ci} className={cx('typed__c', ci < shown && 'is-in')}>
-        {c}
-      </span>
-    ),
-  );
-  /* Stage A (spec/ui.md §3): the full text once in `.sr`, the animated copy aria-hidden. */
-  return createElement(
-    tag,
-    { className: cx('typed', className), id },
-    <span key="sr" className="sr">
-      {text}
-    </span>,
-    <span key="anim" aria-hidden="true">
-      {parts}
-    </span>,
-  );
+export function Typewriter({ text, tag = 'span', className, id }: TypewriterProps) {
+  return createElement(tag, { className: className ? 'typed ' + className : 'typed', id }, String(text || ''));
 }

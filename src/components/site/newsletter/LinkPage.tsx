@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 /* The newsletter link pages' one card (spec/ui.md §3 "Newsletter link pages"): eyebrow tag, a plain
-   h1 and one paragraph, then Back to blog0. No typing animation; PrintIn still runs. Used by the
+   h1 and one paragraph, then Back to blog0. No typing animation. Used by the
    confirm result page (/newsletter/confirmed) and the 404s; role=status so the outcome is announced. */
 
 export interface LinkPageProps {

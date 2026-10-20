@@ -1,36 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  TYPE_RUN_MS,
-  TYPE_STEP_MAX_MS,
-  TYPE_STEP_MIN_MS,
-  isTypeRoute,
-  setTypingRoute,
-  shouldType,
-  startTypeRun,
-  typeClock,
-  typeStep,
-  typingActive,
-} from '@/components/design/motion';
-import { WORDMARK_STEP_MS } from '@/components/design/Wordmark';
+import { isTypeRoute, setTypingRoute, shouldType, typingActive } from '@/components/design/motion';
+import { TYPE_CHAR_MS, cursorAt, weight } from '@/components/design/page-typer';
 
-// Owner decisions (UI review 2026-10-20, spec/ui.md §1 rule 4 / §3 Chrome): the typewriter runs at
-// about half the design's per-character speed, and it runs again whenever the reader arrives on
-// /, /archive or /about (only the first load of / also gets the intro hold). No boot strip any more.
+// Owner decisions (UI review 2026-10-20, spec/ui.md §1 rule 4): Home, /archive and /about type the
+// whole page in on every arrival, in reading order, at one constant speed.
 
-describe('typing speed', () => {
-  it('runs each line over ~1.6 s, with per-character bounds doubled from the design', () => {
-    expect(TYPE_RUN_MS).toBe(1600);
-    expect(TYPE_STEP_MIN_MS).toBe(14);
-    expect(TYPE_STEP_MAX_MS).toBe(52);
-    expect(typeStep(0)).toBe(52);
-    expect(typeStep(10)).toBe(52); // 160 ms/char, capped at the ceiling
-    expect(typeStep(100)).toBe(16); // 1600 / 100
-    expect(typeStep(1000)).toBe(14); // floored
+describe('page typewriter', () => {
+  it('types every character at the same constant speed', () => {
+    expect(TYPE_CHAR_MS).toBe(10);
   });
 
-  it('types the wordmark at ~110 ms per character', () => {
-    expect(WORDMARK_STEP_MS).toBe(110);
+  it('whitespace costs no time', () => {
+    expect(weight(' a b\n c ')).toBe(3);
+    expect(weight('   ')).toBe(0);
+  });
+
+  it('finds where the untyped tail starts, strictly in order across texts', () => {
+    const texts = ['blog0', 'a tagline', ' ', 'Archive'];
+    expect(cursorAt(texts, 0)).toEqual({ index: 0, offset: 0 });
+    expect(cursorAt(texts, 4)).toEqual({ index: 0, offset: 4 });
+    expect(cursorAt(texts, 5)).toEqual({ index: 1, offset: 0 });
+    expect(cursorAt(texts, 6)).toEqual({ index: 1, offset: 2 }); // skips the space
+    expect(cursorAt(texts, 13)).toEqual({ index: 3, offset: 0 }); // skips the blank text
+    expect(cursorAt(texts, 19)).toEqual({ index: 3, offset: 6 });
+    expect(cursorAt(texts, 20)).toBeNull();
+    expect(cursorAt([], 0)).toBeNull();
   });
 });
 
@@ -59,43 +54,21 @@ describe('setTypingRoute (client route change)', () => {
     delete g.document;
   });
 
-  it('marks a typing route and starts a new run (fresh clock origin)', () => {
-    const before = typeClock();
+  it('marks a typing route and clears the mark elsewhere', () => {
     setTypingRoute('/archive');
     expect(dataset.typing).toBe('1');
     expect(typingActive()).toBe(true);
     expect(shouldType()).toBe(true);
-    expect(typeClock()).toBeGreaterThanOrEqual(before);
-  });
-
-  it('clears the mark on any other route, so the next page renders its typed text complete', () => {
-    setTypingRoute('/about');
-    expect(dataset.typing).toBe('1');
     setTypingRoute('/p/humans-are-software');
     expect(dataset).not.toHaveProperty('typing');
     expect(shouldType()).toBe(false);
-    setTypingRoute('/privacy');
-    expect(dataset).not.toHaveProperty('typing');
-  });
-
-  it('types again when the reader navigates back to Home', () => {
-    setTypingRoute('/p/humans-are-software');
-    expect(dataset).not.toHaveProperty('typing');
     setTypingRoute('/');
     expect(dataset.typing).toBe('1');
-    expect(shouldType()).toBe(true);
-  });
-
-  it('a new run moves the shared clock forward, never back', () => {
-    const t0 = typeClock();
-    startTypeRun();
-    expect(typeClock()).toBeGreaterThanOrEqual(t0);
   });
 
   it('is a no-op without a document', () => {
     delete g.document;
     expect(() => setTypingRoute('/archive')).not.toThrow();
     expect(typingActive()).toBe(false);
-    expect(shouldType()).toBe(false);
   });
 });

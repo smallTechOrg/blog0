@@ -13,7 +13,7 @@ One Next.js (App Router) process serves everything on a single origin (default
 ```
                     ┌──────────────────────────── Next.js process (Node 22) ─────────────────────────────┐
  Reader browser ──► │ (site) server components ──► src/server/public ──► content pipeline (render, cache) │
-                    │      └─ client islands: Masthead, TldrDeck, ArticleView, ListenView, figures, PrintIn│
+                    │      └─ client islands: Masthead, TldrDeck, ArticleView, ListenView, figures, PageTyper│
  Writer browser ──► │ /admin pages (server guard) + client editor ──► /api/admin/* route handlers         │
                     │      route handlers ──► withApi (envelope, auth, origin check, request log)         │
                     │                    ──► services: articles, formats, jev, listen, media, users, site │
@@ -1823,7 +1823,7 @@ blog0/
 │   ├── components/
 │   │   ├── StubNotice.tsx
 │   │   ├── design/              # Icon, Typewriter, Wordmark, SplitHeadline, Dek, motion.ts, overlay.ts
-│   │   ├── site/                # Masthead, Footer, NewsletterForm, AsciiHand, Boot, PrintIn, PostCard, SummaryHost, ListenOverlay, LegacyHashRedirect, home/, archive/, about/
+│   │   ├── site/                # Masthead, Footer, NewsletterForm, AsciiHand, PageTyper, PostCard, SummaryHost, ListenOverlay, LegacyHashRedirect, home/, archive/, about/
 │   │   ├── reader/              # ArticleView, ModeBar, ModeCapsule, ReadHead, ArticleBody, ArticleFoot, TldrDeck, ShareLinkButton, ShareMenu, ParagraphShare, share-scroll.ts, clipboard.ts, ListenView, AudioPlayer, listen-sync.ts
 │   │   ├── figures/             # FigSlide47, FigAB, registry.ts
 │   │   └── admin/               # api.ts, AdminLoad.tsx (useAdminLoad/AdminLoadError), LoginForm, DeskHeader, DeskView, ArticleTable, FormatChips, NewArticleForm, labels.ts, relative-time.ts,

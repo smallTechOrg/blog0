@@ -5,14 +5,9 @@ import { Typewriter } from '@/components/design/Typewriter';
    About opens the homepage, which is why it left the nav. The texts come
    from the site record (Admin → Site), never constants.
 
-   The load sequence runs through here too, carrying on from the masthead.
-   It is the typewriter and nothing else: every character holds its place
-   from the first frame and only its opacity changes, so the block takes
-   its full height immediately and the featured card below it never gets
-   pushed under the fold — which is what a fade-in reveal used to do.
-
-   Delays are the design's (700 / 900 / 1180 / 1460 + 240 per paragraph)
-   doubled, with the slower typing (owner decision, UI review 2026-10-20).
+   It types in with the rest of the page (page-typer.ts): every character
+   holds its place from the first frame and only its paint changes, so the
+   block takes its full height immediately.
    ============================================================ */
 export interface HomeAboutProps {
   strap: string;
@@ -24,16 +19,16 @@ export function HomeAbout({ strap, stand, bodyParagraphs }: HomeAboutProps) {
   return (
     <section className="home-sec" id="about" aria-labelledby="about-h">
       <div className="sechead">
-        <Typewriter tag="h2" id="about-h" text="About Us" delay={1400} />
+        <Typewriter tag="h2" id="about-h" text="About Us" />
       </div>
       <div className="abt">
         <div className="abt__lead">
-          <Typewriter tag="p" className="abt__strap" text={strap} delay={1800} />
-          <Typewriter tag="p" className="abt__stand" text={stand} delay={2360} />
+          <Typewriter tag="p" className="abt__strap" text={strap} />
+          <Typewriter tag="p" className="abt__stand" text={stand} />
         </div>
         <div className="abt__body">
           {bodyParagraphs.map((t, i) => (
-            <Typewriter key={i} tag="p" text={t} delay={2920 + i * 480} />
+            <Typewriter key={i} tag="p" text={t} />
           ))}
         </div>
       </div>

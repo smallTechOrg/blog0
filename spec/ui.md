@@ -18,34 +18,30 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    (loaded after it) or `src/styles/admin.css`.
 2. Components keep the design's **class names, DOM structure, text, constants and timings**
    (e.g. `TDECK_STEP_MS = 720`, `TDECK_WHEEL = 90`, `TDECK_SWIPE = 56`, `SPLIT_STAGGER = 55`,
-   `BOOT_LINE_MS = 70`, dwell/type formulas). **Owner decision (UI review 2026-10-20):** the
-   typewriter runs at about half the design's speed — `TYPE_RUN_MS = 1600`, per-char bounds
-   14–52 ms (design 820 / 7–26), the wordmark 110 ms/char (design 60), and the typed lines' lead
-   delays doubled (tagline 960 ms; Home About 1400 / 1800 / 2360 / 2920 + 480 per paragraph). Translate `h(...)` calls into
+   dwell formulas). **Owner decision (UI review 2026-10-20):** the design's per-line typewriter and
+   block print-in are replaced by ONE page typewriter (rule 4) at one constant speed,
+   `TYPE_CHAR_MS = 10` per character, identical for every text. Translate `h(...)` calls into
    TSX one-for-one; replace `var` hooks with typed hooks; keep comments that explain WHY.
-3. The design's `#root` becomes `<div id="blog0-root">` (used by `PrintIn`'s selector root).
+3. The design's `#root` becomes `<div id="blog0-root">` (the page typewriter's root).
 4. The root layout injects, before paint, the design's theme script extended with persistence:
    read `localStorage['blog0.theme']` (`'light'|'dark'`); else `prefers-color-scheme`; set
-   `data-theme` on `<html>` (`suppressHydrationWarning`). **Stage A — intro only once:** the same
-   script decides the intro: `intro = location.pathname === '/' && !sessionStorage['blog0.intro']
-   && !reducedMotion`; it then sets `sessionStorage['blog0.intro'] = '1'` on **every** first load
-   (whatever the path; storage errors → treat as already seen, no intro) and only when `intro` sets
-   `data-printing` on `<html>` (`additions.css` hides `#blog0-root` while it is set) so server HTML
-   never flashes before the print-in; `PrintIn` removes it in its layout effect once the lines are
-   staged, and a 2.5 s timeout in the script removes it if hydration never arrives. Every other
-   load and every client navigation (article, privacy, newsletter pages, admin, and `/` after the
-   first load) renders text at first paint: no `data-printing`, no `.ln` stagger; only Home,
-   Archive and About type (see below; §3 Chrome). The decision is exposed as `document.documentElement.dataset.intro = '1'` for the
-   client components. **Owner decision (UI review 2026-10-20) — typing on Home, Archive and About, every time:**
-   the same script sets `data-typing="1"` for EVERY load of `/`, `/archive` or `/about` (never
-   under reduced motion), not just the visit's first — a reload or a return to Home types again
-   (owner report: typing must not stop after the first load); only the once-per-visit intro adds
-   the hold and the stagger; on a client navigation `PrintIn` calls `setTypingRoute`
-   (`motion.ts`), which sets/clears the mark and restarts the shared type clock (`startTypeRun`;
-   `Wordmark`/`Typewriter` re-run on `useTypeRun()`), so the wordmark and tagline type again on
-   every arrival at Home, Archive or About. `additions.css`: `html:not([data-typing="1"]) .typed__c {
-   opacity: 1 }` — no hold on those pages: the text is in the HTML, the animation only reveals it. > **Assumed:** the intro is tied to the visit's first document
-   load (a visit that starts on an article never sees it); the owner reviews it in the UI round.
+   `data-theme` on `<html>` (`suppressHydrationWarning`). **Owner decision (UI review
+   2026-10-20) — the page typewriter:** on EVERY arrival at `/`, `/archive` or `/about` (a document
+   load or a client navigation; never under reduced motion) every visible character of the page —
+   tabs, wordmark, tagline, About, Featured, Latest, footer — types in ONE sequence, left to right
+   and top to bottom (document order; inside `[data-type-visual]`, the masthead, on-screen order
+   row by row, since its grid moves the wordmark above or beside the tabs by width), at
+   `TYPE_CHAR_MS` per character; whitespace is free. Implementation
+   (`components/design/page-typer.ts`, mounted by `components/site/PageTyper.tsx` in the site
+   layout): the text stays in the DOM from the first frame and the untyped tail is painted
+   transparent via the CSS Custom Highlight API (`::highlight(blog0-untyped)`), so React's DOM is
+   never touched and nothing reflows. The pre-paint script sets `data-typing="1"` on those loads;
+   until `PageTyper` sets `data-typer` (or a 2.5 s timeout does), `additions.css` paints the
+   root's text transparent (icons excepted) so nothing flashes. A client navigation re-decides the
+   mark (`setTypingRoute`, `motion.ts`) and types again. Scrolling or a key press finishes the
+   typing at once; text added after load (See More) is not held back; without the Highlight API
+   the page is simply complete. Every other page renders complete at first paint. There is no
+   once-per-visit intro, hold or `.ln` stagger any more.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
    400), JetBrains Mono (400/500), exposed as CSS variables and wired in `additions.css`:
    `:root { --font-head: var(--nf-head), 'Helvetica Neue', Arial, sans-serif; --font-body:
@@ -61,14 +57,14 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 | Design (design-app.js) | Real file | Notes |
 |---|---|---|
 | `Icon` | `components/design/Icon.tsx` | same paths; `name` typed union (+ share icons) |
-| `useEnter`, `prefersReducedMotion`, `typeClock/typeNow/typeStep` | `components/design/motion.ts` | module-level clock as design |
+| `useEnter`, `prefersReducedMotion` | `components/design/motion.ts` | the design's per-line type clock is replaced by `page-typer.ts` |
 | `SplitHeadline`, `Dek`, `dekDelay` | `components/design/SplitHeadline.tsx`, `Dek.tsx` | |
 | `Typewriter` | `components/design/Typewriter.tsx` | |
 | `Wordmark` | `components/design/Wordmark.tsx` | nought spin; `plain` variant |
 | `Masthead` | `components/site/Masthead.tsx` | nav Archive + Subscribe; theme toggle; **no search** (div. 4); compact-on-scroll |
 | `Footer`, `NewsletterForm`, `useAsciiHand`, `useEof` | `components/site/Footer.tsx`, `NewsletterForm.tsx`, `AsciiHand.ts` | |
 | `Boot`, `bootCommand`, `useEof` | — | **dropped** (owner, UI review 2026-10-20): no boot strip, no footer `> end of` line; `--booth` stays the design's `0px` |
-| `usePrintIn` | `components/site/PrintIn.tsx` (client hook component keyed by pathname) | selector list verbatim, root `#blog0-root` |
+| `usePrintIn` | `components/site/PageTyper.tsx` + `components/design/page-typer.ts` | replaced by the page typewriter (§1 rule 4), root `#blog0-root` |
 | `PostCard` (+ quick TLDR/Listen) | `components/site/PostCard.tsx` | variants `post`, `card`, `card-lead`; quick buttons open overlays via `SummaryHost` |
 | `Home` (About, Featured stack, Latest, See More) | `app/(site)/page.tsx` + `components/site/home/*` | `FEATURED_MAX=4`, `FEED_BATCH=5`, stack observer |
 | `AboutBody`, `About` | `components/site/about/*`, `app/(site)/about/page.tsx` | |
@@ -96,15 +92,11 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 spins forever unless reduced motion; tagline types after 960 ms;
 compacts after 56 px scroll with hysteresis) → page → `Footer` (ASCII canvas, newsletter, topics,
 contact mail, X/LinkedIn icons only when the site has URLs, no RSS, `© <year> blog0 | smallTech`;
-no `> end of blog0` line and no boot strip — owner decision, UI review 2026-10-20). `PrintIn` runs on every pathname change. The theme toggle
+no `> end of blog0` line and no boot strip — owner decision, UI review 2026-10-20). `PageTyper` runs on every pathname change. The theme toggle
 flips `data-theme` and persists it.
 
-**Stage A — intro scope.** When `html[data-intro="1"]` (§1 rule 4): the wordmark, tagline and
-Home's `Typewriter` texts type in, and `PrintIn` staggers the page. When `html[data-typing="1"]`
-without the intro (any other arrival at `/`, `/archive` or `/about`): the wordmark, tagline and
-Home's `Typewriter` texts type in, no stagger, no hold. Otherwise: the wordmark, tagline and Home's `Typewriter` texts render complete
-and `PrintIn` is a no-op. Unchanged everywhere: the nought spin, deck typing (interactive
-surfaces).
+**Typing scope.** Home, Archive and About type the whole page in (§1 rule 4); everything else
+renders complete. Unchanged everywhere: the nought spin, deck typing (interactive surfaces).
 
 **Stage A — accessible animated text.** Every typed or spun text (`Wordmark`, tagline,
 `Typewriter`) renders `<span class="sr">{full text}</span><span aria-hidden="true">{animated
@@ -179,7 +171,7 @@ send a fresh link."; 404 "That link isn’t valid." / "Check the address you wer
 again from the footer."; unsubscribe 200 "You’re unsubscribed. Sorry to see you go." / "You
 won’t get another issue. Changed your mind? Sign up again from the footer any time."; 429 "Too
 many requests." / "Try the link again in N minutes." No typing animation on these pages
-(`PrintIn` still runs; reduced motion honoured).
+(no typing; reduced motion honoured).
 
 ### Home `/`
 Exactly the design `Home`: About section (`Typewriter` heading "About Us", strap/stand/body typed
