@@ -149,6 +149,9 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
   let last = performance.now();
   let lastY = window.scrollY;
   let downAt = -Infinity; // last scroll-down event
+  /* the first frame also skips ahead (no speed-up): a reload keeps the reader's scroll position,
+     and the text above the window counts as read */
+  let first = true;
   let done = 0; // items fully typed
   let raf = 0;
   let stopped = false;
@@ -178,15 +181,17 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     if (stopped) return;
     const now = performance.now();
     let rate = 1;
-    if (now - downAt < SCROLL_HOLD_MS) {
+    const scrolling = now - downAt < SCROLL_HOLD_MS;
+    if (scrolling || first) {
       const at = cursorAt(texts, typed);
       if (at) {
         const top = Math.max(0, opts.windowTop?.() ?? 0);
         const bottomOf = (i: number) => (i === at.index && ranges[i] ? ranges[i].getBoundingClientRect() : rectOf(items[i])).bottom;
         const i = firstVisible(bottomOf, at.index, items.length, top);
         if (i > at.index) typed = before[i] ?? total;
-        else rate = SCROLL_SPEEDUP;
+        else if (scrolling) rate = SCROLL_SPEEDUP;
       }
+      first = false;
     }
     typed += ((now - last) / TYPE_CHAR_MS) * rate;
     last = now;

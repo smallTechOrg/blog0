@@ -42,7 +42,8 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    (owner, UI review 2026-10-20); while the reader scrolls DOWN it types `SCROLL_SPEEDUP` (4) times
    faster, and if the typing point has gone above the visible window (under the sticky masthead)
    everything above the window lands at once and typing continues from the window's first line;
-   scrolling up changes nothing; text added after load (See More) is not held back; without the Highlight API
+   scrolling up changes nothing; a load that opens scrolled down (a reload) starts at the
+   window's first line the same way; text added after load (See More) is not held back; without the Highlight API
    the page is simply complete. On a typing page the design's headline word reveal and dek fade
    are off (the typewriter is the only animation). Every other page renders complete at first paint. There is no
    once-per-visit intro, hold or `.ln` stagger any more.
