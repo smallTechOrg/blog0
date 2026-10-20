@@ -58,14 +58,15 @@ describe('pre-paint theme + intro script', () => {
     expect(r.attrs).not.toHaveProperty('data-printing');
   });
 
-  it('a later load of / in the same visit → no intro, no hold, no typing', () => {
+  it('a later load of / in the same visit → no intro, no hold, but the typewriter still types', () => {
     const r = run({ path: '/', seen: true });
     expect(r.dataset.intro).toBeUndefined();
-    expect(r.dataset.typing).toBeUndefined();
+    expect(r.dataset.typing).toBe('1');
     expect(r.attrs).not.toHaveProperty('data-printing');
+    expect(r.timers).toHaveLength(0);
   });
 
-  it('any load of /archive or /about → typing (no intro, no hold), even later in the visit', () => {
+  it('any load of /, /archive or /about → typing (no hold unless it is the visit\'s first load of /)', () => {
     for (const path of ['/archive', '/about', '/archive/']) {
       const r = run({ path, seen: true });
       expect(r.dataset.typing, path).toBe('1');
@@ -75,7 +76,8 @@ describe('pre-paint theme + intro script', () => {
     }
   });
 
-  it('reduced motion → /archive and /about never type', () => {
+  it('reduced motion → /, /archive and /about never type', () => {
+    expect(run({ path: '/', reduced: true }).dataset.typing).toBeUndefined();
     expect(run({ path: '/archive', reduced: true }).dataset.typing).toBeUndefined();
     expect(run({ path: '/about', reduced: true }).dataset.typing).toBeUndefined();
   });

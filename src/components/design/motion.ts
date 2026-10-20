@@ -34,12 +34,12 @@ export function endIntro(): void {
 }
 
 /* Typing scope (owner decision, UI review 2026-10-20): the typed lines (wordmark, tagline, Home's
-   About) type during the intro AND every time the reader arrives on /archive or /about — a
+   About) type on every arrival at Home, /archive or /about — a
    document load (the pre-paint script marks `<html data-typing="1">`, additions.css then lets
    `.typed__c` start hidden) or a client navigation (`setTypingRoute` below marks it and restarts
    the clock). Everywhere else the text is complete at first paint. No visibility hold is ever
    put on those pages: the text is in the HTML, the animation only reveals its characters. */
-export const TYPE_ROUTES = ['/archive', '/about'] as const;
+export const TYPE_ROUTES = ['/', '/archive', '/about'] as const;
 
 export function isTypeRoute(pathname: string): boolean {
   const p = String(pathname || '').replace(/\/+$/, '') || '/';

@@ -156,7 +156,7 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('a[href*="rss"], a[href*="feed.xml"], link[type="application/rss+xml"]')).toHaveCount(0);
   });
 
-  test('intro only on the visit’s first load of /: typed wordmark + print-in; reload and later visits render at first paint; /archive and /about type again', async ({ browser }) => {
+  test('intro (hold + print-in) only on the visit’s first load of /; the typewriter types on EVERY load of /, /archive and /about', async ({ browser }) => {
     // Visit 1 starts on home → the intro plays.
     const visit = await browser.newContext();
     try {
@@ -167,15 +167,15 @@ test.describe('reader site (blog0)', () => {
       await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
       expect(await page.evaluate(() => sessionStorage.getItem('blog0.intro'))).toBe('1');
 
-      // Reload in the same visit: no intro, no typing, every typed char at once.
+      // Reload in the same visit: no intro hold and no stagger, but the wordmark and tagline
+      // still type in (owner report, 2026-10-20: typing must not stop after the first load).
       await page.reload();
       expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
-      expect(await page.evaluate(() => document.documentElement.dataset.typing ?? null)).toBeNull();
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
       expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
       expect(await page.locator('.ln').count()).toBe(0);
-      const opacities = await page.locator('.sitehead .typed__c, .abt .typed__c').evaluateAll((els) => els.map((el) => getComputedStyle(el).opacity));
-      expect(opacities.length).toBeGreaterThan(5);
-      expect(new Set(opacities)).toEqual(new Set(['1']));
+      await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
+      await expect(taglineLastChar(page)).toHaveClass(/is-in/, { timeout: 6_000 });
 
       // A client navigation to the Archive: no stagger and no hold, but the wordmark and tagline
       // type in again on a fresh clock (owner decision, UI review 2026-10-20).
@@ -191,18 +191,18 @@ test.describe('reader site (blog0)', () => {
       await expect(page.locator('.sitehead .wordmark > .sr')).toHaveText('blog0');
       await expect(page.getByRole('heading', { level: 1, name: 'Archive' })).toBeVisible();
 
-      // Home again: not the intro any more, so no typing and no stagger.
+      // Home again: not the intro any more (no stagger, no hold), but it types on a fresh clock.
       await page.locator('.sitehead .brandlink').click();
       await expect(page).toHaveURL(/\/$/);
-      // (the URL changes before React commits the new route; the mark is cleared in that commit)
-      await expect(page.locator('html')).not.toHaveAttribute('data-typing', '1');
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
       expect(await page.locator('.ln').count()).toBe(0);
-      await expect(wordmarkIn(page)).toHaveCount(5);
+      await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
+      await expect(taglineLastChar(page)).toHaveClass(/is-in/, { timeout: 6_000 });
     } finally {
       await visit.close();
     }
 
-    // Visit 2 starts on an article → no intro, text at first paint; going home later: no intro either.
+    // Visit 2 starts on an article → no intro, text at first paint; going home later: no intro hold, but it types.
     const other = await browser.newContext();
     try {
       const page = await other.newPage();
@@ -213,8 +213,9 @@ test.describe('reader site (blog0)', () => {
       expect(await page.locator('.ln').count()).toBe(0);
       await page.goto('/');
       expect(await page.evaluate(() => document.documentElement.dataset.intro ?? null)).toBeNull();
-      expect(await page.evaluate(() => document.documentElement.dataset.typing ?? null)).toBeNull();
-      await expect(wordmarkIn(page)).toHaveCount(5);
+      expect(await page.evaluate(() => document.documentElement.hasAttribute('data-printing'))).toBe(false);
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1'); // types, without the intro
+      await expect(wordmarkIn(page)).toHaveCount(5, { timeout: 3_000 });
 
       // A document load of /about types too (no intro, no hold).
       await page.goto('/about');

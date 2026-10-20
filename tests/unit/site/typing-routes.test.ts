@@ -16,7 +16,7 @@ import { WORDMARK_STEP_MS } from '@/components/design/Wordmark';
 
 // Owner decisions (UI review 2026-10-20, spec/ui.md §1 rule 4 / §3 Chrome): the typewriter runs at
 // about half the design's per-character speed, and it runs again whenever the reader arrives on
-// /archive or /about (the intro stays the only typing load of /). No boot strip any more.
+// /, /archive or /about (only the first load of / also gets the intro hold). No boot strip any more.
 
 describe('typing speed', () => {
   it('runs each line over ~1.6 s, with per-character bounds doubled from the design', () => {
@@ -35,12 +35,12 @@ describe('typing speed', () => {
 });
 
 describe('isTypeRoute', () => {
-  it('names /archive and /about (trailing slash ignored) and nothing else', () => {
+  it('names /, /archive and /about (trailing slash ignored) and nothing else', () => {
+    expect(isTypeRoute('/')).toBe(true);
+    expect(isTypeRoute('')).toBe(true);
     expect(isTypeRoute('/archive')).toBe(true);
     expect(isTypeRoute('/about')).toBe(true);
     expect(isTypeRoute('/archive/')).toBe(true);
-    expect(isTypeRoute('/')).toBe(false);
-    expect(isTypeRoute('')).toBe(false);
     expect(isTypeRoute('/p/humans-are-software')).toBe(false);
     expect(isTypeRoute('/archive/extra')).toBe(false);
     expect(isTypeRoute('/privacy')).toBe(false);
@@ -74,8 +74,16 @@ describe('setTypingRoute (client route change)', () => {
     setTypingRoute('/p/humans-are-software');
     expect(dataset).not.toHaveProperty('typing');
     expect(shouldType()).toBe(false);
-    setTypingRoute('/');
+    setTypingRoute('/privacy');
     expect(dataset).not.toHaveProperty('typing');
+  });
+
+  it('types again when the reader navigates back to Home', () => {
+    setTypingRoute('/p/humans-are-software');
+    expect(dataset).not.toHaveProperty('typing');
+    setTypingRoute('/');
+    expect(dataset.typing).toBe('1');
+    expect(shouldType()).toBe(true);
   });
 
   it('a new run moves the shared clock forward, never back', () => {

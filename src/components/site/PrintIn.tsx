@@ -30,7 +30,7 @@ function releaseHold() {
    Stage A (spec/ui.md §1 rule 4, §3 Chrome): the print-in is part of the intro — it runs only on
    the visit's first load of `/` (`html[data-intro="1"]`). Any later route change ends the intro,
    and every other page renders at first paint: no `.ln` stagger. The same route change decides
-   whether the typed lines type again (`setTypingRoute`: /archive and /about do). */
+   whether the typed lines type again (`setTypingRoute`: /, /archive and /about do). */
 export function PrintIn() {
   const pathname = usePathname();
   /* opening the deck rewrites /p/<slug> to /p/<slug>/tldr in place — that is

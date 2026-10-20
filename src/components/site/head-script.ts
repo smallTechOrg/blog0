@@ -8,8 +8,9 @@
 // (`html[data-printing]`, additions.css) until PrintIn stages the lines; a 2.5 s timeout lifts the
 // hold if hydration never arrives.
 // Typing (UI review 2026-10-20): `data-typing` marks a document whose typed lines (wordmark,
-// tagline, Home About) may start hidden and type in — the intro, and any load of /archive or
-// /about (no hold there: the text is in the HTML, only its characters are revealed). Client
+// tagline, Home About) may start hidden and type in — EVERY load of /, /archive or /about, not just
+// the visit's first (no hold there: the text is in the HTML, only its characters are revealed; only
+// the once-per-visit intro holds `#blog0-root`). Client
 // navigations maintain the mark in PrintIn (`setTypingRoute`).
 
 /** sessionStorage key: set on the visit's first load. */
@@ -20,7 +21,7 @@ if(t!=='light'&&t!=='dark'){t=w.matchMedia&&w.matchMedia('(prefers-color-scheme:
 d.setAttribute('data-theme',t);
 var reduce=!!(w.matchMedia&&w.matchMedia('(prefers-reduced-motion: reduce)').matches),intro=false;
 try{var s=w.sessionStorage,seen=s.getItem('${INTRO_KEY}');s.setItem('${INTRO_KEY}','1');intro=w.location.pathname==='/'&&!seen&&!reduce}catch(e){intro=false}
-var p=w.location.pathname.replace(/\\/+$/,'')||'/',typing=!reduce&&(intro||p==='/archive'||p==='/about');
+var p=w.location.pathname.replace(/\\/+$/,'')||'/',typing=!reduce&&(p==='/'||p==='/archive'||p==='/about');
 if(intro){d.dataset.intro='1';d.setAttribute('data-printing','');w.setTimeout(function(){d.removeAttribute('data-printing')},2500)}
 if(typing){d.dataset.typing='1'}
 }catch(e){}})();`;

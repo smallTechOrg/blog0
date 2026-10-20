@@ -34,14 +34,16 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    never flashes before the print-in; `PrintIn` removes it in its layout effect once the lines are
    staged, and a 2.5 s timeout in the script removes it if hydration never arrives. Every other
    load and every client navigation (article, privacy, newsletter pages, admin, and `/` after the
-   first load) renders text at first paint: no `data-printing`, no `.ln` stagger, no typing (§3
-   Chrome). The decision is exposed as `document.documentElement.dataset.intro = '1'` for the
-   client components. **Owner decision (UI review 2026-10-20) — typing on Archive and About:**
-   the same script also sets `data-typing="1"` for the intro and for any load of `/archive` or
-   `/about` (never under reduced motion); on a client navigation `PrintIn` calls `setTypingRoute`
+   first load) renders text at first paint: no `data-printing`, no `.ln` stagger; only Home,
+   Archive and About type (see below; §3 Chrome). The decision is exposed as `document.documentElement.dataset.intro = '1'` for the
+   client components. **Owner decision (UI review 2026-10-20) — typing on Home, Archive and About, every time:**
+   the same script sets `data-typing="1"` for EVERY load of `/`, `/archive` or `/about` (never
+   under reduced motion), not just the visit's first — a reload or a return to Home types again
+   (owner report: typing must not stop after the first load); only the once-per-visit intro adds
+   the hold and the stagger; on a client navigation `PrintIn` calls `setTypingRoute`
    (`motion.ts`), which sets/clears the mark and restarts the shared type clock (`startTypeRun`;
    `Wordmark`/`Typewriter` re-run on `useTypeRun()`), so the wordmark and tagline type again on
-   every arrival at Archive or About. `additions.css`: `html:not([data-typing="1"]) .typed__c {
+   every arrival at Home, Archive or About. `additions.css`: `html:not([data-typing="1"]) .typed__c {
    opacity: 1 }` — no hold on those pages: the text is in the HTML, the animation only reveals it. > **Assumed:** the intro is tied to the visit's first document
    load (a visit that starts on an article never sees it); the owner reviews it in the UI round.
 5. Fonts via `next/font/google`: Space Grotesk (400/500/600/700), Source Serif 4 (400/600, italic
@@ -99,8 +101,8 @@ flips `data-theme` and persists it.
 
 **Stage A — intro scope.** When `html[data-intro="1"]` (§1 rule 4): the wordmark, tagline and
 Home's `Typewriter` texts type in, and `PrintIn` staggers the page. When `html[data-typing="1"]`
-without the intro (any arrival at `/archive` or `/about`): the wordmark and tagline type in, no
-stagger, no hold. Otherwise: the wordmark, tagline and Home's `Typewriter` texts render complete
+without the intro (any other arrival at `/`, `/archive` or `/about`): the wordmark, tagline and
+Home's `Typewriter` texts type in, no stagger, no hold. Otherwise: the wordmark, tagline and Home's `Typewriter` texts render complete
 and `PrintIn` is a no-op. Unchanged everywhere: the nought spin, deck typing (interactive
 surfaces).
 
