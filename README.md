@@ -462,6 +462,7 @@ sends, which is why no test ever uses it. To run the app against it, put
 
 | Command | What it does |
 |---|---|
+| `pnpm lm:prefix-check` | proves Listmonk works under blog0's `/lm` path prefix (production: root URL `https://<site>/lm`, Next.js rewrites to the internal Listmonk): builds blog0 with `BLOG0_LM_PROXY_TARGET`, delivers a campaign to Mailpit on the **test** stack and walks the click redirect, open pixel, unsubscribe page + form and the denied paths through blog0's port (3492); exit 3 = test stack/Docker down |
 | `pnpm listmonk:up` | compose `postgres` + `listmonk` (v5.1.0), wait for health, ensure API user + list, write `var/listmonk-dev.env`; exit 3 = `PENDING DOCKER` |
 | `pnpm listmonk:down [-- -v]` | stop them (`-v` also removes the volumes and the env file) |
 | `pnpm listmonk:reset` | drop and re-create the `listmonk` database, then `up` (fresh state) |

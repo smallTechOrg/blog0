@@ -204,4 +204,32 @@ describe('proxy — CSP nonce (production only)', () => {
     expect(res.headers.get('x-middleware-rewrite')).toBeNull();
     expect(res.headers.get('content-security-policy')).toContain(`'nonce-${forwarded(res, 'x-nonce')}'`);
   });
+  describe('Listmonk /lm paths', () => {
+    const LINK = '/lm/link/fefdfc48-c6a0-4349-aa83-c1fade9355e0/b2270f43-52c8-4a55-94e5-a62fc176cd0e/00000000-0000-0000-0000-000000000000';
+
+    it('an allow-listed /lm path passes untouched (no blog0 CSP / nonce) when the rewrites exist', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('BLOG0_LM_PROXY_ENABLED', '1');
+      const res = await proxy(new NextRequest(`http://localhost:3410${LINK}`));
+      expect(res.headers.get('x-middleware-next')).toBe('1');
+      expect(res.headers.get('content-security-policy')).toBeNull();
+      expect(forwarded(res, 'x-nonce')).toBeNull();
+    });
+
+    it('any other /lm path (admin, api, export …) keeps the full security headers', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('BLOG0_LM_PROXY_ENABLED', '1');
+      for (const p of ['/lm/admin', '/lm/api/health', '/lm', '/lm/subscription/export/b2270f43-52c8-4a55-94e5-a62fc176cd0e']) {
+        const res = await proxy(new NextRequest(`http://localhost:3410${p}`));
+        expect(res.headers.get('content-security-policy'), p).toContain("'nonce-");
+      }
+    });
+
+    it('without the rewrites (dev / tests) an /lm path is just a normal page request', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('BLOG0_LM_PROXY_ENABLED', '0');
+      const res = await proxy(new NextRequest(`http://localhost:3410${LINK}`));
+      expect(res.headers.get('content-security-policy')).toContain("'nonce-");
+    });
+  });
 });

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { isListmonkProxyPath } from '@/lib/http/listmonk-proxy';
 import { isHttpsOrigin, runtimeSecurityHeaders } from '@/lib/http/csp';
 import { getConfig } from '@/server/config';
 import { log } from '@/server/log';
@@ -95,6 +96,10 @@ function next(security: PageSecurity | null): NextResponse {
 }
 
 export async function proxy(request: NextRequest): Promise<NextResponse> {
+  // Allow-listed /lm/* paths are rewritten to Listmonk (next.config.ts): its pages carry their own inline
+  // styles/scripts, so blog0's nonce CSP must not be stamped on them. Any other /lm/* path stays a normal
+  // blog0 404 with the full security headers.
+  if (process.env.BLOG0_LM_PROXY_ENABLED === '1' && isListmonkProxyPath(request.nextUrl.pathname)) return NextResponse.next();
   const security = pageSecurity(request);
   const slug = slugFromArticlePath(request.nextUrl.pathname);
   if (slug === null) return next(security);

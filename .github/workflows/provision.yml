@@ -32,14 +32,13 @@ jobs:
       GCP_INSTANCE: ${{ vars.GCP_INSTANCE }}
       GCP_VM_SA: ${{ vars.GCP_VM_SA }}
       SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
-      NEWS_DOMAIN: ${{ vars.NEWS_DOMAIN }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check the repository variables
         run: |
           missing=""
-          for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_VM_SA SITE_DOMAIN NEWS_DOMAIN GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
+          for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_VM_SA SITE_DOMAIN GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then

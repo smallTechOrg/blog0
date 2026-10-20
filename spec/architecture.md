@@ -1194,11 +1194,11 @@ its UI (runbook).
 modified except an **additive** patch of the shared HTTPS load balancer `zero-vanguard`; Postgres =
 the existing Cloud SQL `ai-agent-db` (PG17, private IP, SSL required, `max_connections` shared) with
 databases `blog0` + `listmonk`; Listmonk kept; Google Workspace SMTP `smtp.gmail.com:587` (app password)
-with POP bounces on the same mailbox; domains `blog0.smalltech.in` + `news.blog0.smalltech.in`.
+with POP bounces on the same mailbox; ONE domain `blog0.smalltech.in` (Listmonk's public endpoints under `/lm`, below).
 **Build on GitHub Actions** (never on the VM, never Cloud Build); ship with `gcloud compute scp/ssh
 --tunnel-through-iap`; the VM env is rendered from GitHub secrets; deploys run migrations and restart
-**containers only — never the VM**. Everything is code; the only manual steps are the GoDaddy A records
-(both hosts → the LB IP `34.8.199.41`) and the Workspace DKIM record. Runbook: `docs/deploy-gcp.md`. The
+**containers only — never the VM**. Everything is code; the only manual steps are the GoDaddy A record
+(`blog0.smalltech.in` → the LB IP `34.8.199.41`) and the Workspace DKIM record. Runbook: `docs/deploy-gcp.md`. The
 root `docker-compose.yml` (§12.6) stays the dev/test stack. **Not used (vs. the earlier Stage B kit):** no
 Caddy (the LB terminates TLS), no cloud-sql-proxy (private IP + TLS), no on-VM build.
 
@@ -1233,7 +1233,7 @@ schema OWNER (`blog0_owner`): migrate → verify 0 pending → ensure the restri
 the site has zero articles — the 5 posts + committed deck fixtures, 0 AI calls) → Listmonk one-off
 `--install --idempotent --yes` then `--upgrade --yes` → start Listmonk → `listmonk-api.sh` (API user
 `blog0` + list `blog0` → `/opt/blog0/listmonk-api.env`, 600, token kept while it authenticates) and
-`listmonk-settings.sh` (root URL `https://news.…`, Workspace SMTP, POP bounces `pop.gmail.com:995`,
+`listmonk-settings.sh` (root URL `https://<SITE_DOMAIN>/lm`, Workspace SMTP, POP bounces `pop.gmail.com:995`,
 1 800 messages / 24 h, public archive/subscription page off) from a `listmonk-ops` container (scheduler
 image: node + curl) on the compose network → `docker compose up -d --wait` (blog0, listmonk, scheduler;
 blog0 + scheduler connect as `blog0_app`) → prune images keeping this tag and the previous one → print
@@ -1251,22 +1251,45 @@ backup bucket via the VM service account); one-offs under profile `ops`: `releas
 `blog0_owner`; Listmonk `ssl_mode=require`; `BLOG0_TRUSTED_PROXY_HOPS=2` (Google front end + LB).
 
 **Infra (`infra/provision.sh`, as `blog0-deployer` via WIF; `--dry-run` is read-only).** Firewall
-`blog0-allow-lb` (tcp 3410, 9000 from `130.211.0.0/22`, `35.191.0.0/16`), `blog0-allow-iap-ssh` (tcp 22 from
+`blog0-allow-lb` (tcp 3410 only, from `130.211.0.0/22`, `35.191.0.0/16`), `blog0-allow-iap-ssh` (tcp 22 from
 `35.235.240.0/20`) and `blog0-deny-public` (priority 1000 deny, because the project has untagged 0.0.0.0/0
 allows), target tag `blog0`; VM `blog0-vm` (e2-micro, tag `blog0`, SA `blog0-vm`, scope
 cloud-platform, 20 GB pd-balanced, startup script `infra/vm-startup.sh`; an existing VM is never recreated or restarted);
-unmanaged instance group `blog0-ig` with named ports `blog0:3410`, `listmonk:9000`; health checks
-`blog0-hc` (`/api/health/live`) and `blog0-listmonk-hc` (`/public/static/favicon.png`, 200 without a
-session); backend services `blog0-bes`, `blog0-listmonk-bes`; managed cert `blog0-cert` (both domains);
-**shared LB (additive only):** `infra/lib/urlmap-patch.mjs` appends host rule `blog0.…` → matcher `blog0`
-(default `blog0-bes`) and `news.blog0.…` → matcher `blog0-news` (Listmonk paths `/link/*`, `/campaign/*`,
-`/subscription/*`, `/public/static/*`, `/public/custom.{css,js}` → `blog0-listmonk-bes`; everything else
-404 by fault injection, never a backend) to `zero-vanguard-urlmap`, and `provision.sh` appends `blog0-cert`
-to the HTTPS proxy's certificate list (order kept). Before any LB change the url map and both proxies are
-exported to `var/lb-backup-<ts>/` (with `RESTORE.txt`; uploaded as a workflow artifact); the patch is
-validated with `url-maps validate` first, the fingerprint is kept, and a canary (`https://` +
-`http://vanguard.smalltech.in/` must stay 200) runs afterwards — a failure exits 1 and prints the restore
-commands (never an automatic rollback of the shared LB).
+unmanaged instance group `blog0-ig` with the named port `blog0:3410`; health check
+`blog0-hc` (`/api/health/live`); backend service `blog0-bes`; managed cert `blog0-cert-v2` (`blog0.smalltech.in` only);
+**shared LB (blog0's own entries only):** `infra/lib/urlmap-patch.mjs` ensures host rule `blog0.…` → matcher `blog0`
+(default `blog0-bes`) on `zero-vanguard-urlmap` and REMOVES blog0's legacy `news.blog0.…` host rule and
+matcher `blog0-news` (fail closed unless they are exactly what an earlier run created; no other rule or
+matcher is ever touched, reordered or changed — asserted); `provision.sh` appends `blog0-cert-v2` to the HTTPS
+proxy's certificate list, then takes the legacy `blog0-cert` out of it (read-modify-write on the CURRENT list,
+every other cert keeps its order; the legacy cert is detached only once `v2` is ACTIVE or the legacy one is not
+serving) and deletes it. After the url map import it deletes `blog0-listmonk-bes` + `blog0-listmonk-hc`, drops the
+`listmonk:9000` named port and tightens `blog0-allow-lb` to `tcp:3410` (each guarded by an existence check).
+Before any LB change the url map and both proxies are exported to `var/lb-backup-<ts>/` (with
+`RESTORE.txt`; uploaded as a workflow artifact); the patch is validated with `url-maps validate` first, the
+fingerprint is kept, and a canary (`https://` + `http://vanguard.smalltech.in/` must be 200) runs BEFORE the
+first change and again afterwards — a failure exits 1 and prints the restore commands (never an automatic
+rollback of the shared LB).
+
+**Listmonk under `/lm` (one host).** *Assumed (single host)* — owner decision: only `blog0.smalltech.in`; there
+is no news host, no second backend, health check, certificate domain or DNS record. Listmonk's root URL is
+`https://blog0.smalltech.in/lm` (`LISTMONK_ROOT_URL`, rendered by `deploy/vm/render-env.sh`), so tracked
+links, the open pixel and the unsubscribe / `List-Unsubscribe` links are `/lm/…`. `next.config.ts`
+`rewrites()` (`beforeFiles`, `src/lib/http/listmonk-proxy.ts`) proxy an ALLOW-LIST to the internal Listmonk
+(`http://listmonk:9000` on the compose network; baked at build: `BLOG0_LM_PROXY_TARGET`, default on the image
+build `BLOG0_STANDALONE=1`; absent in dev/tests ⇒ no rewrites): `/lm/link/<uuid>/<uuid>/<uuid>` (307 +
+`Location` preserved), `/lm/campaign/<uuid>/<uuid>/px.png`, `/lm/subscription/<uuid>/<uuid>` (GET page + POST
+form), `/lm/public/static/<file>`, `/lm/public/custom.{css,js}`; the `/lm` prefix is stripped. Verified
+against Listmonk v5.1.0: its pages hardcode ABSOLUTE asset paths (`/public/static/style.css`,
+`/public/static/logo.svg`, `/public/custom.{css,js}`; `root_url` is ignored for them), so exactly those three
+asset patterns are proxied unprefixed as well (blog0 has no `/public/…` route of its own). Everything else —
+`/lm`, `/lm/admin*`, `/lm/api*`, `/lm/subscription/{export,wipe,optin,form}`, `/lm/campaign/<c>/<s>` (the
+default template's "view in browser"; blog0's template `{{ template "content" . }}{{ TrackView }}` has none) —
+matches no rule and is blog0's own 404. Proxied responses carry Listmonk's headers as is (Next applies neither
+`headers()` nor `proxy.ts` response headers to an external rewrite; no blog0 CSP is stamped on them); the
+admin UI stays reachable only through the SSH/IAP tunnel to `127.0.0.1:9000` on the VM. Proof:
+`pnpm lm:prefix-check` (real Listmonk test stack + Mailpit: click 307, pixel 200, unsubscribe page + assets +
+form POST, counters, denied paths) and the `lm-public` / `lm-denied` checks of `scripts/deploy-smoke.sh`.
 
 **`bootstrap.sh`** (idempotent; `--dry-run`, `--sync-env`, `--rotate <SECRET>`): enables APIs; service
 accounts `blog0-deployer` (WIF, no keys) and `blog0-vm`; WIF pool `blog0-github` + provider `github`
@@ -1274,7 +1297,7 @@ restricted to `smallTechOrg/blog0`; Artifact Registry `blog0`; bucket `blog0-bac
 (versioning, noncurrent deleted after 30 d); least-privilege IAM for those two SAs only; Cloud SQL
 databases `blog0` + `listmonk` and users `blog0_owner` + `listmonk` on the shared instance; GitHub
 variables `GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_WIF_PROVIDER GCP_DEPLOYER_SA GCP_VM_SA AR_REPO
-BACKUP_BUCKET SITE_DOMAIN NEWS_DOMAIN CLOUDSQL_PRIVATE_IP` and secrets `BLOG0_SESSION_SECRET
+BACKUP_BUCKET SITE_DOMAIN CLOUDSQL_PRIVATE_IP` and secrets `BLOG0_SESSION_SECRET
 BLOG0_UNSUBSCRIBE_SECRET BLOG0_NEWSLETTER_WEBHOOK_SECRET BLOG0_DB_OWNER_PASSWORD BLOG0_DB_APP_PASSWORD
 LISTMONK_DB_PASSWORD LISTMONK_ADMIN_USER LISTMONK_ADMIN_PASSWORD BLOG0_ADMIN_PASSWORD` (generated into
 `var/prod/secrets.env`, 600) and `BLOG0_OPENROUTER_API_KEY BLOG0_JEV_MODEL(=typesafe/jev-1.13)

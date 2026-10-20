@@ -64,7 +64,6 @@ GCP_ZONE="${GCP_ZONE:-us-central1-a}"
 GH_REPO="${GH_REPO:-$BLOG0_REPO_DEFAULT}"
 SQL_INSTANCE="${SQL_INSTANCE:-ai-agent-db}"
 SITE_DOMAIN="${SITE_DOMAIN:-blog0.smalltech.in}"
-NEWS_DOMAIN="${NEWS_DOMAIN:-news.blog0.smalltech.in}"
 DEPLOYER=blog0-deployer
 VM_SA=blog0-vm
 POOL=blog0-github
@@ -436,7 +435,6 @@ set_var GCP_VM_SA "$VM_SA_EMAIL"
 set_var AR_REPO "$AR_REPO"
 set_var BACKUP_BUCKET "$BUCKET"
 set_var SITE_DOMAIN "$SITE_DOMAIN"
-set_var NEWS_DOMAIN "$NEWS_DOMAIN"
 set_var CLOUDSQL_PRIVATE_IP "$PRIVATE_IP"
 
 ((DRY_RUN)) && say "DRY RUN complete — nothing was changed" || say "OK — next: push infra/** (or run the 'provision' workflow), then 'deploy'; DNS + DKIM are the only manual steps (docs/deploy-gcp.md)"

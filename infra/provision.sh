@@ -4,22 +4,32 @@
 #
 #   bash infra/provision.sh [--dry-run]
 #
-# Idempotent: every step checks what exists and only creates/updates what differs. Creates ONLY
-# blog0-* resources in the SHARED project; the shared load balancer (url map + HTTPS proxy of
-# zero-vanguard) is changed ONLY additively — two host rules + two path matchers appended, blog0-cert
-# appended to the proxy's certificate list (existing order kept). Before any LB change the url map and
-# both proxies are exported to $LB_BACKUP_DIR (default var/lb-backup-<utc-ts>/, with RESTORE.txt).
-# After the LB steps https:// and http:// vanguard must still answer 200 — else exit 1 with the backup
-# path and the restore commands (never an automatic rollback of the shared LB). Never restarts,
-# stops or recreates an existing VM.
+# SINGLE HOST: only SITE_DOMAIN (blog0.smalltech.in) is routed; Listmonk's public endpoints are served by
+# blog0 itself under /lm (Next.js rewrites to the internal listmonk:9000 - src/lib/http/listmonk-proxy.ts),
+# so the LB needs ONE backend (blog0-bes, port 3410). There is no news host, no Listmonk backend/health
+# check, and port 9000 is not open to the LB.
+#
+# Idempotent: every step checks what exists and only creates/updates what differs. Touches ONLY blog0-*
+# resources in the SHARED project; the shared load balancer (url map + HTTPS proxy of zero-vanguard) is
+# changed ONLY in blog0's own entries - one host rule + path matcher `blog0` ensured, blog0's legacy
+# `news.blog0.smalltech.in` host rule + `blog0-news` matcher removed (fail closed on anything else), the
+# managed certificate `blog0-cert-v2` (SITE_DOMAIN only) appended to the proxy's list and the legacy
+# `blog0-cert` taken out of it (order of every other certificate kept). Before any LB change the url map and
+# both proxies are exported to $LB_BACKUP_DIR (default var/lb-backup-<utc-ts>/, with RESTORE.txt). The
+# vanguard canary (https:// and http:// both 200) is checked BEFORE the first LB change and again after
+# the LB steps - else exit 1 with the backup path and the restore commands (never an automatic rollback of
+# the shared LB). Legacy cleanup (after the url map no longer references them): backend service
+# blog0-listmonk-bes, health check blog0-listmonk-hc, the `listmonk:9000` named port of blog0-ig, firewall
+# port 9000, then the legacy certificate blog0-cert (only once detached). Never restarts, stops or
+# recreates an existing VM.
 #
 # --dry-run: read-only — every describe/export runs, every mutation is printed as `would: …`.
 #
 # Environment (repo variables in CI):
-#   GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE (blog0-vm) GCP_VM_SA SITE_DOMAIN NEWS_DOMAIN
+#   GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE (blog0-vm) GCP_VM_SA SITE_DOMAIN
 # Optional overrides: LB_URLMAP (zero-vanguard-urlmap), LB_HTTPS_PROXY (zero-vanguard-httpsproxy),
 #   LB_HTTP_PROXY (zero-vanguard-httpproxy), LB_HTTPS_RULE (zero-vanguard-fr-https),
-#   CANARY_HOST (vanguard.smalltech.in), LISTMONK_HC_PATH, LB_BACKUP_DIR.
+#   CANARY_HOST (vanguard.smalltech.in), LB_BACKUP_DIR.
 # Exit 0 ok; 1 failure; 2 usage.
 set -euo pipefail
 
@@ -41,7 +51,7 @@ for a in "$@"; do
 done
 
 require_cmd gcloud jq node curl
-require_env GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_VM_SA SITE_DOMAIN NEWS_DOMAIN
+require_env GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_VM_SA SITE_DOMAIN
 assert_ours "$GCP_INSTANCE"
 
 LB_URLMAP="${LB_URLMAP:-zero-vanguard-urlmap}"
@@ -49,8 +59,6 @@ LB_HTTPS_PROXY="${LB_HTTPS_PROXY:-zero-vanguard-httpsproxy}"
 LB_HTTP_PROXY="${LB_HTTP_PROXY:-zero-vanguard-httpproxy}"
 LB_HTTPS_RULE="${LB_HTTPS_RULE:-zero-vanguard-fr-https}"
 CANARY_HOST="${CANARY_HOST:-vanguard.smalltech.in}"
-# Listmonk v5.1.0 answers this static asset 200 without a session (/api/health needs one → 403).
-LISTMONK_HC_PATH="${LISTMONK_HC_PATH:-/public/static/favicon.png}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 LB_BACKUP_DIR="${LB_BACKUP_DIR:-${ROOT}/var/lb-backup-${TS}}"
 
@@ -58,10 +66,12 @@ NETWORK=default
 TAG=blog0
 IG=blog0-ig
 HC_APP=blog0-hc
-HC_LISTMONK=blog0-listmonk-hc
 BES_APP=blog0-bes
-BES_LISTMONK=blog0-listmonk-bes
-CERT=blog0-cert
+CERT=blog0-cert-v2
+# Legacy (two-host design) resources, removed below once the url map no longer references them.
+LEGACY_HC_LISTMONK=blog0-listmonk-hc
+LEGACY_BES_LISTMONK=blog0-listmonk-bes
+LEGACY_CERT=blog0-cert
 LB_RANGES=130.211.0.0/22,35.191.0.0/16
 IAP_RANGE=35.235.240.0/20
 COMPUTE="https://www.googleapis.com/compute/v1/projects/${GCP_PROJECT}"
@@ -80,7 +90,7 @@ run() {
   fi
 }
 ((DRY_RUN)) && say "DRY RUN — read-only; nothing below is created or changed"
-say "project ${GCP_PROJECT}, zone ${GCP_ZONE}, instance ${GCP_INSTANCE}, hosts ${SITE_DOMAIN} + ${NEWS_DOMAIN}"
+say "project ${GCP_PROJECT}, zone ${GCP_ZONE}, instance ${GCP_INSTANCE}, host ${SITE_DOMAIN}"
 
 # --- 0. backup of the shared LB (before anything else) ---------------------------------------------
 backup_lb() {
@@ -101,6 +111,22 @@ EOF
   say "LB backup → ${LB_BACKUP_DIR} (url map, both proxies, RESTORE.txt)"
 }
 backup_lb
+
+# Canary: the shared LB serves its existing site (https:// and http:// vanguard both 200).
+canary() { # <url> → prints the status code; retries 6 × 10 s for a 200
+  local code="" i
+  for i in 1 2 3 4 5 6; do
+    code="$(curl -sS -o /dev/null -m 15 -w '%{http_code}' "$1" 2>/dev/null || true)"
+    [[ "$code" == 200 ]] && break
+    ((i < 6)) && sleep 10
+  done
+  printf '%s' "$code"
+}
+# Before the first LB change: if vanguard is already unhealthy, change nothing on the shared LB.
+pre_https="$(canary "https://${CANARY_HOST}/")"
+pre_http="$(canary "http://${CANARY_HOST}/")"
+say "canary (before) https://${CANARY_HOST}/ → ${pre_https}; http://${CANARY_HOST}/ → ${pre_http}"
+[[ "$pre_https" == 200 && "$pre_http" == 200 ]] || fail "the shared LB does not serve ${CANARY_HOST} with 200 before any change (https ${pre_https}, http ${pre_http}) — nothing was changed; fix that first"
 
 # --- 1. firewall (blog0-* rules only; target tag blog0) -----------------------------------------------
 # fw_ensure <name> <ALLOW|DENY> <rules> <source-ranges> <priority> <description>
@@ -125,7 +151,14 @@ fw_ensure() {
     say "firewall ${name}: created"
   fi
 }
-fw_ensure blog0-allow-lb ALLOW tcp:3410,tcp:9000 "$LB_RANGES" 900 "blog0: Google LB proxies + health checks to blog0 (3410) and Listmonk (9000)"
+# Listmonk is NOT exposed to the LB (served via blog0's /lm rewrites over the compose network). While the legacy
+# Listmonk backend still exists (removed in step 9) 9000 stays open; step 9 then tightens the rule to 3410 only.
+LB_FW_DESC="blog0: Google LB proxies + health checks to blog0 (3410)"
+if exists compute backend-services describe "$LEGACY_BES_LISTMONK" --global; then
+  fw_ensure blog0-allow-lb ALLOW tcp:3410,tcp:9000 "$LB_RANGES" 900 "$LB_FW_DESC (+ 9000 until the legacy Listmonk backend is removed)"
+else
+  fw_ensure blog0-allow-lb ALLOW tcp:3410 "$LB_RANGES" 900 "$LB_FW_DESC"
+fi
 fw_ensure blog0-allow-iap-ssh ALLOW tcp:22 "$IAP_RANGE" 900 "blog0: SSH only through IAP"
 # The project has untagged 0.0.0.0/0 allows (ssh/rdp at 65534, tcp:5000 / tcp:8001 at 1000). This deny
 # (priority 1000; a deny wins over an allow of equal priority) keeps blog0-vm closed to everything but
@@ -176,12 +209,17 @@ if ! exists compute instance-groups unmanaged describe "$IG" --zone "$GCP_ZONE";
   run g compute instance-groups unmanaged create "$IG" --zone "$GCP_ZONE" --description "blog0: the one VM behind the shared LB"
   say "instance group ${IG}: created"
 fi
-ports="$(gcloud compute instance-groups unmanaged describe "$IG" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --format=json 2>/dev/null |
-  jq -r '[.namedPorts[]? | "\(.name):\(.port)"] | sort | join(",")' || true)"
-if [[ "$ports" != "blog0:3410,listmonk:9000" ]]; then
-  run g compute instance-groups unmanaged set-named-ports "$IG" --zone "$GCP_ZONE" --named-ports blog0:3410,listmonk:9000
-  say "instance group ${IG}: named ports blog0:3410, listmonk:9000"
-fi
+ensure_named_ports() { # <want, e.g. blog0:3410>
+  local ports
+  ports="$(gcloud compute instance-groups unmanaged describe "$IG" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --format=json 2>/dev/null |
+    jq -r '[.namedPorts[]? | "\(.name):\(.port)"] | sort | join(",")' || true)"
+  if [[ "$ports" != "$1" ]]; then
+    run g compute instance-groups unmanaged set-named-ports "$IG" --zone "$GCP_ZONE" --named-ports "$1"
+    say "instance group ${IG}: named ports ${1}"
+  fi
+}
+# The legacy backend service still maps the `listmonk` port name until step 9 removes it.
+if exists compute backend-services describe "$LEGACY_BES_LISTMONK" --global; then ensure_named_ports "blog0:3410,listmonk:9000"; else ensure_named_ports "blog0:3410"; fi
 members="$(gcloud compute instance-groups unmanaged list-instances "$IG" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --format='value(instance.basename())' 2>/dev/null || true)"
 if ! grep -qx "$GCP_INSTANCE" <<<"$members"; then
   run g compute instance-groups unmanaged add-instances "$IG" --zone "$GCP_ZONE" --instances "$GCP_INSTANCE"
@@ -209,9 +247,8 @@ hc_ensure() {
   fi
 }
 hc_ensure "$HC_APP" 3410 /api/health/live
-hc_ensure "$HC_LISTMONK" 9000 "$LISTMONK_HC_PATH"
 
-# --- 5. backend services (global, EXTERNAL_MANAGED, HTTP, 60 s) -----------------------------------------
+# --- 5. backend services (global, EXTERNAL_MANAGED, HTTP, 60 s) — one: blog0-bes -----------------------------------------
 # bes_ensure <name> <port-name> <health-check>
 bes_ensure() {
   local name="$1" port_name="$2" hc="$3" cur
@@ -236,28 +273,27 @@ bes_ensure() {
   fi
 }
 bes_ensure "$BES_APP" blog0 "$HC_APP"
-bes_ensure "$BES_LISTMONK" listmonk "$HC_LISTMONK"
 
-# --- 6. Google-managed certificate ---------------------------------------------------------------------
-want_domains="$(printf '%s\n' "$SITE_DOMAIN" "$NEWS_DOMAIN" | sort | paste -sd, -)"
+# --- 6. Google-managed certificate (SITE_DOMAIN only) ------------------------------------------------------------
+# A managed certificate cannot change its domains, so the single-host certificate is a NEW resource
+# (blog0-cert-v2); the legacy two-domain blog0-cert is swapped out of the proxy in step 8 and deleted.
 if cur="$(gcloud compute ssl-certificates describe "$CERT" --global --project "$GCP_PROJECT" --format=json 2>/dev/null)"; then
   have="$(jq -r '.managed.domains | sort | join(",")' <<<"$cur")"
-  [[ "$have" == "$want_domains" ]] || fail "certificate ${CERT} covers ${have}, expected ${want_domains} — a managed certificate cannot change domains; delete it (docs/deploy-gcp.md → Live inventory) and re-run"
+  [[ "$have" == "$SITE_DOMAIN" ]] || fail "certificate ${CERT} covers ${have}, expected only ${SITE_DOMAIN} — a managed certificate cannot change domains (docs/deploy-gcp.md → Live inventory)"
   say "certificate ${CERT}: ok"
 else
-  run g compute ssl-certificates create "$CERT" --global --domains "$want_domains" --description "blog0: ${SITE_DOMAIN} + ${NEWS_DOMAIN}"
-  say "certificate ${CERT}: created (${want_domains}; ACTIVE once DNS points at the LB)"
+  run g compute ssl-certificates create "$CERT" --global --domains "$SITE_DOMAIN" --description "blog0: ${SITE_DOMAIN} (single host)"
+  say "certificate ${CERT}: created (${SITE_DOMAIN}; ACTIVE once DNS points at the LB)"
 fi
 
-# --- 7. shared url map: additive host rules + path matchers --------------------------------------------
+# --- 7. shared url map: blog0's one host rule + matcher (legacy news entries removed) --------------------------------------------
 gcloud compute url-maps describe "$LB_URLMAP" --global --project "$GCP_PROJECT" --format=json >"${LB_BACKUP_DIR}/urlmap.describe.json"
 patch_out="$(node "${ROOT}/infra/lib/urlmap-patch.mjs" --in "${LB_BACKUP_DIR}/urlmap.describe.json" --out "${LB_BACKUP_DIR}/urlmap.patched.json" \
-  --site "$SITE_DOMAIN" --news "$NEWS_DOMAIN" \
-  --site-service "${COMPUTE}/global/backendServices/${BES_APP}" --news-service "${COMPUTE}/global/backendServices/${BES_LISTMONK}")" || fail "url map patch refused (see above); nothing was changed on ${LB_URLMAP}"
+  --site "$SITE_DOMAIN" --site-service "${COMPUTE}/global/backendServices/${BES_APP}")" || fail "url map patch refused (see above); nothing was changed on ${LB_URLMAP}"
 echo "$patch_out"
 LB_CHANGED=0
 if [[ "$patch_out" == *": changed"* ]]; then
-  if exists compute backend-services describe "$BES_APP" --global && exists compute backend-services describe "$BES_LISTMONK" --global; then
+  if exists compute backend-services describe "$BES_APP" --global; then
     gcloud compute url-maps validate --global --project "$GCP_PROJECT" --load-balancing-scheme EXTERNAL_MANAGED \
       --source "${LB_BACKUP_DIR}/urlmap.patched.json" | tee "${LB_BACKUP_DIR}/urlmap.validate.txt"
     grep -q 'loadSucceeded: true' "${LB_BACKUP_DIR}/urlmap.validate.txt" || fail "url map validation failed; nothing imported"
@@ -266,35 +302,71 @@ if [[ "$patch_out" == *": changed"* ]]; then
   fi
   run g compute url-maps import "$LB_URLMAP" --global --source "${LB_BACKUP_DIR}/urlmap.patched.json"
   LB_CHANGED=1
-  say "url map ${LB_URLMAP}: blog0 host rules applied"
+  say "url map ${LB_URLMAP}: blog0 host rule applied (legacy news rule removed)"
 else
   say "url map ${LB_URLMAP}: ok"
 fi
 
-# --- 8. shared HTTPS proxy: append blog0-cert (order kept) -------------------------------------------
-certs_json="$(gcloud compute target-https-proxies describe "$LB_HTTPS_PROXY" --global --project "$GCP_PROJECT" --format=json | jq -c '[.sslCertificates[] | split("/") | last]')"
-if jq -e --arg c "$CERT" 'index($c)' <<<"$certs_json" >/dev/null; then
-  say "https proxy ${LB_HTTPS_PROXY}: ${CERT} attached"
-else
+# --- 8. shared HTTPS proxy: blog0-cert-v2 appended, legacy blog0-cert taken out (every other cert kept in order) ----
+proxy_certs() { gcloud compute target-https-proxies describe "$LB_HTTPS_PROXY" --global --project "$GCP_PROJECT" --format=json | jq -c '[.sslCertificates[] | split("/") | last]'; }
+certs_json="$(proxy_certs)"
+# Read-modify-write on the proxy's CURRENT list; the pre-change list is in ${LB_BACKUP_DIR}/https-proxy.yaml + RESTORE.txt.
+if ! jq -e --arg c "$CERT" 'index($c)' <<<"$certs_json" >/dev/null; then
   new_list="$(jq -r --arg c "$CERT" '. + [$c] | join(",")' <<<"$certs_json")"
   run g compute target-https-proxies update "$LB_HTTPS_PROXY" --global --ssl-certificates "$new_list"
   LB_CHANGED=1
-  say "https proxy ${LB_HTTPS_PROXY}: certificates ${new_list}"
+  say "https proxy ${LB_HTTPS_PROXY}: ${CERT} appended → ${new_list}"
+  if ((DRY_RUN)); then certs_json="$(jq -c --arg c "$CERT" '. + [$c]' <<<"$certs_json")"; else certs_json="$(proxy_certs)"; fi
+else
+  say "https proxy ${LB_HTTPS_PROXY}: ${CERT} attached"
+fi
+if jq -e --arg c "$LEGACY_CERT" 'index($c)' <<<"$certs_json" >/dev/null; then
+  v2_status="$(gcloud compute ssl-certificates describe "$CERT" --global --project "$GCP_PROJECT" --format='value(managed.status)' 2>/dev/null || echo '')"
+  legacy_status="$(gcloud compute ssl-certificates describe "$LEGACY_CERT" --global --project "$GCP_PROJECT" --format='value(managed.status)' 2>/dev/null || echo '')"
+  # Never trade a serving certificate for one that is still provisioning: while the legacy certificate is
+  # ACTIVE the swap waits for ${CERT} to be ACTIVE (re-run provision afterwards).
+  if [[ "$legacy_status" == ACTIVE && "$v2_status" != ACTIVE ]] && ((! DRY_RUN)); then
+    warn "legacy ${LEGACY_CERT} is ACTIVE but ${CERT} is ${v2_status:-unknown}; keeping ${LEGACY_CERT} attached — re-run provision once ${CERT} is ACTIVE"
+  else
+    keep_list="$(jq -r --arg c "$LEGACY_CERT" 'map(select(. != $c)) | join(",")' <<<"$certs_json")"
+    [[ -n "$keep_list" ]] || fail "refusing to leave the HTTPS proxy without certificates"
+    run g compute target-https-proxies update "$LB_HTTPS_PROXY" --global --ssl-certificates "$keep_list"
+    LB_CHANGED=1
+    say "https proxy ${LB_HTTPS_PROXY}: legacy ${LEGACY_CERT} detached → ${keep_list}"
+  fi
+fi
+# Delete the legacy certificate only once it is detached.
+if exists compute ssl-certificates describe "$LEGACY_CERT" --global; then
+  if proxy_certs | jq -e --arg c "$LEGACY_CERT" 'index($c)' >/dev/null; then
+    ((DRY_RUN)) && say "legacy certificate ${LEGACY_CERT}: would be deleted after it is detached" || say "legacy certificate ${LEGACY_CERT}: still attached — kept"
+  else
+    run g compute ssl-certificates delete "$LEGACY_CERT" --global
+    say "legacy certificate ${LEGACY_CERT}: deleted"
+  fi
 fi
 
-# --- 9. canary: the shared LB still serves its existing site ---------------------------------------------
-canary() { # <url> → prints the status code; retries 6 × 10 s for a 200
-  local code="" i
-  for i in 1 2 3 4 5 6; do
-    code="$(curl -sS -o /dev/null -m 15 -w '%{http_code}' "$1" 2>/dev/null || true)"
-    [[ "$code" == 200 ]] && break
-    ((i < 6)) && sleep 10
-  done
-  printf '%s' "$code"
-}
+# --- 9. legacy Listmonk LB resources (after the url map no longer references them) -----------------------------------
+if exists compute backend-services describe "$LEGACY_BES_LISTMONK" --global; then
+  assert_ours "$LEGACY_BES_LISTMONK"
+  # Safety: a backend service the url map still references cannot (and must not) be deleted.
+  if ((! DRY_RUN)) && gcloud compute url-maps export "$LB_URLMAP" --global --project "$GCP_PROJECT" --quiet 2>/dev/null | grep -q "backendServices/${LEGACY_BES_LISTMONK}"; then
+    fail "url map ${LB_URLMAP} still references ${LEGACY_BES_LISTMONK} after the import — not deleting it"
+  fi
+  run g compute backend-services delete "$LEGACY_BES_LISTMONK" --global
+  say "backend service ${LEGACY_BES_LISTMONK}: deleted"
+fi
+if exists compute health-checks describe "$LEGACY_HC_LISTMONK" --global; then
+  assert_ours "$LEGACY_HC_LISTMONK"
+  run g compute health-checks delete "$LEGACY_HC_LISTMONK" --global
+  say "health check ${LEGACY_HC_LISTMONK}: deleted"
+fi
+ensure_named_ports "blog0:3410" # drops listmonk:9000 (no backend service uses it any more)
+fw_ensure blog0-allow-lb ALLOW tcp:3410 "$LB_RANGES" 900 "$LB_FW_DESC"
+
+# --- 9b. canary: the shared LB still serves its existing site ---------------------------------------------
 https_code="$(canary "https://${CANARY_HOST}/")"
 http_code="$(canary "http://${CANARY_HOST}/")"
-say "canary https://${CANARY_HOST}/ → ${https_code}; http://${CANARY_HOST}/ → ${http_code}"
+say "canary (after) https://${CANARY_HOST}/ → ${https_code}; http://${CANARY_HOST}/ → ${http_code}"
 if [[ "$https_code" != 200 || "$http_code" != 200 ]]; then
   echo "provision: FAIL — the shared LB no longer serves ${CANARY_HOST} with 200 (https ${https_code}, http ${http_code})." >&2
   if ((LB_CHANGED)); then
@@ -309,5 +381,5 @@ lb_ip="$(gcloud compute forwarding-rules describe "$LB_HTTPS_RULE" --global --pr
 cert_status="$(gcloud compute ssl-certificates describe "$CERT" --global --project "$GCP_PROJECT" --format='value(managed.status)' 2>/dev/null || echo 'not created')"
 domain_status="$(gcloud compute ssl-certificates describe "$CERT" --global --project "$GCP_PROJECT" --format=json 2>/dev/null | jq -r '.managed.domainStatus // {} | to_entries | map("\(.key)=\(.value)") | join(" ")' || true)"
 say "certificate ${CERT}: ${cert_status}${domain_status:+ (${domain_status})}"
-say "DNS (GoDaddy, manual): A ${SITE_DOMAIN} → ${lb_ip:-<LB IP>}; A ${NEWS_DOMAIN} → ${lb_ip:-<LB IP>}"
+say "DNS (GoDaddy, manual) - ONE record: A ${SITE_DOMAIN} → ${lb_ip:-<LB IP>}  (no news host; Listmonk is served under https://${SITE_DOMAIN}/lm)"
 ((DRY_RUN)) && say "DRY RUN complete — nothing was changed" || say "OK"

@@ -10,7 +10,9 @@
 # Values come from the environment; --env-file fills only variables the shell has not set (KEY=value
 # lines, `#` comments, no quoting — the docker env-file format). Read:
 #   LISTMONK_ADMIN_USER / LISTMONK_ADMIN_PASSWORD   the Super Admin (session login, as scripts/listmonk-dev.sh)
-#   LISTMONK_ROOT_URL                               → app.root_url (opens/clicks/unsubscribe resolve there)
+#   LISTMONK_ROOT_URL                               → app.root_url (opens/clicks/unsubscribe resolve there).
+#                                                     Production: https://<SITE_DOMAIN>/lm - Listmonk's public paths are
+#                                                     served under the /lm prefix by blog0's rewrites (one host)
 #   LISTMONK_FROM_EMAIL (optional)                  → app.from_email
 #   LISTMONK_SMTP_{HOST,PORT,USER,PASSWORD,TLS}     → the ONE SMTP entry (max_conns 2; TLS = STARTTLS|TLS|none;
 #                                                     USER empty → no auth)

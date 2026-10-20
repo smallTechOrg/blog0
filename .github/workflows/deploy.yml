@@ -34,7 +34,6 @@ env:
   GCP_INSTANCE: ${{ vars.GCP_INSTANCE }}
   AR_REPO: ${{ vars.AR_REPO }}
   SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
-  NEWS_DOMAIN: ${{ vars.NEWS_DOMAIN }}
   STAGE: /tmp/blog0-stage
 
 jobs:
@@ -48,7 +47,7 @@ jobs:
       - name: Check the repository variables
         run: |
           missing=""
-          for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE AR_REPO SITE_DOMAIN NEWS_DOMAIN GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
+          for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE AR_REPO SITE_DOMAIN GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
             [ -n "${!v}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then
@@ -173,12 +172,12 @@ jobs:
         run: |
           gcloud compute ssh "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --tunnel-through-iap --quiet \
             --strict-host-key-checking=no \
-            --command "bash /tmp/blog0-deploy-smoke.sh --direct http://127.0.0.1:3410 http://127.0.0.1:9000; rc=\$?; rm -f /tmp/blog0-deploy-smoke.sh; exit \$rc"
+            --command "bash /tmp/blog0-deploy-smoke.sh --direct http://127.0.0.1:3410; rc=\$?; rm -f /tmp/blog0-deploy-smoke.sh; exit \$rc"
 
       - name: Public smoke + summary
         run: |
-          cert_status="$(gcloud compute ssl-certificates describe blog0-cert --global --project "$GCP_PROJECT" --format='value(managed.status)' 2>/dev/null || echo 'not created')"
-          domain_status="$(gcloud compute ssl-certificates describe blog0-cert --global --project "$GCP_PROJECT" --format=json 2>/dev/null | jq -r '.managed.domainStatus // {} | to_entries | map("\(.key)=\(.value)") | join(", ")' || true)"
+          cert_status="$(gcloud compute ssl-certificates describe blog0-cert-v2 --global --project "$GCP_PROJECT" --format='value(managed.status)' 2>/dev/null || echo 'not created')"
+          domain_status="$(gcloud compute ssl-certificates describe blog0-cert-v2 --global --project "$GCP_PROJECT" --format=json 2>/dev/null | jq -r '.managed.domainStatus // {} | to_entries | map("\(.key)=\(.value)") | join(", ")' || true)"
           lb_ip="$(gcloud compute forwarding-rules describe zero-vanguard-fr-https --global --project "$GCP_PROJECT" --format='value(IPAddress)' 2>/dev/null || true)"
           lb_ip="${lb_ip:-34.8.199.41}"
           lb_code="$(curl -sS -k -m 20 -o /dev/null -w '%{http_code}' --resolve "${SITE_DOMAIN}:443:${lb_ip}" "https://${SITE_DOMAIN}/api/health/ready" 2>/dev/null || echo 000)"
@@ -187,21 +186,21 @@ jobs:
           if [ "$cert_status" = "ACTIVE" ]; then
             ok=0
             for i in 1 2 3 4 5 6; do
-              if bash scripts/deploy-smoke.sh "https://${SITE_DOMAIN}" "https://${NEWS_DOMAIN}"; then ok=1; break; fi
+              if bash scripts/deploy-smoke.sh "https://${SITE_DOMAIN}"; then ok=1; break; fi
               echo "public smoke attempt ${i} failed; retrying in 20 s"
               sleep 20
             done
             if [ "$ok" != 1 ]; then echo "::error::public smoke failed against the live domains"; public="FAILED"; else public="PASS"; fi
           else
-            echo "waiting on DNS/cert (status: ${cert_status}${domain_status:+; ${domain_status}}) - the VM-local smoke above passed; add the GoDaddy A records -> ${lb_ip} (docs/deploy-gcp.md)"
+            echo "waiting on DNS/cert (status: ${cert_status}${domain_status:+; ${domain_status}}) - the VM-local smoke above passed; add the GoDaddy A record (${SITE_DOMAIN}) -> ${lb_ip} (docs/deploy-gcp.md)"
           fi
           mem="$(grep -E '^ *(Mem|Swap):' "${RUNNER_TEMP}/deploy-remote.log" | sed 's/^ *//' || true)"
           {
             echo "## blog0 deploy"
             echo ""
             echo "- sha: \`${GITHUB_SHA}\`"
-            echo "- site: https://${SITE_DOMAIN}  |  newsletter host: https://${NEWS_DOMAIN}"
-            echo "- certificate blog0-cert: \`${cert_status}\` ${domain_status}"
+            echo "- site: https://${SITE_DOMAIN}  |  Listmonk public paths: https://${SITE_DOMAIN}/lm"
+            echo "- certificate blog0-cert-v2: \`${cert_status}\` ${domain_status}"
             echo "- LB IP: ${lb_ip} (LB-facing /api/health/ready -> ${lb_code})"
             echo "- public smoke: ${public}"
             echo ""

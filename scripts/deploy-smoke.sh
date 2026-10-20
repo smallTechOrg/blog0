@@ -1,31 +1,37 @@
 #!/usr/bin/env bash
 # Post-deploy smoke test (Stage B, spec/architecture.md §12.7; `pnpm deploy:smoke -- …`).
 #
-#   scripts/deploy-smoke.sh [--insecure] <base-url> <news-url>
-#     e.g. scripts/deploy-smoke.sh https://blog0.smalltech.in https://news.blog0.smalltech.in
-#   scripts/deploy-smoke.sh --direct <blog0-url> <listmonk-url>
-#     e.g. on the VM / locally: --direct http://127.0.0.1:3410 http://127.0.0.1:9000
+#   scripts/deploy-smoke.sh [--insecure] <base-url>
+#     e.g. scripts/deploy-smoke.sh https://blog0.smalltech.in
+#   scripts/deploy-smoke.sh --direct <blog0-url>
+#     e.g. on the VM / locally: --direct http://127.0.0.1:3410
 #
-# Public mode: both URLs must be https:// (through the shared load balancer). Without --insecure curl
-# verifies the certificates — that IS the TLS check. BLOG0_SMOKE_RESOLVE=<ip> pins both hosts to that
-# address (curl --resolve; before DNS). --direct talks to the containers' own ports (http or https):
-# the news-denied check is skipped there (Listmonk's own port serves its whole surface; the url map
-# denies the rest in public mode). Read-only: GETs only, nothing is created.
+# ONE host: blog0 also serves Listmonk's public endpoints under <base>/lm (Next.js rewrites to the internal
+# Listmonk; src/lib/http/listmonk-proxy.ts), so every check goes to the same base URL. Public mode: <base>
+# must be https:// (through the shared load balancer). Without --insecure curl verifies the certificate -
+# that IS the TLS check. BLOG0_SMOKE_RESOLVE=<ip> pins the host to that address (curl --resolve; before
+# DNS). --direct talks to the container's own port (http or https). Read-only: GETs only, nothing is created.
 # Checks (each prints `deploy-smoke: <check> ok`; the first failure prints
-# `deploy-smoke: FAIL <check> (<detail>)` and exits 1; all green → `deploy-smoke: PASS`, exit 0):
-#   1 ready          GET <base>/api/health/ready → 200 with "status":"ready"
-#   2 pages          GET <base>/ and <base>/privacy → 200
-#   3 article        first /p/<slug> in <base>/sitemap.xml → 200, and /p/<slug>/tldr → 200
-#   4 confirm        /newsletter/confirm?t=bogus → 303 to …status=invalid; /newsletter/confirmed?status=invalid → 404
-#   5 unsubscribe    /api/newsletter/unsubscribe?t=bogus → 303 to /newsletter/unsubscribe?t=bogus
-#   6 news-public    <news>/link/<nil>/<nil>/<nil> and /campaign/<nil>/<nil>/px.png → < 500, no X-Blog0-Edge
-#   7 news-denied    (public mode only) <news>/ /admin /admin/login /api/settings /public/static/.env → 404 (the url map's fault-injection 404 or Listmonk's own)
+# `deploy-smoke: FAIL <check> (<detail>)` and exits 1; all green -> `deploy-smoke: PASS`, exit 0):
+#   1 ready          GET <base>/api/health/ready -> 200 with "status":"ready"
+#   2 pages          GET <base>/ and <base>/privacy -> 200
+#   3 article        first /p/<slug> in <base>/sitemap.xml -> 200, and /p/<slug>/tldr -> 200
+#   4 confirm        /newsletter/confirm?t=bogus -> 303 to ...status=invalid; /newsletter/confirmed?status=invalid -> 404
+#   5 unsubscribe    /api/newsletter/unsubscribe?t=bogus -> 303 to /newsletter/unsubscribe?t=bogus
+#   6 lm-public      the proxy reaches LISTMONK (answers only Listmonk gives; blog0's 404 page could not):
+#                    /lm/link/<random uuids> -> 400 + X-Robots-Tag: noindex (Listmonk's "invalid link" page),
+#                    /lm/campaign/<random>/<nil>/px.png -> 200 image/png (a real PNG; Listmonk serves the pixel
+#                    for any campaign), /lm/public/static/favicon.png and the absolute /public/static/logo.svg,
+#                    /public/custom.css (the unsubscribe page's assets) -> 200
+#   7 lm-denied      /lm /lm/admin /lm/admin/login /lm/api/health /lm/api/settings /lm/subscription/form
+#                    /lm/subscription/export/<uuid> /lm/subscription/wipe/<uuid> /lm/public/static/.env -> blog0's
+#                    own 404 (no X-Robots-Tag: Listmonk sets it on everything it answers)
 # Exit 2 = usage.
 set -euo pipefail
 
 say() { echo "deploy-smoke: $*"; }
 usage() {
-  echo "usage: scripts/deploy-smoke.sh [--insecure|--direct] <base-url> <news-url>   (public mode: both https://; BLOG0_SMOKE_RESOLVE=<ip> optional)" >&2
+  echo "usage: scripts/deploy-smoke.sh [--insecure|--direct] <base-url>   (public mode: https://; BLOG0_SMOKE_RESOLVE=<ip> optional)" >&2
   exit 2
 }
 
@@ -42,25 +48,22 @@ for a in "$@"; do
     *) POS+=("$a") ;;
   esac
 done
-[[ ${#POS[@]} -eq 2 ]] || usage
+[[ ${#POS[@]} -eq 1 ]] || usage
 BASE="${POS[0]%/}"
-NEWS="${POS[1]%/}"
 if ((DIRECT)); then
-  [[ "$BASE" =~ ^https?://[^/]+$ && "$NEWS" =~ ^https?://[^/]+$ ]] || usage
+  [[ "$BASE" =~ ^https?://[^/]+$ ]] || usage
   CURL=(curl -sS -m 20)
 else
-  [[ "$BASE" =~ ^https://[^/]+$ && "$NEWS" =~ ^https://[^/]+$ ]] || usage
+  [[ "$BASE" =~ ^https://[^/]+$ ]] || usage
   CURL=(curl -sS -m 20 --proto '=https')
 fi
 ((INSECURE)) && CURL+=(--insecure)
 if [[ -n "${BLOG0_SMOKE_RESOLVE:-}" ]] && ((DIRECT == 0)); then
-  for u in "$BASE" "$NEWS"; do
-    hostport="${u#https://}"
-    host="${hostport%%:*}"
-    port=443
-    [[ "$hostport" == *:* ]] && port="${hostport##*:}"
-    CURL+=(--resolve "${host}:${port}:${BLOG0_SMOKE_RESOLVE}")
-  done
+  hostport="${BASE#https://}"
+  host="${hostport%%:*}"
+  port=443
+  [[ "$hostport" == *:* ]] && port="${hostport##*:}"
+  CURL+=(--resolve "${host}:${port}:${BLOG0_SMOKE_RESOLVE}")
 fi
 
 WORK="$(mktemp -d -t deploy-smoke.XXXXXX)"
@@ -125,26 +128,30 @@ loc="$(header location)"
 [[ "$loc" == */newsletter/unsubscribe\?t=bogus ]] || fail "Location '${loc}' is not /newsletter/unsubscribe?t=bogus"
 say "unsubscribe ok"
 
-# 6. Listmonk's public tracking paths reach Listmonk (through the url map's news matcher)
-CHECK=news-public
+# 6. Listmonk's public endpoints, through blog0's /lm proxy, really reach Listmonk
+CHECK=lm-public
 NIL=00000000-0000-0000-0000-000000000000
-for p in "/link/${NIL}/${NIL}/${NIL}" "/campaign/${NIL}/${NIL}/px.png"; do
-  fetch "${NEWS}${p}"
-  ((CODE > 0 && CODE < 500)) || fail "GET ${NEWS}${p} → ${CODE}, expected < 500"
-  [[ -z "$(header x-blog0-edge)" ]] || fail "GET ${NEWS}${p} was denied by the edge (X-Blog0-Edge present)"
+U1=3f2b8c1e-5a6d-4e7f-9a0b-1c2d3e4f5a6b
+U2=9d8c7b6a-1f2e-4d3c-8b4a-5e6f7a8b9c0d
+fetch "${BASE}/lm/link/${U1}/${U2}/${NIL}"
+[[ "$CODE" == 400 ]] || fail "GET /lm/link/<random uuids> -> ${CODE}, expected Listmonk's 400"
+[[ "$(header x-robots-tag)" == *noindex* ]] || fail "/lm/link/<random uuids>: no X-Robots-Tag: noindex - not answered by Listmonk"
+fetch "${BASE}/lm/campaign/${U2}/${NIL}/px.png"
+[[ "$CODE" == 200 && "$(header content-type)" == image/png* ]] || fail "GET /lm/campaign/<random>/<nil>/px.png -> ${CODE} $(header content-type), expected 200 image/png"
+head -c 8 "${WORK}/b" | od -An -c | grep -q 'P   N   G' || fail "the open pixel body is not a PNG"
+for p in /lm/public/static/favicon.png /public/static/logo.svg /public/custom.css /public/custom.js; do
+  fetch "${BASE}${p}"
+  [[ "$CODE" == 200 ]] || fail "GET ${p} -> ${CODE}, expected 200"
 done
-say "news-public ok"
+say "lm-public ok"
 
-# 7. everything else on the news host is denied by the url map (public mode only)
-if ((DIRECT == 0)); then
-  CHECK=news-denied
-  for p in / /admin /admin/login /api/settings /subscription/form /public/static/.env; do
-    fetch "${NEWS}${p}"
-    [[ "$CODE" == 404 ]] || fail "GET ${NEWS}${p} → ${CODE}, expected 404"
-  done
-  say "news-denied ok"
-else
-  say "news-denied skipped (--direct)"
-fi
+# 7. everything else under /lm is blog0's own 404 (never proxied)
+CHECK=lm-denied
+for p in /lm /lm/admin /lm/admin/login /lm/api/health /lm/api/settings /lm/subscription/form "/lm/subscription/export/${U1}" "/lm/subscription/wipe/${U1}" /lm/public/static/.env; do
+  fetch "${BASE}${p}"
+  [[ "$CODE" == 404 ]] || fail "GET ${p} -> ${CODE}, expected 404"
+  [[ -z "$(header x-robots-tag)" ]] || fail "GET ${p} was answered by Listmonk (X-Robots-Tag present)"
+done
+say "lm-denied ok"
 
 say PASS

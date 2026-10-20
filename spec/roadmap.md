@@ -166,7 +166,7 @@ tooling only — no product change).
 | `listmonk:down` | `bash scripts/listmonk-dev.sh down` |
 | `listmonk:reset` | `bash scripts/listmonk-dev.sh reset` (fresh `listmonk` database) |
 | `deploy:local` | `bash deploy/local/verify.sh` (Stage B: the GCP kit end-to-end on this machine; exit 3 = `PENDING DOCKER`) |
-| `deploy:smoke` | `bash scripts/deploy-smoke.sh` (Stage B: `pnpm deploy:smoke -- [--insecure] <base-url> <news-url>`) |
+| `deploy:smoke` | `bash scripts/deploy-smoke.sh` (Stage B: `pnpm deploy:smoke -- [--insecure] <base-url>`; one host, Listmonk under `/lm`) |
 | `pg:compat` | `bash scripts/pg-compat.sh` (Stage B: `pnpm pg:compat -- <major>`; integration suite on `postgres:<major>`) |
 
 `check:openrouter` prints only booleans/numbers, never the key. Phase 8 (decisions models are not
@@ -874,7 +874,7 @@ public IP + no authorized networks, backups + PITR, databases `blog0` + `listmon
 `listmonk`, the `ALTER DATABASE … OWNER` / `ALTER SCHEMA public OWNER` statements); 4 service
 account (`roles/cloudsql.client`; `roles/storage.objectAdmin` on the bucket); 5 GCS bucket
 (uniform access, versioning, lifecycle: delete noncurrent after 30 days); 6 DNS (A `<domain>`,
-A `news.<domain>` → static IP; SPF `v=spf1 include:_spf.google.com ~all`; DKIM `google._domainkey`
+(no news host: Listmonk is served under `/lm` of the one domain); SPF `v=spf1 include:_spf.google.com ~all`; DKIM `google._domainkey`
 from Workspace Admin; DMARC `v=DMARC1; p=none; rua=mailto:…`); 7 Workspace (2-Step Verification on
 the sending mailbox, app password, POP enabled for the bounce mailbox, `BLOG0_SMTP_FROM` = that
 mailbox or a verified alias, 2 000/day limit); 8 checkout + env files from the three templates;
@@ -883,7 +883,7 @@ mailbox or a verified alias, 2 000/day limit); 8 checkout + env files from the t
 (`gcloud compute ssh <vm> --tunnel-through-iap -- -L 9000:localhost:9000`), Listmonk API user + a list named
 `blog0` created in the Listmonk UI (its id → `BLOG0_LISTMONK_LIST_ID`; the image carries no
 `newsletter:sync` CLI — Admin → Newsletter's sync action covers it), publish one article with a TLDR; 10 smoke
-(`scripts/deploy-smoke.sh https://<domain> https://news.<domain>`, no `--insecure`); 11 backups
+(`scripts/deploy-smoke.sh https://<domain>`, no `--insecure`); 11 backups
 (Cloud SQL automated + PITR; media → GCS daily; heartbeats) and the **restore drill** (PITR clone
 to a new instance, point a scratch stack at it, `rclone copy` the bucket back to a scratch
 volume, smoke it); 12 upgrades (`git pull`, `BLOG0_IMAGE_TAG=$(git rev-parse --short HEAD)`, `up -d
@@ -910,10 +910,10 @@ Any exit 3 / `PENDING DOCKER` makes the gate "pending docker", not passed.
 **How the user tests it (locally):**
 1. `pnpm deploy:local -- --keep` → `deploy-local: PASS`.
 2. Open `https://blog.localtest.me:8443/` (accept the local certificate): the site with the five
-   seeded articles. `https://news.localtest.me:8443/admin` → plain 404.
+   seeded articles. `https://blog.localtest.me:8443/lm/admin` → blog0's plain 404.
 3. `http://127.0.0.1:9100/admin` → Listmonk login (the stand-in for the SSH tunnel); Mailpit at
    `http://127.0.0.1:8025` shows the verification campaign; its link redirects through
-   `news.localtest.me`.
+   `blog.localtest.me/lm`.
 4. Read `docs/deploy-gcp.md` end to end; when the GCP project and domain are confirmed, follow it.
    Then `docker compose -f deploy/docker-compose.prod.yml -f deploy/docker-compose.local.yml
    --env-file deploy/local/compose.env down -v`.
@@ -944,3 +944,8 @@ Not frozen, already settled: provider suppressions reach blog0 by **both** the h
 webhook-vs-poll decision. The SMTP relay is settled for the GCP deploy: Google Workspace
 `smtp.gmail.com:587` with an app password (owner, 2026-10-19; `spec/architecture.md` §12.7). Open user decisions (not features) stay in `spec/architecture.md` →
 `## Design divergences (ask user)` → Open, each with its default in force.
+
+> **Assumed (single host):** (owner decision, 2026-10-20) Only `blog0.smalltech.in` is routed. Listmonk's public
+> endpoints are served by blog0 under `/lm` (Next.js `rewrites()` allow-list to the internal Listmonk, root URL
+> `https://blog0.smalltech.in/lm`); the news host, `blog0-listmonk-bes/hc`, the `listmonk:9000` named port, LB access
+> to port 9000 and `NEWS_DOMAIN` are gone. `spec/architecture.md` §12.7; `scripts/lm-prefix-check.sh`.

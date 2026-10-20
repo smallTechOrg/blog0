@@ -15,10 +15,11 @@
 #   5 db-role    blog0 runs as blog0_app over TLS: seeded articles readable, DROP/ALTER refused
 #   6 listmonk   enabled SMTP = mailpit:1025 only; settings applied
 #   7 tracking   list + subscriber + campaign ({{ TrackLink }} + {{ TrackView }}) -> Mailpit; the captured
-#                news-host URLs against Listmonk's port: click -> 3xx to the target, pixel -> 200 image/png,
-#                List-Unsubscribe page (+ its assets) -> 200; Listmonk counts the view + click
+#                https://<site>/lm/... URLs, requested through BLOG0'S port 3490 (the image's /lm rewrites ->
+#                http://listmonk:9000): click -> 307 to the target, pixel -> 200 image/png, List-Unsubscribe
+#                page (+ its assets) -> 200; Listmonk counts the view + click
 #   8 scheduler  node /app/newsletter-tick.mjs, media-backup.sh (file mirrored), supercronic -test
-#   9 smoke      scripts/deploy-smoke.sh --direct http://127.0.0.1:3490 http://127.0.0.1:3491 -> PASS
+#  9 smoke      scripts/deploy-smoke.sh --direct http://127.0.0.1:3490 -> PASS (one base URL; incl. the /lm checks)
 #  10 non-root   blog0 and scheduler run as uid 1000; the listmonk process + uploads volume are uid 1000
 # Exit 0 = `deploy-local: PASS`; 3 = PENDING DOCKER (never a pass); anything else = FAIL.
 # The stack is torn down (down -v, images removed) on exit unless --keep. Ports (127.0.0.1): 3490 blog0,
@@ -43,7 +44,7 @@ done
 
 BLOG=http://127.0.0.1:3490
 LISTMONK=http://127.0.0.1:3491
-NEWS_HOSTPORT=news.localtest.me
+SITE_HOST=blog.localtest.me # = SITE_DOMAIN of deploy/local/render.env; Listmonk's root URL is https://${SITE_HOST}/lm
 MAILPIT=http://127.0.0.1:3495
 RUN="${ROOT}/var/deploy-local"
 STAGE="${RUN}/stage"
@@ -106,8 +107,8 @@ trap 'exit 143' TERM
 json() { # <file> <expression over d>
   node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const v=(function(d){return eval(process.argv[2])})(d);process.stdout.write(v===undefined||v===null?"":typeof v==="object"?JSON.stringify(v):String(v))' "$1" "$2"
 }
-local_url() { # a captured https://news.localtest.me/… URL -> Listmonk's own port
-  printf '%s' "${1/https:\/\/${NEWS_HOSTPORT}/${LISTMONK}}"
+local_url() { # a captured https://blog.localtest.me/lm/… URL -> blog0's own port (the /lm rewrites)
+  printf '%s' "${1/https:\/\/${SITE_HOST}/${BLOG}}"
 }
 
 # Renders the stage exactly as .github/workflows/deploy.yml does, with the local differences:
@@ -216,19 +217,23 @@ lm() { # <method> <path> <out> [json]
 lm GET /api/settings "${WORK}/s.json"
 smtp="$(json "${WORK}/s.json" 'd.data.smtp.filter(s=>s.enabled).map(s=>s.host+":"+s.port).join(",")')"
 [[ "$smtp" == "mailpit:1025" ]] || fail "Listmonk's enabled SMTP is '${smtp}', expected exactly mailpit:1025"
-[[ "$(json "${WORK}/s.json" 'd.data["app.root_url"]')" == "https://${NEWS_HOSTPORT}" ]] || fail "app.root_url is not https://${NEWS_HOSTPORT}"
+[[ "$(json "${WORK}/s.json" 'd.data["app.root_url"]')" == "https://${SITE_HOST}/lm" ]] || fail "app.root_url is not https://${SITE_HOST}/lm"
 [[ "$(json "${WORK}/s.json" 'd.data["app.message_sliding_window_rate"]')" == 1800 ]] || fail "sliding window is not 1800"
-say "  SMTP mailpit:1025 only; root_url https://${NEWS_HOSTPORT}; 1800/24h"
+say "  SMTP mailpit:1025 only; root_url https://${SITE_HOST}/lm; 1800/24h"
 
 # --- 7. tracking ------------------------------------------------------------------------------------
-step tracking "campaign -> Mailpit -> open + click against Listmonk (${LISTMONK})"
+step tracking "campaign -> Mailpit -> open + click + unsubscribe page through blog0 (${BLOG}/lm)"
 RCPT="verify-$(date +%s)@localtest.me"
 lm POST /api/lists "${WORK}/l.json" '{"name":"deploy-local-verify","type":"private","optin":"single"}'
 LIST_ID="$(json "${WORK}/l.json" 'd.data.id')"
 lm POST /api/subscribers "${WORK}/sub.json" "{\"email\":\"${RCPT}\",\"name\":\"Verify\",\"status\":\"enabled\",\"lists\":[${LIST_ID}],\"preconfirm_subscriptions\":true}"
 TARGET="${BLOG}/"
-body="$(node -e 'process.stdout.write(JSON.stringify({name:"deploy-local verify",subject:"deploy-local verify",lists:[Number(process.argv[1])],type:"regular",content_type:"html",
-  body:`<p>Tracking check: <a href="{{ TrackLink \"${process.argv[2]}\" }}">read</a></p>{{ TrackView }}`}))' "$LIST_ID" "$TARGET")"
+# blog0's own campaign template (src/server/newsletter/sender/listmonk.ts BLOG0_TEMPLATE_BODY): content + the
+# open pixel only - no "view in browser" link, so /lm/campaign/<c>/<s> (not proxied) never appears in a mail.
+lm POST /api/templates "${WORK}/t.json" "$(node -e 'process.stdout.write(JSON.stringify({name:"deploy-local-verify",type:"campaign",body:"{{ template \"content\" . }}\n{{ TrackView }}"}))')"
+TPL_ID="$(json "${WORK}/t.json" 'd.data.id')"
+body="$(node -e 'process.stdout.write(JSON.stringify({name:"deploy-local verify",subject:"deploy-local verify",lists:[Number(process.argv[1])],template_id:Number(process.argv[3]),type:"regular",content_type:"html",
+  body:`<p>Tracking check: <a href="{{ TrackLink \"${process.argv[2]}\" }}">read</a></p>`}))' "$LIST_ID" "$TARGET" "$TPL_ID")"
 lm POST /api/campaigns "${WORK}/c.json" "$body"
 CAMP_ID="$(json "${WORK}/c.json" 'd.data.id')"
 lm PUT "/api/campaigns/${CAMP_ID}/status" "${WORK}/st.json" '{"status":"running"}'
@@ -242,22 +247,22 @@ while [[ -z "$msg_id" ]]; do
 done
 curl -fsS -m 10 -o "${WORK}/msg.json" "${MAILPIT}/api/v1/message/${msg_id}" || fail "Mailpit GET message"
 curl -fsS -m 10 -o "${WORK}/hdr.json" "${MAILPIT}/api/v1/message/${msg_id}/headers" || fail "Mailpit GET headers"
-# Every news-host URL in the message (HTML + text + List-Unsubscribe), UUIDs shown as U.
+# Every /lm URL in the message (HTML + text + List-Unsubscribe), UUIDs shown as U.
 node -e '
   const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const h=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
   const hay=[m.HTML||"",m.Text||"",JSON.stringify(h)].join("\n").replace(/&amp;/g,"&");
-  const re=new RegExp("https://"+process.argv[3].replace(/[.]/g,"\\.")+"/[^\"<>\\s]+","g");
+  const re=new RegExp("https://"+process.argv[3].replace(/[.]/g,"\\.")+"/lm/[^\"<>\\s]+","g");
   const urls=[...new Set(hay.match(re)||[])];
   fs.writeFileSync(process.argv[4], urls.join("\n")+"\n");
-' "${WORK}/msg.json" "${WORK}/hdr.json" "$NEWS_HOSTPORT" "${WORK}/urls.txt"
-say "  news-host URL shapes in the captured message:"
-sed -E 's#https://[^/]+##; s#[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}#<uuid>#g' "${WORK}/urls.txt" | sort -u | sed 's/^/    /'
-LINK="$(grep -E '/link/' "${WORK}/urls.txt" | head -n 1 || true)"
+' "${WORK}/msg.json" "${WORK}/hdr.json" "$SITE_HOST" "${WORK}/urls.txt"
+say "  /lm URL shapes in the captured message:"
+sed -E 's#https://[^/]+/lm##; s#[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}#<uuid>#g' "${WORK}/urls.txt" | sort -u | sed 's/^/    /'
+LINK="$(grep -E '/lm/link/' "${WORK}/urls.txt" | head -n 1 || true)"
 PIXEL="$(grep -E '/px\.png' "${WORK}/urls.txt" | head -n 1 || true)"
-UNSUB="$(grep -E '/subscription/' "${WORK}/urls.txt" | head -n 1 || true)"
-[[ -n "$LINK" ]] || fail "no ${NEWS_HOSTPORT}/link/… URL in the message"
-[[ -n "$PIXEL" ]] || fail "no ${NEWS_HOSTPORT}/…/px.png URL in the message"
-[[ -n "$UNSUB" ]] || fail "no ${NEWS_HOSTPORT}/subscription/… URL (List-Unsubscribe) in the message"
+UNSUB="$(grep -E '/lm/subscription/' "${WORK}/urls.txt" | head -n 1 || true)"
+[[ -n "$LINK" ]] || fail "no ${SITE_HOST}/lm/link/… URL in the message"
+[[ -n "$PIXEL" ]] || fail "no ${SITE_HOST}/lm/campaign/…/px.png URL in the message"
+[[ -n "$UNSUB" ]] || fail "no ${SITE_HOST}/lm/subscription/… URL (List-Unsubscribe) in the message"
 EDGE=(curl -sS -m 10)
 IFS='|' read -r code ctype loc < <("${EDGE[@]}" -o /dev/null -w '%{http_code}|%{content_type}|%{redirect_url}\n' "$(local_url "$LINK")")
 [[ "$code" == 3* && "$loc" == "$TARGET" ]] || fail "click ${LINK} → ${code} ${loc} (expected 3xx to ${TARGET})"
@@ -265,25 +270,25 @@ say "  click: ${code} → ${loc}"
 IFS='|' read -r code ctype < <("${EDGE[@]}" -o "${WORK}/px" -w '%{http_code}|%{content_type}\n' "$(local_url "$PIXEL")")
 [[ "$code" == 200 && "$ctype" == image/png* ]] || fail "pixel ${PIXEL} → ${code} ${ctype}"
 say "  open pixel: ${code} ${ctype}"
-# Every other captured news-host URL (e.g. the default template's "view in browser" /campaign/<c>/<s>)
-# must also reach Listmonk (< 400).
+# Every other captured /lm URL must also reach Listmonk through blog0 (< 400).
 while IFS= read -r u; do
   [[ -n "$u" && "$u" != "$LINK" ]] || continue
   hdrs="$("${EDGE[@]}" -o /dev/null -D - "$(local_url "$u")")" || fail "GET ${u}"
   c="$(head -n 1 <<<"$hdrs" | awk '{print $2}')"
   ((c < 400)) || fail "${u} → ${c}"
 done <"${WORK}/urls.txt"
-say "  every captured news-host URL reaches Listmonk"
+say "  every captured /lm URL reaches Listmonk through blog0"
 UNSUB_PAGE="${UNSUB%%\?*}"
 IFS='|' read -r code ctype < <("${EDGE[@]}" -o "${WORK}/unsub.html" -w '%{http_code}|%{content_type}\n' "$(local_url "$UNSUB_PAGE")")
 [[ "$code" == 200 ]] || fail "unsubscribe page ${UNSUB_PAGE} → ${code}"
 say "  unsubscribe page (GET only, nothing submitted): ${code}"
-# The page's own assets are served too.
-assets="$(grep -oE '(href|src)="[^"]+"' "${WORK}/unsub.html" | sed -E 's/^(href|src)="([^"]+)"$/\2/' | grep -E "^(/|https://${NEWS_HOSTPORT}/)" | grep -vE '^/subscription/|/subscription/' | sort -u || true)"
+# The page's own subresources are served too (Listmonk hardcodes absolute /public/... paths; blog0 proxies them).
+assets="$(grep -oE '<(link[^>]*rel="(stylesheet|icon)"[^>]*|script[^>]*|img[^>]*)>' "${WORK}/unsub.html" | grep -oE '(href|src)="[^"]+"' | sed -E 's/^(href|src)="([^"]+)"$/\2/' | grep -E "^/" | sort -u || true)"
+[[ -n "$assets" ]] || fail "the unsubscribe page links no assets"
 for a in $assets; do
-  [[ "$a" == /* ]] && a="${LISTMONK}${a}"
+  a="${BLOG}${a}"
   c="$("${EDGE[@]}" -o /dev/null -w '%{http_code}' "$a")"
-  say "  page asset ${a#"${LISTMONK}"} → ${c}"
+  say "  page asset ${a#"${BLOG}"} → ${c}"
   [[ "$c" == 200 ]] || fail "unsubscribe page asset ${a} → ${c} "
 done
 # Listmonk recorded the open and the click.
@@ -317,8 +322,8 @@ dc exec -T scheduler supercronic -test /app/scheduler/crontab >/dev/null 2>&1 ||
 say "  media mirrored to /backup/media; crontab valid"
 
 # --- 9. smoke ---------------------------------------------------------------------------------------
-step smoke "scripts/deploy-smoke.sh --direct ${BLOG} ${LISTMONK}"
-bash scripts/deploy-smoke.sh --direct "$BLOG" "$LISTMONK" || fail "deploy-smoke"
+step smoke "scripts/deploy-smoke.sh --direct ${BLOG}"
+bash scripts/deploy-smoke.sh --direct "$BLOG" || fail "deploy-smoke"
 
 # --- 10. non-root -----------------------------------------------------------------------------------
 step non-root "uid of blog0, scheduler and listmonk"

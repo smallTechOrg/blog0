@@ -1,38 +1,34 @@
 #!/usr/bin/env node
-// Additive patch of the SHARED url map (zero-vanguard-urlmap) for blog0 — infra/provision.sh,
+// Patch of the SHARED url map (zero-vanguard-urlmap) for blog0 - infra/provision.sh,
 // spec/architecture.md §12.7, docs/deploy-gcp.md.
 //
 //   node infra/lib/urlmap-patch.mjs --in <describe.json> --out <patched.json> \
-//     --site <blog0 host> --news <news host> --site-service <bes url> --news-service <bes url>
+//     --site <blog0 host> --site-service <bes url>
 //
-// Input = `gcloud compute url-maps describe <map> --global --format=json`. Output = the same map with
-// ONLY these additions (JSON is valid YAML, so `gcloud compute url-maps validate|import --source`
-// read it as is):
-//   host rule  <site> → path matcher `blog0`       (default: blog0-bes)
-//   host rule  <news> → path matcher `blog0-news`  (Listmonk's subscriber paths → blog0-listmonk-bes;
-//                                                   everything else → 404 via fault injection, never a backend)
-// Rules: existing host rules / path matchers / tests / defaults are never removed, reordered or
-// changed — asserted after patching (throws otherwise). Our own matchers (`blog0`, `blog0-news`) are
-// updated in place when they differ. A host already routed to a different matcher is a conflict:
+// Input = `gcloud compute url-maps describe <map> --global --format=json`. Output = the same map
+// (JSON is valid YAML, so `gcloud compute url-maps validate|import --source` read it as is) where
+// ONLY blog0's own entries differ:
+//   host rule  <site> -> path matcher `blog0`  (default service: blog0-bes)     added / updated in place
+//   host rule  news.blog0.smalltech.in -> path matcher `blog0-news`              REMOVED (legacy, owner
+//   path matcher `blog0-news`                                                    decision: one host only)
+// Single host: Listmonk's public endpoints are served by blog0 itself under /lm (Next.js rewrites), so
+// the LB needs no second backend. Rules: foreign host rules / path matchers / tests / defaults are never
+// removed, reordered or changed - asserted after patching (throws otherwise). The legacy removal FAILS
+// CLOSED unless the entries are exactly what an earlier provision run created (the legacy host alone in
+// its rule -> `blog0-news`; that matcher referenced by no other rule, backed only by blog0-listmonk-bes;
+// no url-map test on the legacy host). A host already routed to a different matcher is a conflict:
 // exit 1, nothing written. The fingerprint is kept (import fails rather than overwrite a concurrent
 // change). Prints one line: `urlmap-patch: unchanged` | `urlmap-patch: changed (<actions>)`.
 // Exit 0 ok, 1 conflict / invariant failure, 2 usage.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 
-/** Listmonk's public subscriber surface (everything else on the news host is answered 404 by the url map). */
-export const NEWS_PUBLIC_PATHS = Object.freeze([
-  '/link/*',
-  '/campaign/*',
-  '/subscription/*',
-  '/public/static/*',
-  '/public/custom.css',
-  '/public/custom.js',
-]);
-
 export const SITE_MATCHER = 'blog0';
-export const NEWS_MATCHER = 'blog0-news';
-const OURS = new Set([SITE_MATCHER, NEWS_MATCHER]);
+/** blog0's legacy second host and its matcher / backend (removed by this patch; nothing else is). */
+export const LEGACY_NEWS_HOST = 'news.blog0.smalltech.in';
+export const LEGACY_NEWS_MATCHER = 'blog0-news';
+export const LEGACY_NEWS_SERVICE = 'blog0-listmonk-bes';
+const OURS = new Set([SITE_MATCHER, LEGACY_NEWS_MATCHER]);
 /** Output-only fields of a describe; import ignores them, we drop them for a clean diff. */
 const OUTPUT_ONLY = ['id', 'kind', 'selfLink', 'creationTimestamp'];
 
@@ -43,17 +39,8 @@ export class UrlMapPatchError extends Error {
   }
 }
 
-export function desiredMatchers({ siteService, newsService }) {
-  return [
-    { name: SITE_MATCHER, defaultService: siteService },
-    {
-      name: NEWS_MATCHER,
-      defaultService: newsService,
-      // Never reaches Listmonk: the load balancer answers 404 itself (no /admin, /api, / …).
-      defaultRouteAction: { faultInjectionPolicy: { abort: { httpStatus: 404, percentage: 100 } } },
-      pathRules: [{ paths: [...NEWS_PUBLIC_PATHS], service: newsService }],
-    },
-  ];
+export function desiredMatchers({ siteService }) {
+  return [{ name: SITE_MATCHER, defaultService: siteService }];
 }
 
 /**
@@ -70,59 +57,94 @@ export function covers(actual, wanted) {
   return actual === wanted;
 }
 
-const sameMatcher = (actual, wanted) => covers(actual, wanted);
-
 const hostsOf = (rule) => (Array.isArray(rule.hosts) ? rule.hosts : []);
+const serviceName = (url) => (typeof url === 'string' ? url.split('/').pop() : undefined);
+
+/** Throws unless the legacy matcher is exactly what blog0 once created (see the header). */
+function assertLegacyIsOurs(map, hostRules, matcher) {
+  const refs = hostRules.filter((r) => r.pathMatcher === LEGACY_NEWS_MATCHER);
+  for (const r of refs) {
+    if (!isDeepStrictEqual(hostsOf(r), [LEGACY_NEWS_HOST])) {
+      throw new UrlMapPatchError(`host rule ${JSON.stringify(hostsOf(r))} uses path matcher '${LEGACY_NEWS_MATCHER}' - not exactly [${LEGACY_NEWS_HOST}]; refusing to remove it`);
+    }
+  }
+  const legacyHostRules = hostRules.filter((r) => hostsOf(r).includes(LEGACY_NEWS_HOST));
+  for (const r of legacyHostRules) {
+    if (r.pathMatcher !== LEGACY_NEWS_MATCHER) {
+      throw new UrlMapPatchError(`host ${LEGACY_NEWS_HOST} is routed to path matcher '${r.pathMatcher}' (not ${LEGACY_NEWS_MATCHER}) - refusing to remove a rule blog0 does not own`);
+    }
+  }
+  if ((map.tests ?? []).some((t) => t.host === LEGACY_NEWS_HOST)) {
+    throw new UrlMapPatchError(`a url-map test targets ${LEGACY_NEWS_HOST}; refusing to remove it`);
+  }
+  if (matcher) {
+    const services = new Set([matcher.defaultService, ...(matcher.pathRules ?? []).map((p) => p.service)]);
+    if ([...services].some((u) => serviceName(u) !== LEGACY_NEWS_SERVICE)) {
+      throw new UrlMapPatchError(`path matcher '${LEGACY_NEWS_MATCHER}' routes to something other than ${LEGACY_NEWS_SERVICE}; refusing to remove it`);
+    }
+    if (matcher.routeRules || matcher.pathRules?.some((p) => !p.service)) {
+      throw new UrlMapPatchError(`path matcher '${LEGACY_NEWS_MATCHER}' has an unexpected shape; refusing to remove it`);
+    }
+  }
+}
 
 /**
- * Pure: returns { map, changed, actions }. Throws UrlMapPatchError on a conflict.
+ * Pure: returns { map, changed, actions }. Throws UrlMapPatchError on a conflict / unexpected state.
  * @param {Record<string, any>} input  the described url map
  */
-export function patchUrlMap(input, { site, news, siteService, newsService }) {
-  for (const [k, v] of Object.entries({ site, news, siteService, newsService })) {
+export function patchUrlMap(input, { site, siteService }) {
+  for (const [k, v] of Object.entries({ site, siteService })) {
     if (typeof v !== 'string' || v === '') throw new UrlMapPatchError(`missing ${k}`);
   }
-  if (site === news) throw new UrlMapPatchError('site and news hosts must differ');
+  if (site === LEGACY_NEWS_HOST) throw new UrlMapPatchError(`site must not be the legacy host ${LEGACY_NEWS_HOST}`);
   const map = structuredClone(input);
   for (const k of OUTPUT_ONLY) delete map[k];
-  const hostRules = Array.isArray(map.hostRules) ? map.hostRules : [];
-  const pathMatchers = Array.isArray(map.pathMatchers) ? map.pathMatchers : [];
+  let hostRules = Array.isArray(map.hostRules) ? map.hostRules : [];
+  let pathMatchers = Array.isArray(map.pathMatchers) ? map.pathMatchers : [];
   const actions = [];
 
-  for (const wanted of desiredMatchers({ siteService, newsService })) {
+  // 1. the legacy news host rule + matcher go (host rule first: a matcher still referenced cannot be dropped).
+  assertLegacyIsOurs(map, hostRules, pathMatchers.find((m) => m.name === LEGACY_NEWS_MATCHER));
+  if (hostRules.some((r) => r.pathMatcher === LEGACY_NEWS_MATCHER)) {
+    hostRules = hostRules.filter((r) => r.pathMatcher !== LEGACY_NEWS_MATCHER);
+    actions.push(`remove host rule ${LEGACY_NEWS_HOST} -> ${LEGACY_NEWS_MATCHER}`);
+  }
+  if (pathMatchers.some((m) => m.name === LEGACY_NEWS_MATCHER)) {
+    pathMatchers = pathMatchers.filter((m) => m.name !== LEGACY_NEWS_MATCHER);
+    actions.push(`remove path matcher ${LEGACY_NEWS_MATCHER}`);
+  }
+
+  // 2. blog0's single host.
+  for (const wanted of desiredMatchers({ siteService })) {
     const i = pathMatchers.findIndex((m) => m.name === wanted.name);
     if (i === -1) {
       pathMatchers.push(wanted);
       actions.push(`add path matcher ${wanted.name}`);
-    } else if (!sameMatcher(pathMatchers[i], wanted)) {
+    } else if (!covers(pathMatchers[i], wanted)) {
       pathMatchers[i] = wanted;
       actions.push(`update path matcher ${wanted.name}`);
     }
   }
-
-  for (const [host, matcher] of [
-    [site, SITE_MATCHER],
-    [news, NEWS_MATCHER],
-  ]) {
-    const owner = hostRules.find((r) => hostsOf(r).includes(host));
-    if (owner) {
-      if (owner.pathMatcher !== matcher) {
-        throw new UrlMapPatchError(`host ${host} is already routed to path matcher '${owner.pathMatcher}' (not ${matcher}) — refusing to change a rule blog0 does not own`);
-      }
-      continue;
+  const owner = hostRules.find((r) => hostsOf(r).includes(site));
+  if (owner) {
+    if (owner.pathMatcher !== SITE_MATCHER) {
+      throw new UrlMapPatchError(`host ${site} is already routed to path matcher '${owner.pathMatcher}' (not ${SITE_MATCHER}) - refusing to change a rule blog0 does not own`);
     }
-    hostRules.push({ hosts: [host], pathMatcher: matcher });
-    actions.push(`add host rule ${host} → ${matcher}`);
+  } else {
+    hostRules.push({ hosts: [site], pathMatcher: SITE_MATCHER });
+    actions.push(`add host rule ${site} -> ${SITE_MATCHER}`);
   }
 
   if (hostRules.length > 0) map.hostRules = hostRules;
+  else delete map.hostRules;
   if (pathMatchers.length > 0) map.pathMatchers = pathMatchers;
-  assertOnlyAdditive(input, map);
+  else delete map.pathMatchers;
+  assertOnlyBlog0Changed(input, map);
   return { map, changed: actions.length > 0, actions };
 }
 
-/** Everything that is not blog0's must be byte-for-byte where it was. */
-export function assertOnlyAdditive(before, after) {
+/** Everything that is not blog0's must be byte-for-byte where it was; blog0's own entries only as intended. */
+export function assertOnlyBlog0Changed(before, after) {
   for (const key of Object.keys(before)) {
     if (OUTPUT_ONLY.includes(key) || key === 'hostRules' || key === 'pathMatchers') continue;
     if (!isDeepStrictEqual(before[key], after[key])) throw new UrlMapPatchError(`invariant: top-level field '${key}' changed`);
@@ -132,20 +154,18 @@ export function assertOnlyAdditive(before, after) {
   }
   const foreignMatchers = (m) => (m.pathMatchers ?? []).filter((p) => !OURS.has(p.name));
   if (!isDeepStrictEqual(foreignMatchers(before), foreignMatchers(after))) {
-    throw new UrlMapPatchError('invariant: a path matcher that is not blog0\'s changed or moved');
+    throw new UrlMapPatchError("invariant: a path matcher that is not blog0's changed or moved");
   }
   const foreignRules = (m) => (m.hostRules ?? []).filter((r) => !OURS.has(r.pathMatcher));
   if (!isDeepStrictEqual(foreignRules(before), foreignRules(after))) {
-    throw new UrlMapPatchError('invariant: a host rule that is not blog0\'s changed or moved');
+    throw new UrlMapPatchError("invariant: a host rule that is not blog0's changed or moved");
   }
-  const ours = (m) => (m.hostRules ?? []).filter((r) => OURS.has(r.pathMatcher));
-  const beforeOurs = ours(before);
-  const afterOurs = ours(after);
-  if (!isDeepStrictEqual(afterOurs.slice(0, beforeOurs.length), beforeOurs)) {
-    throw new UrlMapPatchError('invariant: an existing blog0 host rule changed');
-  }
-  // Order of everything before must be a prefix (new entries are appended only).
-  const names = (m) => (m.pathMatchers ?? []).map((p) => p.name);
+  // After the patch blog0 owns exactly one host rule (its site) and one matcher.
+  const oursRules = (after.hostRules ?? []).filter((r) => OURS.has(r.pathMatcher));
+  if (oursRules.length !== 1 || oursRules[0].pathMatcher !== SITE_MATCHER) throw new UrlMapPatchError('invariant: blog0 must own exactly the one site host rule');
+  if ((after.pathMatchers ?? []).some((p) => p.name === LEGACY_NEWS_MATCHER)) throw new UrlMapPatchError('invariant: legacy path matcher still present');
+  // The site rule, if it already existed, keeps its position; the order of everything else is a prefix.
+  const names = (m) => (m.pathMatchers ?? []).map((p) => p.name).filter((n) => n !== LEGACY_NEWS_MATCHER);
   const before0 = names(before);
   if (!isDeepStrictEqual(names(after).slice(0, before0.length), before0)) {
     throw new UrlMapPatchError('invariant: path matcher order changed');
@@ -157,18 +177,18 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') continue;
-    const m = /^--(in|out|site|news|site-service|news-service)$/.exec(a);
+    const m = /^--(in|out|site|site-service)$/.exec(a);
     if (!m || i + 1 >= argv.length) return null;
     out[m[1]] = argv[(i += 1)];
   }
-  for (const k of ['in', 'out', 'site', 'news', 'site-service', 'news-service']) if (!out[k]) return null;
+  for (const k of ['in', 'out', 'site', 'site-service']) if (!out[k]) return null;
   return out;
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args) {
-    console.error('usage: urlmap-patch.mjs --in <describe.json> --out <patched.json> --site <host> --news <host> --site-service <url> --news-service <url>');
+    console.error('usage: urlmap-patch.mjs --in <describe.json> --out <patched.json> --site <host> --site-service <url>');
     process.exit(2);
   }
   let input;
@@ -181,9 +201,7 @@ function main() {
   try {
     const { map, changed, actions } = patchUrlMap(input, {
       site: args.site,
-      news: args.news,
       siteService: args['site-service'],
-      newsService: args['news-service'],
     });
     writeFileSync(args.out, `${JSON.stringify(map, null, 2)}\n`);
     console.log(changed ? `urlmap-patch: changed (${actions.join('; ')})` : 'urlmap-patch: unchanged');

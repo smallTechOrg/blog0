@@ -14,14 +14,25 @@ requests, health endpoints, logs) is [`docs/deploy.md`](deploy.md).
  │  render env from secrets  │   scp/ssh (IAP)                 │ pull (VM service account)
  │  deploy-remote.sh <sha>   │ ──────────────▶  ┌──────────────▼─────────────────┐
  └───────────────────────────┘                  │ blog0-vm (e2-micro, 2 GB swap) │
- ┌───────────────────────────┐                  │  blog0 :3410  listmonk :9000   │──▶ Cloud SQL ai-agent-db
+ ┌───────────────────────────┐                  │  blog0 :3410 /lm→ listmonk    │──▶ Cloud SQL ai-agent-db
  │ provision.yml             │  infra/provision │  scheduler (tick, media backup)│    (private IP, TLS)
  │  VM, firewall, backends,  │ ───────────────▶ └──────────────▲─────────────────┘
- │  cert, additive LB patch  │                                  │ HTTP from LB ranges only
+ │  cert, LB host-rule patch │                                  │ HTTP from LB ranges only
  └───────────────────────────┘      readers ──▶ zero-vanguard LB (34.8.199.41)
-                                   blog0.smalltech.in ──▶ blog0-bes      (managed cert blog0-cert)
-                                   news.blog0.smalltech.in ─▶ blog0-listmonk-bes (tracking paths only)
+                                   blog0.smalltech.in ──▶ blog0-bes :3410 (managed cert blog0-cert-v2)
 ```
+
+**One host.** `https://blog0.smalltech.in` is the only name. Listmonk's *public* endpoints are served by
+blog0 itself under `/lm` — the app image carries Next.js `rewrites()` that proxy an allow-list of `/lm/*`
+to `http://listmonk:9000` over the compose network; Listmonk's root URL is `https://blog0.smalltech.in/lm`,
+so every link in a mail (click redirect, open pixel, unsubscribe page) is `/lm/…`. Allowed (UUID-shaped
+parameters only): `/lm/link/<uuid>/<uuid>/<uuid>`, `/lm/campaign/<uuid>/<uuid>/px.png`,
+`/lm/subscription/<uuid>/<uuid>` (page + form), `/lm/public/static/<file>`, `/lm/public/custom.{css,js}`.
+Listmonk's unsubscribe page hardcodes its assets as absolute `/public/static/*` and `/public/custom.{css,js}`
+(it ignores the root URL), so those three patterns are proxied unprefixed too (blog0 has no `/public/…`
+URL of its own). Everything else — `/lm`, `/lm/admin*`, `/lm/api*`, `/lm/subscription/{export,wipe,optin,form}`,
+the "view in browser" page — is blog0's normal 404; the LB never sees port 9000. Code and tests:
+`src/lib/http/listmonk-proxy.ts`; end-to-end proof against a real Listmonk: `scripts/lm-prefix-check.sh`.
 
 Prove the kit on your laptop any time (Docker running; uses ports 3490/3491/3494/3495, never `:3410`):
 
@@ -31,9 +42,10 @@ pnpm deploy:local          # the real deploy-remote.sh against a local stack →
 
 ## The only manual steps
 
-1. **GoDaddy A records** (after `provision` created the cert; both to the existing LB IP):
-   `blog0.smalltech.in  A 34.8.199.41` and `news.blog0.smalltech.in  A 34.8.199.41`.
-   The Google-managed cert `blog0-cert` turns `ACTIVE` some minutes after DNS resolves (up to ~1 h).
+1. **One GoDaddy A record** (after `provision` created the cert; to the existing LB IP):
+   `blog0.smalltech.in  A 34.8.199.41`. (The old `news.blog0.smalltech.in` record, if you added it, can be
+   deleted.) The Google-managed cert `blog0-cert-v2` turns `ACTIVE` some minutes after DNS resolves (up to
+   ~1 h); the next `provision` run then detaches and deletes the legacy two-domain `blog0-cert`.
 2. **Workspace DKIM** for the sending mailbox's domain: Admin console → Apps → Google Workspace → Gmail →
    Authenticate email → generate the key for the domain → add the TXT record `google._domainkey` at
    GoDaddy → *Start authentication*. Also, on the sending mailbox: 2-Step Verification on, an **app
@@ -65,7 +77,7 @@ Artifact Registry repo `blog0`; backup bucket `blog0-backups-<project>` (version
 deleted after 30 days); IAM bindings **for those two service accounts only**; Cloud SQL databases `blog0` +
 `listmonk` and users `blog0_owner` + `listmonk` on `ai-agent-db` (nothing else on the instance is touched);
 GitHub **variables** `GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_WIF_PROVIDER GCP_DEPLOYER_SA GCP_VM_SA
-AR_REPO BACKUP_BUCKET SITE_DOMAIN NEWS_DOMAIN CLOUDSQL_PRIVATE_IP` and **secrets** (generated:
+AR_REPO BACKUP_BUCKET SITE_DOMAIN CLOUDSQL_PRIVATE_IP` (a leftover `NEWS_DOMAIN` variable is no longer read; `gh variable delete NEWS_DOMAIN` removes it) and **secrets** (generated:
 `BLOG0_SESSION_SECRET BLOG0_UNSUBSCRIBE_SECRET BLOG0_NEWSLETTER_WEBHOOK_SECRET BLOG0_DB_OWNER_PASSWORD
 BLOG0_DB_APP_PASSWORD LISTMONK_DB_PASSWORD LISTMONK_ADMIN_USER LISTMONK_ADMIN_PASSWORD BLOG0_ADMIN_PASSWORD`;
 copied from `.env`: `BLOG0_OPENROUTER_API_KEY BLOG0_JEV_MODEL BLOG0_SMTP_* BLOG0_ADMIN_EMAIL` and the optional
@@ -79,14 +91,20 @@ ones). `BLOG0_JEV_MODEL` is forced to `typesafe/jev-1.13`. Generated values live
 the workflow), and on *Run workflow*. As `blog0-deployer` it runs `bash infra/provision.sh`: firewall rules
 `blog0-allow-lb`, `blog0-allow-iap-ssh`, `blog0-deny-public`; VM `blog0-vm` (created once; an existing VM is
 never recreated or restarted; its startup script installs Docker and a 2 GB swapfile); instance group
-`blog0-ig`; health checks `blog0-hc`, `blog0-listmonk-hc`; backend services `blog0-bes`,
-`blog0-listmonk-bes`; managed certificate `blog0-cert`; then the **additive** patch of the shared LB
-(host rules + path matchers on `zero-vanguard-urlmap`, `blog0-cert` appended to the HTTPS proxy). The url
-map and both proxies are exported first to `var/lb-backup-<ts>/` (uploaded as the `lb-backup` artifact,
-with `RESTORE.txt`); the patch is validated before import; afterwards `https://` and `http://vanguard.smalltech.in/`
-must still return 200, else the job fails and prints the restore commands (never an automatic rollback of
-the shared LB). Dry run on your laptop: `GCP_PROJECT=… GCP_REGION=… GCP_ZONE=… GCP_INSTANCE=blog0-vm
-GCP_VM_SA=… SITE_DOMAIN=… NEWS_DOMAIN=… bash infra/provision.sh --dry-run`.
+`blog0-ig` (named port `blog0:3410`); health check `blog0-hc`; backend service `blog0-bes`; managed
+certificate `blog0-cert-v2` (`blog0.smalltech.in` only); then blog0's own entries on the shared LB
+(`zero-vanguard-urlmap`: host rule `blog0.smalltech.in` → matcher `blog0` ensured, blog0's legacy
+`news.blog0.smalltech.in` rule + `blog0-news` matcher removed — fails closed on anything unexpected, no
+other rule is touched; `blog0-cert-v2` appended to the HTTPS proxy, the legacy `blog0-cert` taken out of the
+list once `v2` is ACTIVE — never while the legacy one is serving and `v2` is not — and deleted; every other
+certificate keeps its order). After the url map no longer references them it deletes `blog0-listmonk-bes`
+and `blog0-listmonk-hc`, drops the `listmonk:9000` named port and tightens `blog0-allow-lb` to `tcp:3410`.
+`https://` and `http://vanguard.smalltech.in/` must return 200 before the first LB change and after the
+last. The url map and both proxies are exported first to `var/lb-backup-<ts>/` (uploaded as the `lb-backup`
+artifact, with `RESTORE.txt`); the patch is validated before import; if the canary fails after the change
+the job fails and prints the restore commands (never an automatic rollback of the shared LB). Dry run on
+your laptop: `GCP_PROJECT=… GCP_REGION=… GCP_ZONE=… GCP_INSTANCE=blog0-vm GCP_VM_SA=… SITE_DOMAIN=…
+bash infra/provision.sh --dry-run`.
 
 **`deploy.yml`** — runs on pushes to `main` / the feature branch (not for `docs/**`, `spec/**`, `*.md`,
 `infra/**`) and on *Run workflow*. It fails early with "run provision first" if `blog0-vm` is not RUNNING;
@@ -96,15 +114,15 @@ Registry as `<sha>` + `latest`; renders the VM env files from the secrets (`depl
 `deploy/vm/deploy-remote.sh <sha>` there: migrations as `blog0_owner`, the restricted runtime role
 `blog0_app`, site + first admin, the first-deploy content seed (5 posts + deck fixtures, 0 AI calls, only when
 the site has no articles), Listmonk install/upgrade, its API user/token (`/opt/blog0/listmonk-api.env`, 600)
-and settings (Workspace SMTP, POP bounces `pop.gmail.com:995`, root URL `https://news.blog0.smalltech.in`,
+and settings (Workspace SMTP, POP bounces `pop.gmail.com:995`, root URL `https://blog0.smalltech.in/lm`,
 1 800/day, list `blog0`), `docker compose up -d --wait`, image prune (current + previous tag), and
 `free -m` / `docker stats`. **Containers restart; the VM never does.** Then a VM-local smoke; the public smoke
-(`scripts/deploy-smoke.sh https://blog0.smalltech.in https://news.blog0.smalltech.in`) when `blog0-cert` is
+(`scripts/deploy-smoke.sh https://blog0.smalltech.in`, incl. the `/lm` proxy checks) when `blog0-cert-v2` is
 `ACTIVE`, otherwise `waiting on DNS/cert (status: …)` (not a failure). The job summary shows the sha, URLs,
 certificate status and memory headroom.
 
 First run order: `bootstrap.sh` → push (or dispatch) `provision` → add the DNS records → `deploy` (it can
-run before DNS; the VM-local smoke already proves the stack).
+run before DNS; the VM-local smoke already proves the stack, `/lm` included).
 
 ## 3. Everyday operations
 
@@ -117,7 +135,7 @@ sudo docker compose --project-directory /opt/blog0 -f /opt/blog0/docker-compose.
 free -m
 ```
 
-**Listmonk admin** is not routed by the load balancer; use a tunnel (9100 locally — 9000 may be your dev
+**Listmonk admin** is not reachable from outside (`/lm/admin` is a 404 and port 9000 is bound to the VM's loopback); use a tunnel (9100 locally — 9000 may be your dev
 Listmonk) and sign in with `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD` (from `var/prod/secrets.env`):
 
 ```bash
@@ -198,13 +216,13 @@ gcloud compute url-maps export zero-vanguard-urlmap --global --project $P --dest
 gcloud compute url-maps describe zero-vanguard-urlmap --global --project $P --format=json |
   jq 'del(.id,.kind,.selfLink,.creationTimestamp)
       | .hostRules |= map(select(.pathMatcher != "blog0" and .pathMatcher != "blog0-news"))
-      | .pathMatchers |= map(select(.name != "blog0" and .name != "blog0-news"))' > after.json
+      | .pathMatchers |= map(select(.name != "blog0" and .name != "blog0-news"))' > after.json   # blog0-news exists only on a map provisioned by the older two-host design
 diff <(jq -S .hostRules after.json) <(gcloud compute url-maps describe zero-vanguard-urlmap --global --project $P --format=json | jq -S .hostRules)  # only blog0 rules differ
 gcloud compute url-maps validate --global --project $P --source after.json   # loadSucceeded: true
 gcloud compute url-maps import zero-vanguard-urlmap --global --project $P --source after.json --quiet
-# detach blog0-cert from the shared HTTPS proxy, keeping every other certificate in order
+# detach blog0-cert-v2 (and a leftover legacy blog0-cert) from the shared HTTPS proxy, keeping every other certificate in order
 keep=$(gcloud compute target-https-proxies describe zero-vanguard-httpsproxy --global --project $P --format=json |
-  jq -r '[.sslCertificates[] | split("/") | last | select(. != "blog0-cert")] | join(",")')
+  jq -r '[.sslCertificates[] | split("/") | last | select(. != "blog0-cert" and . != "blog0-cert-v2")] | join(",")')
 gcloud compute target-https-proxies update zero-vanguard-httpsproxy --global --project $P --ssl-certificates "$keep"
 curl -sS -o /dev/null -w '%{http_code}\n' https://vanguard.smalltech.in/    # must stay 200
 cd ../..
@@ -213,9 +231,9 @@ cd ../..
 **B. blog0-owned resources.**
 
 ```bash
-gcloud compute ssl-certificates delete blog0-cert --global --project $P --quiet
-gcloud compute backend-services delete blog0-bes blog0-listmonk-bes --global --project $P --quiet
-gcloud compute health-checks delete blog0-hc blog0-listmonk-hc --global --project $P --quiet
+gcloud compute ssl-certificates delete blog0-cert-v2 --global --project $P --quiet   # (+ blog0-cert if the legacy cert still exists)
+gcloud compute backend-services delete blog0-bes --global --project $P --quiet       # (+ blog0-listmonk-bes if it still exists)
+gcloud compute health-checks delete blog0-hc --global --project $P --quiet           # (+ blog0-listmonk-hc if it still exists)
 gcloud compute instance-groups unmanaged delete blog0-ig --zone $Z --project $P --quiet
 gcloud compute instances delete blog0-vm --zone $Z --project $P --quiet            # also deletes its boot disk
 gcloud compute firewall-rules delete blog0-allow-lb blog0-allow-iap-ssh blog0-deny-public --project $P --quiet
@@ -249,16 +267,16 @@ gcloud iam service-accounts delete $D $V --project $P --quiet
 **E. GitHub.**
 
 ```bash
-for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_WIF_PROVIDER GCP_DEPLOYER_SA GCP_VM_SA AR_REPO BACKUP_BUCKET SITE_DOMAIN NEWS_DOMAIN CLOUDSQL_PRIVATE_IP; do gh variable delete $v; done
+for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE GCP_WIF_PROVIDER GCP_DEPLOYER_SA GCP_VM_SA AR_REPO BACKUP_BUCKET SITE_DOMAIN NEWS_DOMAIN CLOUDSQL_PRIVATE_IP; do gh variable delete $v; done   # NEWS_DOMAIN: legacy, may not exist
 for s in BLOG0_SESSION_SECRET BLOG0_UNSUBSCRIBE_SECRET BLOG0_NEWSLETTER_WEBHOOK_SECRET BLOG0_DB_OWNER_PASSWORD BLOG0_DB_APP_PASSWORD LISTMONK_DB_PASSWORD LISTMONK_ADMIN_USER LISTMONK_ADMIN_PASSWORD BLOG0_ADMIN_PASSWORD BLOG0_OPENROUTER_API_KEY BLOG0_JEV_MODEL BLOG0_SMTP_HOST BLOG0_SMTP_PORT BLOG0_SMTP_USER BLOG0_SMTP_PASS BLOG0_SMTP_FROM BLOG0_ADMIN_EMAIL BLOG0_ADMIN_NAME BLOG0_HEARTBEAT_BACKUP_URL BLOG0_HEARTBEAT_TICK_URL; do gh secret delete $s; done
 ```
 
-Plus the two GoDaddy A records and the DKIM TXT record. The APIs bootstrap enabled are left on (shared).
+Plus the GoDaddy A record (and the legacy `news.` one) and the DKIM TXT record. The APIs bootstrap enabled are left on (shared).
 
 ## 9. Troubleshooting
 
 - *deploy says "run provision first"*: the VM is missing or stopped — run `provision` (it never starts a stopped VM; `gcloud compute instances start blog0-vm`).
 - *`release` fails with `permission denied` on Cloud SQL*: check `CLOUDSQL_PRIVATE_IP`, that `blog0_owner` exists and the VM can reach the private IP (same VPC), and that `sslmode=require` is accepted (the instance requires SSL).
-- *public smoke waits*: `gcloud compute ssl-certificates describe blog0-cert --global --format='value(managed.status,managed.domainStatus)'`; `PROVISIONING` + `FAILED_NOT_VISIBLE` means the A record is missing or wrong.
+- *public smoke waits*: `gcloud compute ssl-certificates describe blog0-cert-v2 --global --format='value(managed.status,managed.domainStatus)'`; `PROVISIONING` + `FAILED_NOT_VISIBLE` means the A record is missing or wrong.
 - *LB 502 right after a deploy*: the health check needs two passes (≈ 20 s); the deploy summary's LB-facing check is informational.
-- *Listmonk tracking links 404*: only `/link/*`, `/campaign/*`, `/subscription/*`, `/public/static/*`, `/public/custom.{css,js}` are routed on the news host by design.
+- *Listmonk tracking links 404*: only the allow-list in `src/lib/http/listmonk-proxy.ts` (`/lm/link/…`, `/lm/campaign/…/px.png`, `/lm/subscription/…`, `/lm/public/…`, plus the absolute `/public/static/*`, `/public/custom.{css,js}` assets) is proxied by design. A 500 on `/lm/*` means the `listmonk` container is down. The image bakes the target (`http://listmonk:9000`) at build time (`BLOG0_LM_PROXY_TARGET`).

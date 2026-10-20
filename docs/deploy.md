@@ -433,8 +433,13 @@ Listmonk pinned to `listmonk/listmonk:v5.1.0`, blog0 reaching it on the private 
 
 2. **Run Listmonk** with the compose service's `command` (install once, idempotent; upgrade; serve)
    and environment, changing: `LISTMONK_db__host` / `__password` (and `__ssl_mode` if the DB needs
-   TLS) to your instance, `LISTMONK_app__root_url` to Listmonk's **public https URL** (e.g.
-   `https://lists.example.com` — its own unsubscribe/tracking pages use it), and the first-run
+   TLS) to your instance, `LISTMONK_app__root_url` to Listmonk's **public https URL** (its own
+   unsubscribe/tracking pages use it). **Single host (the GCP deploy, [`deploy-gcp.md`](deploy-gcp.md)):**
+   serve Listmonk under blog0's own host at the `/lm` prefix — root URL `https://blog.example.com/lm` —
+   and build the image with the rewrites (`BLOG0_STANDALONE=1`, which the Dockerfile sets, proxies an
+   allow-list of `/lm/*` to `http://listmonk:9000`; set `BLOG0_LM_PROXY_TARGET=http://<host>:<port>` at
+   build time for another address). No second hostname, DNS record or certificate is needed. A separate
+   host (e.g. `https://lists.example.com` behind your reverse proxy) works as well. And the first-run
    admin `LISTMONK_ADMIN_USER` / `LISTMONK_ADMIN_PASSWORD` (a strong password from your secret
    store; it is only read by the first `--install`). Put it behind the same TLS reverse proxy;
    restrict `/admin` to operators if you can.

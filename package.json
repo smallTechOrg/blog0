@@ -51,6 +51,7 @@
     "listmonk:test-down": "bash scripts/listmonk-dev.sh test-down",
     "admin:reset-password": "tsx scripts/reset-password.ts",
     "deploy:local": "bash deploy/local/verify.sh",
+    "lm:prefix-check": "bash scripts/lm-prefix-check.sh",
     "deploy:smoke": "bash scripts/deploy-smoke.sh",
     "pg:compat": "bash scripts/pg-compat.sh"
   },

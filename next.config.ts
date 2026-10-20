@@ -2,6 +2,8 @@ import { networkInterfaces } from 'node:os';
 
 import type { NextConfig } from 'next';
 
+import { listmonkProxyRewrites, listmonkProxyTarget } from './src/lib/http/listmonk-proxy';
+
 /**
  * Hosts allowed to use the dev server's HMR socket and dev assets besides `localhost`.
  *
@@ -38,7 +40,16 @@ const SECURITY_HEADERS = [
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()' },
 ];
 
+/**
+ * Listmonk's public endpoints under /lm (src/lib/http/listmonk-proxy.ts): rewrites exist only when
+ * BLOG0_LM_PROXY_TARGET is set at build time or this is the image build (BLOG0_STANDALONE=1 →
+ * http://listmonk:9000). Otherwise (local dev, tests) /lm/* is simply a 404.
+ */
+const LM_PROXY_TARGET = listmonkProxyTarget();
+
 const nextConfig: NextConfig = {
+  // Inlined at build so src/proxy.ts knows whether the /lm rewrites exist.
+  env: { BLOG0_LM_PROXY_ENABLED: LM_PROXY_TARGET === null ? '0' : '1' },
   // Standalone output only for the container image build (Dockerfile sets BLOG0_STANDALONE=1,
   // spec/architecture.md §12.1): the local `pnpm start` runs `next start`, which warns under it.
   output: process.env.BLOG0_STANDALONE === '1' ? 'standalone' : undefined,
@@ -57,6 +68,10 @@ const nextConfig: NextConfig = {
     // ~10×/s until the dev server was restarted. A cold dev cache costs a few seconds per start and
     // removes that state; production builds keep their cache.
     turbopackFileSystemCacheForDev: false,
+  },
+  async rewrites() {
+    // beforeFiles: checked right after the proxy, before any page or public file.
+    return { beforeFiles: LM_PROXY_TARGET === null ? [] : listmonkProxyRewrites(LM_PROXY_TARGET), afterFiles: [], fallback: [] };
   },
   async headers() {
     return [{ source: '/:path*', headers: SECURITY_HEADERS }];

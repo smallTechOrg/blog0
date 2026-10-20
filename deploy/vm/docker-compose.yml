@@ -2,9 +2,12 @@
 # Shipped to /opt/blog0 by .github/workflows/deploy.yml and driven ONLY by deploy/vm/deploy-remote.sh:
 #   docker compose --project-directory /opt/blog0 -f /opt/blog0/docker-compose.yml --env-file /opt/blog0/compose.env …
 # Images are built on GitHub Actions and pulled from Artifact Registry (never built on the VM).
-# No Caddy, no Cloud SQL proxy: the shared Google load balancer terminates TLS and routes
-#   blog0.smalltech.in → :3410 (blog0) and news.blog0.smalltech.in/{link,campaign,subscription,public…} → :9000
-# (Listmonk); only the LB proxy/health-check ranges and IAP SSH reach the VM (blog0-* firewall rules).
+# No Caddy, no Cloud SQL proxy: the shared Google load balancer terminates TLS and routes the ONE host
+#   blog0.smalltech.in → :3410 (blog0). Listmonk's public endpoints (click redirect, open pixel, unsubscribe page)
+# are served by blog0 itself under https://blog0.smalltech.in/lm: the image's Next.js rewrites proxy an
+# allow-list of /lm/* to http://listmonk:9000 over this compose network (src/lib/http/listmonk-proxy.ts);
+# Listmonk's root URL is https://blog0.smalltech.in/lm. Only the LB proxy/health-check ranges (port 3410)
+# and IAP SSH reach the VM (blog0-* firewall rules); Listmonk's :9000 is bound to 127.0.0.1 (SSH tunnel).
 # Postgres = Cloud SQL over its private IP with TLS (sslmode=require / ssl_mode=require); the instance is
 # shared, so every pool is tiny: blog0 4, scheduler 2, Listmonk 4 open / 2 idle, one-offs 1–2.
 # Memory (e2-micro, 1 GB RAM + 2 GB swap): blog0 512m (node heap 384 MB), Listmonk 192m, scheduler 192m.
@@ -101,9 +104,10 @@ services:
       # The entrypoint chowns /listmonk (incl. uploads) to PUID:PGID and drops root via su-exec.
       PUID: '1000'
       PGID: '1000'
-    # The LB's backend port: only Listmonk's subscriber paths are routed here (url map `blog0-news`);
-    # the admin UI is reached through an IAP SSH tunnel (docs/deploy-gcp.md → Listmonk admin).
-    ports: ['${LISTMONK_HTTP_BIND:-0.0.0.0}:${LISTMONK_HOST_PORT:-9000}:9000']
+    # Not reachable from the LB or the network: blog0 reaches it as http://listmonk:9000 on the compose
+    # network; the host binds loopback only, for the admin UI through an IAP SSH tunnel (docs/deploy-gcp.md →
+    # Listmonk admin).
+    ports: ['${LISTMONK_HTTP_BIND:-127.0.0.1}:${LISTMONK_HOST_PORT:-9000}:9000']
     volumes: [listmonk-uploads:/listmonk/uploads]
     # v5: /api/health needs a session or token; the login page is the unauthenticated probe.
     healthcheck: { test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9000/admin/login >/dev/null || exit 1'], interval: 10s, timeout: 5s, retries: 30 }

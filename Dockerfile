@@ -25,7 +25,11 @@ RUN pnpm fetch --frozen-lockfile
 FROM deps AS build
 COPY . .
 RUN pnpm install --offline --frozen-lockfile
-ENV NEXT_TELEMETRY_DISABLED=1 BLOG0_STANDALONE=1
+# BLOG0_STANDALONE=1 also bakes the Listmonk /lm rewrites into the image (src/lib/http/listmonk-proxy.ts):
+# an allow-list of /lm/* is proxied to http://listmonk:9000 (the compose service); override the target at
+# build time with BLOG0_LM_PROXY_TARGET.
+ARG BLOG0_LM_PROXY_TARGET=
+ENV NEXT_TELEMETRY_DISABLED=1 BLOG0_STANDALONE=1 BLOG0_LM_PROXY_TARGET=${BLOG0_LM_PROXY_TARGET}
 RUN pnpm build && pnpm build:release && mkdir -p public
 
 # ---- 3. runtime: standalone server + static assets + migrations + prompts + the three CLIs ----
