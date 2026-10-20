@@ -14,13 +14,38 @@
 #blog0-root { position: relative; z-index: 1; }
 
 /* The page typewriter (spec/ui.md §1 rule 4; components/design/page-typer.ts): on Home, Archive
-   and About every character types in, in reading order. Until PageTyper takes over
-   (html[data-typer]) the server HTML's text is unpainted, so nothing flashes in first; after
-   that the untyped tail is the blog0-untyped highlight. Icons keep their colour. */
-html[data-typing="1"]:not([data-typer]) #blog0-root :not(svg, svg *) {
+   and About the whole page prints in, in reading order — text, placeholders, lines, boxes, images
+   and icons. Until PageTyper takes over (html[data-typer]) the server HTML paints nothing of the
+   root but its layout, so nothing flashes in first; after that the untyped text is the
+   blog0-untyped highlight and unprinted ink carries data-ink="0". */
+html[data-typing="1"]:not([data-typer]) #blog0-root,
+html[data-typing="1"]:not([data-typer]) #blog0-root * {
   color: transparent !important; text-decoration-color: transparent !important; text-shadow: none !important;
+  border-color: transparent !important; background-color: transparent !important; background-image: none !important;
+  box-shadow: none !important; outline-color: transparent !important;
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
 }
+html[data-typing="1"]:not([data-typer]) #blog0-root :is(img, svg, canvas, video, iframe),
+html[data-typing="1"]:not([data-typer]) #blog0-root *::before,
+html[data-typing="1"]:not([data-typer]) #blog0-root *::after,
+html[data-typing="1"]:not([data-typer]) #blog0-root ::placeholder { opacity: 0 !important; }
+/* PageTyper holds transitions while it measures the paint (one frame) */
+html[data-typer-measure] #blog0-root, html[data-typer-measure] #blog0-root * { transition: none !important; }
 ::highlight(blog0-untyped) { color: transparent; text-decoration-color: transparent; text-shadow: none; }
+#blog0-root [data-ink="0"] {
+  border-color: transparent !important; background-color: transparent !important; background-image: none !important;
+  box-shadow: none !important; outline-color: transparent !important;
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+#blog0-root :is(img, svg, canvas, video, iframe)[data-ink="0"],
+#blog0-root [data-ink="0"]::before,
+#blog0-root [data-ink="0"]::after { opacity: 0 !important; }
+/* lines and boxes draw left to right; images and icons print top to bottom in steps */
+#blog0-root [data-ink="line"] { animation: inkLine 180ms linear both !important; }
+#blog0-root [data-ink="scan"] { animation: inkScan 320ms steps(8, end) both !important; }
+@keyframes inkLine { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes inkScan { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+
 /* The typewriter is the only animation on a typing page: the design's headline word reveal and
    dek fade would replay text the typewriter has already typed once it scrolls into view. */
 html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {

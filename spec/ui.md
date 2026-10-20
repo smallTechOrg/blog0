@@ -28,14 +28,21 @@ Behaviour rules live in the capability files; this file owns screens, markup and
    `data-theme` on `<html>` (`suppressHydrationWarning`). **Owner decision (UI review
    2026-10-20) — the page typewriter:** on EVERY arrival at `/`, `/archive` or `/about` (a document
    load or a client navigation; never under reduced motion) every visible character of the page —
-   tabs, wordmark, tagline, About, Featured, Latest, footer, field placeholders — types in ONE sequence, left to right
+   tabs, wordmark, tagline, About, Featured, Latest, footer, field placeholders — and every piece
+   of ink (an element's own borders/rules, background, shadow, backdrop blur; images, SVG icons,
+   canvases) prints in ONE sequence, left to right
    and top to bottom (document order; inside `[data-type-visual]`, the masthead, on-screen order
    row by row, since its grid moves the wordmark above or beside the tabs by width), at
    `TYPE_CHAR_MS` per character; whitespace is free. Implementation
    (`components/design/page-typer.ts`, mounted by `components/site/PageTyper.tsx` in the site
    layout): the text stays in the DOM from the first frame and the untyped tail is painted
    transparent via the CSS Custom Highlight API (`::highlight(blog0-untyped)`), so React's DOM is
-   never touched and nothing reflows. The pre-paint script sets `data-typing="1"` on those loads;
+   never touched and nothing reflows. Ink carries `data-ink="0"` (paint hidden by additions.css)
+   until its turn (`INK_WEIGHT`: a line costs 3 characters, an image/icon 6), then draws in —
+   lines and boxes wipe left to right in 180 ms, images and icons print top to bottom in 320 ms —
+   and the attribute comes off. `PageTyper` measures the paint with transitions held
+   (`data-typer-measure`), and FeaturedStack adds `stack--on` in a layout effect so the cards'
+   paint exists before it is measured. The pre-paint script sets `data-typing="1"` on those loads;
    until `PageTyper` sets `data-typer` (or a 2.5 s timeout does), `additions.css` paints the
    root's text transparent (icons excepted) so nothing flashes. A client navigation re-decides the
    mark (`setTypingRoute`, `motion.ts`) and types again. Scrolling never interrupts the typing

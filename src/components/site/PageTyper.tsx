@@ -18,8 +18,14 @@ export function PageTyper() {
   useLayoutEffect(() => {
     setTypingRoute(route);
     const root = document.getElementById('blog0-root');
+    /* lift the pre-paint hide first so the typewriter measures the real paint, with transitions
+       held (a colour mid-transition would read as transparent); all in this frame */
+    const html = document.documentElement;
+    html.setAttribute('data-typer-measure', '');
+    html.setAttribute('data-typer', '');
     const stop = shouldType() && root ? typePage(root, { windowTop: () => document.querySelector('.sitehead')?.getBoundingClientRect().bottom ?? 0 }) : () => {};
-    document.documentElement.setAttribute('data-typer', '');
+    void document.body.offsetWidth; // apply the hidden ink before transitions come back
+    html.removeAttribute('data-typer-measure');
     return stop;
   }, [route]);
 

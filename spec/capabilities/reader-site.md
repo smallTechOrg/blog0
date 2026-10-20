@@ -56,8 +56,8 @@ link previews — pre-filled with the five smallTech articles.
   seeded; no RSS link or feed.
 - **No boot strip and no footer `> end of blog0` line** (owner decision, UI review 2026-10-20).
   **Page typewriter (owner, 2026-10-20):** every arrival at `/`, `/archive` or `/about` (load or
-  client navigation) types every visible character of the page — tabs, wordmark, tagline, About,
-  Featured, Latest, footer — in one sequence, left to right and top to bottom, at one constant
+  client navigation) prints the whole page — every character and placeholder, every line, box,
+  image and icon — in one sequence, left to right and top to bottom, at one constant
   speed; every other page shows all text complete at first paint (HOW: `spec/ui.md` §1 rule 4).
 - **Stage A:** link previews use the default share card (designer-replaceable file) as a large
   image; animated text is announced once in full to screen readers; small "faint" text meets

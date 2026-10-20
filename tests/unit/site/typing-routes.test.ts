@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { isTypeRoute, setTypingRoute, shouldType, typingActive } from '@/components/design/motion';
-import { SCROLL_SPEEDUP, TYPE_CHAR_MS, cursorAt, firstVisible, weight } from '@/components/design/page-typer';
+import { INK_MS, INK_WEIGHT, SCROLL_SPEEDUP, TYPE_CHAR_MS, cursorAt, firstVisible, paints, weight } from '@/components/design/page-typer';
 
 // Owner decisions (UI review 2026-10-20, spec/ui.md §1 rule 4): Home, /archive and /about type the
 // whole page in on every arrival, in reading order, at one constant speed.
@@ -26,6 +26,22 @@ describe('page typewriter', () => {
     expect(cursorAt(texts, 19)).toEqual({ index: 3, offset: 6 });
     expect(cursorAt(texts, 20)).toBeNull();
     expect(cursorAt([], 0)).toBeNull();
+  });
+});
+
+describe('ink (lines, boxes, images, icons)', () => {
+  it('costs a few characters of time and draws in a little longer than that', () => {
+    expect(INK_WEIGHT).toEqual({ line: 3, scan: 6 });
+    expect(INK_MS).toEqual({ line: 180, scan: 320 });
+  });
+
+  it('only a colour that paints counts', () => {
+    expect(paints('rgb(0, 0, 0)')).toBe(true);
+    expect(paints('rgba(10, 20, 30, 0.4)')).toBe(true);
+    expect(paints('rgba(0, 0, 0, 0)')).toBe(false);
+    expect(paints('transparent')).toBe(false);
+    expect(paints('color(srgb 0 0 0 / 0)')).toBe(false);
+    expect(paints('')).toBe(false);
   });
 });
 

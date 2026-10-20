@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
 import { PostCard } from '@/components/site/PostCard';
@@ -22,8 +22,9 @@ export function FeaturedStack({ posts }: FeaturedStackProps) {
 
   /* Cards settle onto the pile as they come into view. The class goes on the
      container first, so a browser without IntersectionObserver never hides
-     the cards it then can't reveal. */
-  useEffect(() => {
+     the cards it then can't reveal. A layout effect, so the cards have their final paint before
+     the page typewriter measures it (PageTyper's layout effect runs after this one). */
+  useLayoutEffect(() => {
     const el = stackRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return;
     el.classList.add('stack--on');

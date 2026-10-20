@@ -1,10 +1,13 @@
-// The page typewriter (owner decision, UI review 2026-10-20): on Home, Archive and About every
-// visible character of the page — masthead, tabs, featured, latest, footer, field placeholders —
-// types in one sequence, left to right and top to bottom, at one constant speed. The text is in
-// the DOM from the first frame; only the not-yet-typed tail is painted transparent, through the
-// CSS Custom Highlight API (`::highlight(blog0-untyped)` in additions.css), so React's DOM is
-// never touched and nothing reflows (a placeholder is rewritten, then put back whole). Text that appears after the page loads is not held back. Without that
-// API, or with reduced motion, the page is simply complete.
+// The page typewriter (owner decision, UI review 2026-10-20): on Home, Archive and About the whole
+// page — every visible character, field placeholder, line, box, image and icon — prints in one
+// sequence, left to right and top to bottom, at one constant speed. Everything is in the DOM from
+// the first frame and nothing reflows. Text: the not-yet-typed tail is painted transparent through
+// the CSS Custom Highlight API (`::highlight(blog0-untyped)` in additions.css), so React's DOM is
+// never touched. A placeholder is rewritten, then put back whole. Ink (an element's own borders,
+// background, shadow, backdrop blur, or a replaced element: image, icon, canvas) carries `data-ink="0"` until its
+// turn, then draws in — lines and boxes left to right, images and icons top to bottom — and the
+// attribute comes off. Anything that appears after the page loads is not held back. Without the
+// Highlight API, or with reduced motion, the page is simply complete.
 
 /** One character every TYPE_CHAR_MS, everywhere on the page. */
 export const TYPE_CHAR_MS = 10;
@@ -39,48 +42,96 @@ export function cursorAt(texts: readonly string[], n: number): { index: number; 
 }
 
 /** Inside a `[data-type-visual]` block (the masthead, whose grid moves the wordmark above or
- *  beside the tabs by width) text types in on-screen order: row by row, then left to right. */
+ *  beside the tabs by width) things print in on-screen order: row by row, then left to right. */
 const VISUAL_SELECTOR = '[data-type-visual]';
 
-/** What types: a text node, or a field's placeholder (typed by rewriting the attribute). */
-export type TypedItem = Text | HTMLInputElement | HTMLTextAreaElement;
+/** How ink draws in: `line` wipes left to right (borders, rules, boxes), `scan` top to bottom
+ *  (images, icons, canvases). Its turn costs as much time as this many characters. */
+export type InkMode = 'line' | 'scan';
+export const INK_WEIGHT: Record<InkMode, number> = { line: 3, scan: 6 };
+/** Matches the reveal animations in additions.css; the attribute comes off after this. */
+export const INK_MS: Record<InkMode, number> = { line: 180, scan: 320 };
 
-function isText(it: TypedItem): it is Text {
-  return it.nodeType === 3;
+/** What prints: a text node, a field's placeholder, or an element's own ink. */
+export type TypedItem =
+  | { kind: 'text'; node: Text }
+  | { kind: 'field'; el: HTMLInputElement | HTMLTextAreaElement; full: string }
+  | { kind: 'ink'; el: Element; mode: InkMode };
+
+/** Stands in for an item's cost in `cursorAt`: its text, or `x` per ink character. */
+function costText(it: TypedItem): string {
+  return it.kind === 'text' ? it.node.data : it.kind === 'field' ? it.full : 'x'.repeat(INK_WEIGHT[it.mode]);
+}
+
+function elOf(it: TypedItem): Element {
+  return it.kind === 'text' ? it.node.parentElement! : it.el;
 }
 
 function rectOf(it: TypedItem): DOMRect {
-  if (!isText(it)) return it.getBoundingClientRect();
+  if (it.kind !== 'text') return it.el.getBoundingClientRect();
   const r = document.createRange();
-  r.selectNodeContents(it);
+  r.selectNodeContents(it.node);
   return r.getBoundingClientRect();
 }
 
-/** The root's rendered texts and field placeholders in reading order: document order, except
- *  visual order inside a `[data-type-visual]` block. */
+/** A colour that paints (not `transparent`, not zero alpha). */
+export function paints(c: string): boolean {
+  return !!c && c !== 'transparent' && !/^rgba\([^,]+,[^,]+,[^,]+,\s*0(\.0*)?\)$/.test(c) && !/\/\s*0(\.0*)?\)$/.test(c);
+}
+
+const REPLACED = new Set(['IMG', 'SVG', 'svg', 'CANVAS', 'VIDEO', 'IFRAME', 'PICTURE']);
+
+/** Whether an element paints anything of its own, and how it draws in. */
+export function inkMode(el: Element): InkMode | null {
+  if (REPLACED.has(el.tagName)) return 'scan';
+  const cs = getComputedStyle(el);
+  if (cs.backgroundImage !== 'none' && cs.backgroundImage.includes('url(') && !el.textContent?.trim()) return 'scan';
+  const border = (['Top', 'Right', 'Bottom', 'Left'] as const).some(
+    (s) => cs.getPropertyValue(`border-${s.toLowerCase()}-width`) !== '0px' && cs.getPropertyValue(`border-${s.toLowerCase()}-style`) !== 'none' && paints(cs.getPropertyValue(`border-${s.toLowerCase()}-color`)),
+  );
+  if (border || paints(cs.backgroundColor) || cs.backgroundImage !== 'none' || cs.boxShadow !== 'none' || (cs.backdropFilter || 'none') !== 'none') return 'line';
+  for (const pseudo of ['::before', '::after']) {
+    const ps = getComputedStyle(el, pseudo);
+    if (ps.content !== 'none' && ps.content !== 'normal' && (paints(ps.backgroundColor) || ps.backgroundImage !== 'none' || ps.borderTopStyle !== 'none' || ps.borderBottomStyle !== 'none')) return 'line';
+  }
+  return null;
+}
+
+/** The root's printable items in reading order: document order (an element's ink before its
+ *  contents), except visual order inside a `[data-type-visual]` block. */
 export function typedItems(root: HTMLElement): TypedItem[] {
   const out: TypedItem[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    acceptNode(n) {
+      if (n.nodeType !== 1) return NodeFilter.FILTER_ACCEPT;
+      const el = n as Element;
+      /* an icon is one item: its inner shapes are not visited */
+      if (el.matches(SKIP_SELECTOR) || (el as SVGElement).ownerSVGElement) return NodeFilter.FILTER_REJECT;
+      return el.getClientRects().length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (n.nodeType === 1) {
-      const f = n as HTMLElement;
-      if ((f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) && weight(f.placeholder) && !f.closest(SKIP_SELECTOR) && f.getClientRects().length) out.push(f);
+      const el = n as Element;
+      const mode = inkMode(el);
+      if (mode) out.push({ kind: 'ink', el, mode });
+      if ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && weight(el.placeholder)) out.push({ kind: 'field', el, full: el.placeholder });
       continue;
     }
     const t = n as Text;
-    const el = t.parentElement;
-    if (!el || !weight(t.data) || el.closest(SKIP_SELECTOR) || el.getClientRects().length === 0) continue;
-    out.push(t);
+    if (t.parentElement && weight(t.data)) out.push({ kind: 'text', node: t });
   }
-  const host = (it: TypedItem) => (isText(it) ? it.parentElement! : it).closest(VISUAL_SELECTOR);
+  const host = (it: TypedItem) => elOf(it).closest(VISUAL_SELECTOR);
   for (let i = 0; i < out.length; ) {
     const block = host(out[i]);
     let j = i + 1;
     while (j < out.length && block && host(out[j]) === block) j++;
     if (block && j - i > 1) {
       const keyed = out.slice(i, j).map((t) => ({ t, b: rectOf(t) }));
-      /* same row when the vertical centres are within half a line */
+      /* same row when the vertical centres are within half a line; a box before what it holds */
       keyed.sort((x, y) => {
+        if (x.t.kind === 'ink' && elOf(y.t) !== x.t.el && x.t.el.contains(elOf(y.t))) return -1;
+        if (y.t.kind === 'ink' && elOf(x.t) !== y.t.el && y.t.el.contains(elOf(x.t))) return 1;
         const dy = x.b.top + x.b.height / 2 - (y.b.top + y.b.height / 2);
         return Math.abs(dy) > Math.min(x.b.height, y.b.height) / 2 ? dy : x.b.left - y.b.left;
       });
@@ -126,40 +177,57 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
   const api = registry();
   if (!api) return () => {};
   const items = typedItems(root);
-  const texts = items.map((it) => (isText(it) ? it.data : it.placeholder));
+  const texts = items.map(costText);
   if (!cursorAt(texts, 0)) return () => {};
   const { reg } = api;
   /* characters before each item, for skipping ahead */
   const before: number[] = [];
   const total = texts.reduce((n, t, i) => ((before[i] = n), n + weight(t)), 0);
-  /* one range per untyped text (the one being typed: over its untyped tail); a placeholder is
-     typed by rewriting it, and put back whole when typing stops */
+  /* one range per untyped text (the one being typed: over its untyped tail) */
   const ranges = items.map((it) => {
-    if (!isText(it)) return null;
+    if (it.kind !== 'text') return null;
     const r = document.createRange();
-    r.selectNodeContents(it);
+    r.selectNodeContents(it.node);
     return r;
   });
   const hl = new api.Highlight(...ranges.filter((r): r is Range => r !== null));
   reg.set(HIGHLIGHT_NAME, hl);
   items.forEach((it) => {
-    if (!isText(it)) it.placeholder = '';
+    if (it.kind === 'field') it.el.placeholder = '';
+    else if (it.kind === 'ink') it.el.setAttribute('data-ink', '0');
   });
+  const timers = new Set<number>();
   let typed = 0; // characters landed (fractional)
   let last = performance.now();
   let lastY = window.scrollY;
   let downAt = -Infinity; // last scroll-down event
   /* the first frame also skips ahead (no speed-up): a reload keeps the reader's scroll position,
-     and the text above the window counts as read */
+     and what is above the window counts as read */
   let first = true;
-  let done = 0; // items fully typed
+  let done = 0; // items fully reached
   let raf = 0;
   let stopped = false;
 
-  function land(i: number) {
+  /** The cursor reached item i: it lands (ink starts drawing in). */
+  function reach(i: number) {
     const it = items[i];
-    if (isText(it)) hl.delete(ranges[i]!);
-    else it.placeholder = texts[i];
+    if (it.kind === 'text') hl.delete(ranges[i]!);
+    else if (it.kind === 'field') it.el.placeholder = it.full;
+    else if (it.el.getAttribute('data-ink') === '0') {
+      it.el.setAttribute('data-ink', it.mode);
+      const t = window.setTimeout(() => {
+        timers.delete(t);
+        it.el.removeAttribute('data-ink');
+      }, INK_MS[it.mode]);
+      timers.add(t);
+    }
+  }
+
+  /** Item i is complete at once (skipped past, or typing stopped). */
+  function finish(i: number) {
+    const it = items[i];
+    if (it.kind === 'ink') it.el.removeAttribute('data-ink');
+    else reach(i);
   }
 
   function onScroll() {
@@ -173,8 +241,9 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     stopped = true;
     window.cancelAnimationFrame(raf);
     window.removeEventListener('scroll', onScroll);
+    timers.forEach((t) => window.clearTimeout(t));
     reg.delete(HIGHLIGHT_NAME);
-    for (; done < items.length; done++) land(done);
+    items.forEach((_, i) => finish(i));
   }
 
   function tick() {
@@ -188,23 +257,33 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
         const top = Math.max(0, opts.windowTop?.() ?? 0);
         const bottomOf = (i: number) => (i === at.index && ranges[i] ? ranges[i].getBoundingClientRect() : rectOf(items[i])).bottom;
         const i = firstVisible(bottomOf, at.index, items.length, top);
-        if (i > at.index) typed = before[i] ?? total;
-        else if (scrolling) rate = SCROLL_SPEEDUP;
+        if (i > at.index) {
+          for (; done < i; done++) finish(done);
+          typed = before[i] ?? total;
+        } else if (scrolling) rate = SCROLL_SPEEDUP;
       }
       first = false;
     }
     typed += ((now - last) / TYPE_CHAR_MS) * rate;
     last = now;
     const at = cursorAt(texts, typed);
-    if (!at) return stop();
-    for (; done < at.index; done++) land(done);
+    if (!at) {
+      for (; done < items.length; done++) reach(done);
+      /* let the last ink finish drawing; the timers take the attributes off */
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', onScroll);
+      reg.delete(HIGHLIGHT_NAME);
+      return;
+    }
+    for (; done < at.index; done++) reach(done);
     const it = items[at.index];
-    if (!isText(it)) it.placeholder = texts[at.index].slice(0, at.offset);
-    else if (it.isConnected && ranges[at.index]!.startOffset !== at.offset) {
+    if (it.kind === 'field') it.el.placeholder = it.full.slice(0, at.offset);
+    else if (it.kind === 'ink') reach(at.index);
+    else if (it.node.isConnected && ranges[at.index]!.startOffset !== at.offset) {
       hl.delete(ranges[at.index]!);
       const r = document.createRange();
-      r.setStart(it, at.offset);
-      r.setEnd(it, it.length);
+      r.setStart(it.node, at.offset);
+      r.setEnd(it.node, it.node.length);
       ranges[at.index] = r;
       hl.add(r);
     }
