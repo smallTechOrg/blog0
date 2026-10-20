@@ -159,6 +159,17 @@ else
   say "vm ${GCP_INSTANCE}: created (e2-micro, Debian 12, ephemeral external IP; the startup script installs Docker + 2 GB swap)"
 fi
 
+# OS Login admin for the deploy SSH, bound on THIS VM only (a project-level osAdminLogin condition on
+# resource.name is not honoured by the OS Login check; instanceAdmin.v1 includes setIamPolicy here).
+DEPLOYER_MEMBER="serviceAccount:${GCP_DEPLOYER_SA}"
+vm_policy="$(gcloud compute instances get-iam-policy "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --format=json)"
+if jq -e --arg m "$DEPLOYER_MEMBER" '[.bindings[]? | select(.role=="roles/compute.osAdminLogin") | .members[]] | index($m)' <<<"$vm_policy" >/dev/null; then
+  say "vm ${GCP_INSTANCE}: osAdminLogin for the deployer: ok"
+else
+  run g compute instances add-iam-policy-binding "$GCP_INSTANCE" --zone "$GCP_ZONE" --member "$DEPLOYER_MEMBER" --role roles/compute.osAdminLogin
+  say "vm ${GCP_INSTANCE}: osAdminLogin for the deployer: added"
+fi
+
 # --- 3. unmanaged instance group + named ports ----------------------------------------------------------
 if ! exists compute instance-groups unmanaged describe "$IG" --zone "$GCP_ZONE"; then
   run g compute instance-groups unmanaged create "$IG" --zone "$GCP_ZONE" --description "blog0: the one VM behind the shared LB"

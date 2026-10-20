@@ -172,7 +172,7 @@ ensure_sa_role() { # <sa-email> <member> <role>
 }
 ensure_sa_role "$DEPLOYER_EMAIL" "$WIF_PRINCIPAL" roles/iam.workloadIdentityUser
 ensure_sa_role "$VM_SA_EMAIL" "serviceAccount:${DEPLOYER_EMAIL}" roles/iam.serviceAccountUser
-# VM-level powers (instanceAdmin, osAdminLogin) are IAM-conditioned to instances named blog0-*, so the
+# VM-level power (instanceAdmin; osAdminLogin is bound on blog0-vm by provision.sh) is IAM-conditioned to instances named blog0-*, so the
 # deployer cannot touch the other live VMs in this shared project even by mistake.
 ensure_project_role_instances_only() { # <member> <role>
   local policy cond
@@ -186,7 +186,7 @@ ensure_project_role_instances_only() { # <member> <role>
     say "iam project ${2} (blog0-* instances only) → ${1#serviceAccount:}: added"
   fi
 }
-for role in roles/compute.instanceAdmin.v1 roles/compute.osAdminLogin; do
+for role in roles/compute.instanceAdmin.v1; do
   ensure_project_role_instances_only "serviceAccount:${DEPLOYER_EMAIL}" "$role"
 done
 for role in roles/compute.loadBalancerAdmin roles/compute.securityAdmin roles/iap.tunnelResourceAccessor; do
