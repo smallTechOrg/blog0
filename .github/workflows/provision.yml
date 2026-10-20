@@ -63,6 +63,8 @@ jobs:
 
       - name: Provision
         run: bash infra/provision.sh
+        env:
+          GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
 
       - name: Upload the load-balancer backup
         if: always()

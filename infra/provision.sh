@@ -161,7 +161,8 @@ fi
 
 # OS Login admin for the deploy SSH, bound on THIS VM only (a project-level osAdminLogin condition on
 # resource.name is not honoured by the OS Login check; instanceAdmin.v1 includes setIamPolicy here).
-DEPLOYER_MEMBER="serviceAccount:${GCP_DEPLOYER_SA}"
+DEPLOYER_EMAIL="${GCP_DEPLOYER_SA:-$(gcloud config get-value account 2>/dev/null)}"
+DEPLOYER_MEMBER="serviceAccount:${DEPLOYER_EMAIL}"
 vm_policy="$(gcloud compute instances get-iam-policy "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --format=json)"
 if jq -e --arg m "$DEPLOYER_MEMBER" '[.bindings[]? | select(.role=="roles/compute.osAdminLogin") | .members[]] | index($m)' <<<"$vm_policy" >/dev/null; then
   say "vm ${GCP_INSTANCE}: osAdminLogin for the deployer: ok"
