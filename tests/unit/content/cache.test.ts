@@ -18,9 +18,9 @@ beforeEach(() => {
 
 describe('render cache', () => {
   it('keys entries by revision id and RENDER_VERSION (+ ":dims" for a render with image dimensions)', () => {
-    expect(RENDER_VERSION).toBe('r2');
-    expect(renderCacheKey('rev-1')).toBe('rev-1:r2');
-    expect(renderCacheKey('rev-1', true)).toBe('rev-1:r2:dims');
+    expect(RENDER_VERSION).toBe('r4');
+    expect(renderCacheKey('rev-1')).toBe('rev-1:r4');
+    expect(renderCacheKey('rev-1', true)).toBe('rev-1:r4:dims');
   });
 
   it('caches a render with image dimensions apart from the plain render of the same revision', async () => {

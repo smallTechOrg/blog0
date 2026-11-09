@@ -38,10 +38,11 @@ to the public Read view, save versions, and publish or unpublish it.
 - Supported Markdown: headings (the shallowest level used becomes the section level), bold,
   italic, strikethrough, links (external open in a new tab), ordered/unordered/nested lists,
   task lists, blockquotes, horizontal rules, fenced code with syntax highlighting, tables,
-  footnotes (rendered as a "Notes" section), images (alone on a line → captioned figure using the
-  image title as caption), and figure markers `@@fig:slide47@@` / `@@fig:ab-companies@@` on their
-  own line. Raw HTML is not rendered (warning shown). Unknown figure ids render nothing publicly
-  and show a warning in preview.
+  footnotes (rendered as a "Notes" section) and images (alone on a line → captioned figure using the
+  image title as caption). Raw HTML is not rendered (warning shown), and neither is an image
+  embedded as a `data:` URL (warning shown; the editor uploads such images when pasted, see
+  media-images). The built-in `@@fig:<id>@@` figures were removed (2026-11-09): such a line is
+  ordinary text.
 - Every paragraph gets a stable bookmark id derived from its own text; editing one paragraph never
   changes another's id.
 - Saving creates a new revision only when title, dek or body changed; metadata changes (topic,
@@ -66,11 +67,10 @@ in `?` and one in `!`; a closing curly quote after a full stop; non-ASCII text
 "Madhupiṇḍikasutta" and an emoji; a tight list and a loose list, one nested; a 3-line
 blockquote; a fenced `ts` code block containing a full stop and a fenced block with an unknown
 language `foo`; inline code `a.b()`; a 3×3 GFM table; two footnotes `[^1]` `[^note]`; an image
-alone on a line with a title and an inline image; `---`; a raw `<div>` line; `@@fig:slide47@@`
-and `@@fig:does-not-exist@@`; two paragraphs with identical text; a paragraph of only 3 words.
+alone on a line with a title and an inline image; `---`; a raw `<div>` line; two paragraphs with identical text; a paragraph of only 3 words.
 
 ## Success Criteria
-- [ ] Preview of `hard-cases.md` returns blocks containing: `<h2`, `<h3`, `<table`, a syntax-highlighted `<pre>` code block (per-token coloured spans for both themes), a footnotes section with a visible "Notes" heading, `figure.mdfig` with `figcaption`, `img.mdimg`, `<hr`, `<del`; a `figure` block `slide47` (known) and one `does-not-exist` (known=false); warnings `UNKNOWN_FIGURE`, `RAW_HTML_DROPPED`, `UNKNOWN_CODE_LANG`; no `<div>` from the raw HTML line.
+- [ ] Preview of `hard-cases.md` returns blocks containing: `<h2`, `<h3`, `<table`, a syntax-highlighted `<pre>` code block (per-token coloured spans for both themes), a footnotes section with a visible "Notes" heading, `figure.mdfig` with `figcaption`, `img.mdimg`, `<hr`, `<del`; warnings `RAW_HTML_DROPPED`, `UNKNOWN_CODE_LANG`; no `<div>` from the raw HTML line.
 - [ ] Sentence split of `hard-cases.md`: "e.g.", "U.S.", "Dr." and "3.5%" do not end sentences; the bold-run paragraph yields two sentences whose text has no asterisks; the 3-word paragraph yields no eligible sentence; code, table cells, headings and footnote definitions contribute no sentences.
 - [ ] The two identical paragraphs get ids `p-xxxxxxxx` and `p-xxxxxxxx-2`; changing an unrelated paragraph leaves every other id unchanged (asserted by rendering before/after).
 - [ ] Rendering the same input twice yields identical blocks, ids and fingerprints.

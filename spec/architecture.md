@@ -170,12 +170,10 @@ pre-render step in `src/server/public/image-dims.ts`: `mediaImageSrcs(bodyMd): s
 column is narrower than the image.
 
 ```ts
-export type Block =
-  | { kind: 'html'; html: string }
-  | { kind: 'figure'; figureId: string; known: boolean };
+export type Block = { kind: 'html'; html: string };   // one block (none for an empty body); the figures were removed 2026-11-09
 export interface Paragraph { pid: string; index: number; text: string; kind: 'p' | 'li' | 'quote'; headingPath: string[] }
 export interface Sentence { sid: string; index: number; pid: string; text: string; words: number }
-export interface RenderWarning { code: 'UNKNOWN_FIGURE' | 'RAW_HTML_DROPPED' | 'EMPTY_BODY' | 'UNKNOWN_CODE_LANG'; message: string; line?: number }
+export interface RenderWarning { code: 'RAW_HTML_DROPPED' | 'EMBEDDED_IMAGE_DROPPED' | 'EMPTY_BODY' | 'UNKNOWN_CODE_LANG'; message: string; line?: number }
 export interface RenderedArticle {
   blocks: Block[]; paragraphs: Paragraph[]; sentences: Sentence[];   // sentences = eligible only, index 0..N-1
   stats: { words: number; readMinutes: number };
@@ -185,10 +183,9 @@ export interface RenderedArticle {
 ```
 
 Pipeline (unified): `remark-parse` → `remark-gfm` (tables, footnotes, strikethrough, autolinks,
-task lists) → `figureMarkers` (a paragraph whose entire trimmed text matches
-`^@@fig:([a-z0-9-]+)@@$` becomes a figure node; `known` = id in the figure registry list
-`KNOWN_FIGURES = ['slide47','ab-companies']` exported from `src/lib/content/types.ts`) →
-`headingShift` (design rule: the shallowest heading level used becomes h2, others nest, capped at
+task lists) → `checkEmbeddedImages` (an image whose address is a `data:` URL is never shown —
+`safeUrls` removes it — so each one raises `EMBEDDED_IMAGE_DROPPED` with its line; the editor
+uploads pasted data images before they get here) → `headingShift` (design rule: the shallowest heading level used becomes h2, others nest, capped at
 h4) → `paragraphIds` (below) → `remark-rehype` (raw HTML **not** allowed → dropped, warning
 `RAW_HTML_DROPPED`; `footnoteLabel: 'Notes'`, `footnoteLabelTagName: 'h2'`,
 `footnoteLabelProperties: { className: ['footnotes-label'] }`) → `rehype-slug` (heading ids) →
@@ -568,7 +565,9 @@ not JSON — it still sets `x-request-id` and writes one `media.request` log lin
 6. Respond 206 (`Content-Range: bytes a-b/size`, `Content-Length: b-a+1`) or 200
    (`Content-Length: size`) with the stream (`HEAD`: headers only). Common headers:
    `Content-Type: row.mime_type`, `Accept-Ranges: bytes`, `ETag`, `Last-Modified` (row
-   `created_at`, RFC 7231), `Cache-Control: public, max-age=31536000, immutable`,
+   `created_at`, RFC 7231), `Cache-Control`: `public, max-age=31536000, immutable` for audio; for
+   images `public, no-cache` (revalidated on every view — the ETag makes that a 304 — because an
+   image can be replaced in place from Admin → Media, capability media-library),
    `X-Content-Type-Options: nosniff`, `Content-Disposition: inline; filename="<ascii-safe original filename>"`.
 7. Other methods → 405 with `Allow: GET, HEAD`.
 
@@ -1825,9 +1824,8 @@ blog0/
 │   │   ├── design/              # Icon, Typewriter, Wordmark, SplitHeadline, Dek, motion.ts, overlay.ts
 │   │   ├── site/                # Masthead, Footer, NewsletterForm, AsciiHand, PageTyper, PostCard, SummaryHost, ListenOverlay, LegacyHashRedirect, home/, archive/, about/
 │   │   ├── reader/              # ArticleView, ModeBar, ModeCapsule, ReadHead, ArticleBody, ArticleFoot, TldrDeck, ShareLinkButton, ShareMenu, ParagraphShare, share-scroll.ts, clipboard.ts, ListenView, AudioPlayer, listen-sync.ts
-│   │   ├── figures/             # FigSlide47, FigAB, registry.ts
-│   │   └── admin/               # api.ts, AdminLoad.tsx (useAdminLoad/AdminLoadError), LoginForm, DeskHeader, DeskView, ArticleTable, FormatChips, NewArticleForm, labels.ts, relative-time.ts,
-│   │                            #   editor/ (ArticleEditor, PublishBar, WriteTab, MarkdownEditor, LivePreview, ImageUploadButton, insert-image.ts, TldrTab, tldr-generate.ts, ListenTab, HistoryTab, fields.ts, use-article-doc.ts),
+│   │   └── admin/               # api.ts, AdminLoad.tsx (useAdminLoad/AdminLoadError), LoginForm, DeskHeader, DeskView, ArticleTable, FormatChips, NewArticleForm, labels.ts, relative-time.ts, media/ (MediaLibraryView, media-api.ts),
+│   │                            #   editor/ (ArticleEditor, PublishBar, WriteTab, MarkdownEditor, LivePreview, ImageUploadButton, insert-image.ts, paste-images.ts, use-paste-images.ts, TldrTab, tldr-generate.ts, ListenTab, HistoryTab, fields.ts, use-article-doc.ts),
 │   │                            #   tldr/ (DeckList, SentencePicker, DeckPreview, deck-edit.ts), listen/ (AudioUploader, listen-api.ts), site/ (+ NewsletterSettings.tsx, Phase 7),
 │   │                            #   subscribers/ (SubscribersView, StatusFilter, SubscriberDetail, SubscriberTimeline, subscribers-api.ts — Phase 7),
 │   │                            #   newsletter/ (IssueList, IssueDetail, IssuePreview, IssueCompose, PostPicker, SendDialog, SendLog, IssueStats, issue-edit.ts, newsletter-api.ts — Phase 7)
@@ -1853,7 +1851,7 @@ blog0/
 │   │   │   newsletter/sender/{types,listmonk,stub,sync,opt-out,index}.ts           # §13.3
 │   │   │   newsletter/issues/{repo,service,snapshot,render,excerpt,intro,triggers,digest,send,status,http,tick}.ts   # §13.4–13.5
 │   │   ├── content/{index,ast,markdown,render,sentences,paragraph-ids,fingerprint,stats,highlight,cache}.ts
-│   │   │   content/plugins/{figure-markers,heading-shift,raw-html,code-langs,external-links,images,tables,safe-urls}.ts
+│   │   │   content/plugins/{embedded-images,heading-shift,raw-html,code-langs,external-links,images,tables,safe-urls}.ts
 │   │   ├── formats/{types,payload,index,read,tldr,listen}.ts      # formats/status.ts: Frozen — not scheduled
 │   │   ├── articles/{repo,service,schemas,slug,tldr,views,http}.ts
 │   │   ├── llm/{types,openrouter,index,key}.ts          # openrouter.ts = the decisions adapter (Phase 8)

@@ -9,8 +9,9 @@ import type { EditorFields } from './fields';
 import { LivePreview } from './LivePreview';
 import { ImageUploadButton, type ImageUploadHandle } from './ImageUploadButton';
 import { MarkdownEditor, type MarkdownEditorHandle } from './MarkdownEditor';
+import { usePasteImages } from './use-paste-images';
 
-// Write tab (spec/ui.md §4): Title, Dek, Topic; Settings disclosure (slug, byline, featured,
+// Write tab (spec/ui.md §4): Title, Dek, Topic; Settings disclosure (slug, byline (read-only), featured,
 // in-progress badge); Markdown left + live preview right at ≥ 1100 px, a Write/Preview toggle
 // below that (admin.css switches on `data-pane`). The Image button sits in the editor's toolbar
 // slot; files dropped on the textarea go to the same queue. Field limits = the API's (ARTICLE_LIMITS).
@@ -27,6 +28,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
   const id = article.id;
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const imageRef = useRef<ImageUploadHandle>(null);
+  const paste = usePasteImages(id, editorRef, imageRef);
 
   return (
     <div className="writetab">
@@ -95,10 +97,13 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             <span className="admin-label">Byline</span>
             <input
               className="admin-input"
-              value={fields.bylineName}
-              maxLength={ARTICLE_LIMITS.byline}
-              onChange={(e) => onField('bylineName', e.target.value)}
+              value={article.bylineName}
+              readOnly
+              aria-describedby={`byline-note-${id}`}
             />
+            <span className="admin-hint" id={`byline-note-${id}`}>
+              The author’s name. To change it, change the author’s display name.
+            </span>
           </label>
           <div className="settings__row">
             <label className="admin-check">
@@ -118,12 +123,21 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
                 max={99}
                 disabled={!fields.isFeatured}
                 value={fields.featuredRank ?? ''}
-                onChange={(e) => onField('featuredRank', e.target.value === '' ? null : Math.max(1, Math.trunc(Number(e.target.value))))}
+                onChange={(e) =>
+                  onField(
+                    'featuredRank',
+                    e.target.value === '' ? null : Math.max(1, Math.trunc(Number(e.target.value))),
+                  )
+                }
               />
             </label>
           </div>
           <label className="admin-check">
-            <input type="checkbox" checked={fields.inProgress} onChange={(e) => onField('inProgress', e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={fields.inProgress}
+              onChange={(e) => onField('inProgress', e.target.checked)}
+            />
             Show ‘Draft — in progress’ badge
           </label>
         </div>
@@ -131,7 +145,12 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
 
       <div className="split" data-pane={pane}>
         <div className="split__toggle modes" role="group" aria-label="Show">
-          <button type="button" className={pane === 'write' ? 'mode is-on' : 'mode'} aria-pressed={pane === 'write'} onClick={() => setPane('write')}>
+          <button
+            type="button"
+            className={pane === 'write' ? 'mode is-on' : 'mode'}
+            aria-pressed={pane === 'write'}
+            onClick={() => setPane('write')}
+          >
             Write
           </button>
           <button
@@ -151,19 +170,32 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             onChange={(v) => onField('bodyMd', v)}
             maxLength={ARTICLE_LIMITS.body}
             onDropFiles={(files) => imageRef.current?.addFiles(files)}
+            onPasteContent={paste.onPaste}
             tools={
-              <ImageUploadButton
-                ref={imageRef}
-                articleId={id}
-                onBegin={() => editorRef.current?.markInsertion() ?? 0}
-                onInsert={(snippet, mark) => {
-                  const editor = editorRef.current;
-                  if (!editor) return;
-                  if (mark !== null) editor.insertAtMark(mark, snippet);
-                  else editor.insertAtCursor(snippet);
-                }}
-                onRelease={(mark) => editorRef.current?.releaseMark(mark)}
-              />
+              <>
+                <ImageUploadButton
+                  ref={imageRef}
+                  articleId={id}
+                  onBegin={() => editorRef.current?.markInsertion() ?? 0}
+                  onInsert={(snippet, mark) => {
+                    const editor = editorRef.current;
+                    if (!editor) return;
+                    if (mark !== null) editor.insertAtMark(mark, snippet);
+                    else editor.insertAtCursor(snippet);
+                  }}
+                  onRelease={(mark) => editorRef.current?.releaseMark(mark)}
+                />
+                {paste.status ? (
+                  <p
+                    className={
+                      paste.status.kind === 'error' ? 'admin-error mdedit__note' : 'admin-hint mdedit__note'
+                    }
+                    role={paste.status.kind === 'error' ? 'alert' : 'status'}
+                  >
+                    {paste.status.text}
+                  </p>
+                ) : null}
+              </>
             }
           />
         </div>
@@ -173,7 +205,7 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             dek={fields.dek}
             bodyMd={fields.bodyMd}
             topic={fields.topic}
-            bylineName={fields.bylineName}
+            bylineName={article.bylineName}
             inProgress={fields.inProgress}
             dateLabel={dateLabel}
           />

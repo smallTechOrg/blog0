@@ -453,7 +453,9 @@ epoch 0`, `count` = attempts since the last success, `expires_at` = last attempt
 | created_by | uuid fk → app_user | |
 | created_at | timestamptz | |
 
-Rules: an `audio` row (and its file) is deleted when the recording is replaced or removed and no
+Rules: **Replace** (Admin → Media, capability media-library) overwrites an image's file under the
+same `storage_key` and updates `mime_type`, `byte_size`, `sha256`, `width`, `height` and
+`original_filename` on its row; everything else (key, created_at/by, article_id) is kept. An `audio` row (and its file) is deleted when the recording is replaced or removed and no
 `article_format` draft/published payload references its key; `image` rows are never deleted
 automatically (v0.1). Deleting an article leaves its media rows (`article_id` → null) and files
 in place (> **Assumed:** acceptable orphan cost for < 100 articles).

@@ -119,21 +119,12 @@ describe('hard-cases.md blocks', () => {
     expect(out).not.toMatch(/<div(?! class="table-scroll")/);
   });
 
-  it('splits the blocks at the figure markers: known slide47 and unknown does-not-exist', () => {
-    const kinds = r.blocks.map((b) => (b.kind === 'figure' ? `fig:${b.figureId}:${b.known}` : 'html'));
-
-    expect(kinds).toEqual(['html', 'fig:slide47:true', 'fig:does-not-exist:false', 'html']);
-    expect(out).not.toContain('@@fig');
-  });
-
-  it('reports UNKNOWN_CODE_LANG, RAW_HTML_DROPPED and UNKNOWN_FIGURE with line numbers, in document order', () => {
+  it('reports UNKNOWN_CODE_LANG and RAW_HTML_DROPPED with line numbers, in document order', () => {
     expect(r.warnings.map((w) => [w.code, w.line])).toEqual([
       ['UNKNOWN_CODE_LANG', 58],
       ['RAW_HTML_DROPPED', 80],
-      ['UNKNOWN_FIGURE', 84],
     ]);
     expect(r.warnings[0].message).toContain('foo');
-    expect(r.warnings[2].message).toContain('does-not-exist');
   });
 });
 

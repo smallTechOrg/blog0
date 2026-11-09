@@ -1,9 +1,10 @@
 'use client';
 
-import { useImperativeHandle, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from 'react';
+import { useImperativeHandle, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 
 import { wordCount } from './fields';
 import { insertAtCursor, shiftRange, type TextRange } from './insert-image';
+import type { PasteContent } from './use-paste-images';
 
 // Plain monospace Markdown textarea (spec/architecture.md: swap for CodeMirror later behind this
 // component). Tab inserts two spaces; Esc then Tab leaves the field, so keyboard users are never
@@ -35,6 +36,8 @@ export interface MarkdownEditorProps {
   tools?: ReactNode;
   /** Files dropped on the textarea (when set, file drags show the `.is-dropping` outline). */
   onDropFiles?: (files: File[]) => void;
+  /** Text or image files pasted into the textarea; return true when handled (the browser's paste is then cancelled). */
+  onPasteContent?: (clip: PasteContent) => boolean;
   ref?: Ref<MarkdownEditorHandle>;
 }
 
@@ -42,7 +45,7 @@ function hasFiles(e: DragEvent<HTMLTextAreaElement>): boolean {
   return Array.from(e.dataTransfer?.types ?? []).includes('Files');
 }
 
-export function MarkdownEditor({ id, value, onChange, maxLength, disabled, tools, onDropFiles, ref: handleRef }: MarkdownEditorProps) {
+export function MarkdownEditor({ id, value, onChange, maxLength, disabled, tools, onDropFiles, onPasteContent, ref: handleRef }: MarkdownEditorProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const caret = useRef<number | null>(null);
   const escaped = useRef(false);
@@ -160,6 +163,11 @@ export function MarkdownEditor({ id, value, onChange, maxLength, disabled, tools
         }}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onPaste={(e: ClipboardEvent<HTMLTextAreaElement>) => {
+          if (!onPasteContent) return;
+          const data = e.clipboardData;
+          if (onPasteContent({ text: data.getData('text/plain'), files: Array.from(data.files) })) e.preventDefault();
+        }}
         onKeyDown={onKeyDown}
         spellCheck={false}
         autoCapitalize="off"
@@ -167,7 +175,7 @@ export function MarkdownEditor({ id, value, onChange, maxLength, disabled, tools
         disabled={disabled}
         aria-describedby={`${id}-foot`}
         aria-invalid={over || undefined}
-        placeholder={'# Paste or write Markdown here\n\nFigures: @@fig:slide47@@ or @@fig:ab-companies@@ on their own line.'}
+        placeholder={'# Paste or write Markdown here\n\nImages in pasted Markdown are uploaded for you.'}
       />
       <p className="mdedit__foot" id={`${id}-foot`}>
         <span>

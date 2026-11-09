@@ -68,22 +68,25 @@ describe('renderArticle markdown coverage', () => {
     expect(html(r.blocks).match(/<pre class="shiki/g)).toHaveLength(langs.length);
   });
 
-  it('turns @@fig markers into figure blocks only when they are a whole top-level paragraph', async () => {
-    const r = await render('Intro paragraph with some words.\n\n  @@fig:ab-companies@@  \n\nInline @@fig:slide47@@ stays text here.\n\n- @@fig:slide47@@');
+  it('warns once per embedded (data:) image, inline or by reference, and shows nothing for it', async () => {
+    const png = 'data:image/png;base64,iVBORw0KGgo=';
+    const r = await render(`Intro paragraph with some words.\n\n![one](${png})\n\nAnd ![two][img] here.\n\n[img]: <${png}>\n\n![fine](/media/blog0/image/2026/11/a.png)`);
 
-    expect(r.blocks.filter((b) => b.kind === 'figure')).toEqual([{ kind: 'figure', figureId: 'ab-companies', known: true }]);
-    expect(html(r.blocks)).toContain('Inline @@fig:slide47@@ stays text here.');
-    expect(r.warnings).toEqual([]);
+    expect(r.warnings.map((w) => [w.code, w.line])).toEqual([
+      ['EMBEDDED_IMAGE_DROPPED', 3],
+      ['EMBEDDED_IMAGE_DROPPED', 5],
+    ]);
+    expect(r.warnings[0].message).toContain('Image button');
+    expect(html(r.blocks)).not.toContain('data:');
+    expect(html(r.blocks)).toContain('/media/blog0/image/2026/11/a.png');
   });
 
-  it('emits back-to-back figures as separate blocks with no empty html block between them', async () => {
-    const r = await render('@@fig:slide47@@\n\n@@fig:ab-companies@@');
+  it('treats a former figure marker as ordinary text (figures were removed)', async () => {
+    const r = await render('Intro paragraph with some words.\n\n@@fig:ab-companies@@');
 
-    expect(r.blocks).toEqual([
-      { kind: 'figure', figureId: 'slide47', known: true },
-      { kind: 'figure', figureId: 'ab-companies', known: true },
-    ]);
-    expect(r.paragraphs).toEqual([]);
+    expect(r.blocks).toHaveLength(1);
+    expect(html(r.blocks)).toContain('@@fig:ab-companies@@');
+    expect(r.warnings).toEqual([]);
   });
 
   it('normalises CRLF line endings to the same output as LF', async () => {

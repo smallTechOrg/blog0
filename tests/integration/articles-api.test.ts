@@ -92,13 +92,11 @@ describe('POST /api/admin/preview', () => {
 
     expect(status).toBe(200);
     const preview = data(env);
-    const html = preview.blocks.map((b) => (b.kind === 'html' ? b.html : '')).join('\n');
+    const html = preview.blocks.map((b) => b.html).join('\n');
     expect(html).toContain('<table');
     expect(html).toContain('<h2');
-    expect(preview.blocks).toContainEqual({ kind: 'figure', figureId: 'slide47', known: true });
-    expect(preview.blocks).toContainEqual({ kind: 'figure', figureId: 'does-not-exist', known: false });
     const codes = preview.warnings.map((w) => w.code);
-    expect(codes).toEqual(expect.arrayContaining(['UNKNOWN_FIGURE', 'RAW_HTML_DROPPED', 'UNKNOWN_CODE_LANG']));
+    expect(codes).toEqual(expect.arrayContaining(['RAW_HTML_DROPPED', 'UNKNOWN_CODE_LANG']));
     expect(preview.stats.words).toBeGreaterThan(50);
     expect(preview.stats.readMinutes).toBeGreaterThanOrEqual(1);
     expect(preview.sentenceCount).toBeGreaterThan(5);

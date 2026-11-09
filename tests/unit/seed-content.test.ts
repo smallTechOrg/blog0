@@ -25,7 +25,8 @@ describe('seed posts', () => {
     expect(seeded.map((p) => p.slug)).toEqual(design.map((p) => p.id));
     for (const post of design) {
       const seed = seeded.find((p) => p.slug === post.id);
-      expect(seed?.bodyMd).toBe(post.md);
+      // the design's two `@@fig:…@@` figure lines were removed (owner decision 2026-11-09); the rest is verbatim
+      expect(seed?.bodyMd).toBe(post.md.replace(/^@@fig:[a-z0-9-]+@@\n\n/gm, ''));
       expect(seed).toMatchObject({ title: post.title, topic: post.tag, date: post.date, bylineName: post.author, dek: post.excerpt, inProgress: post.draft === true });
     }
   });
@@ -110,8 +111,6 @@ describe('hard-cases fixture', () => {
     ['inline image', /\S !\[[^\]]*\]\([^)]+\) \S/],
     ['rule', /^---$/m],
     ['raw div', /^<div/m],
-    ['known figure', /^@@fig:slide47@@$/m],
-    ['unknown figure', /^@@fig:does-not-exist@@$/m],
     ['3-word paragraph', /^Only three words\.$/m],
     ['GFM strikethrough', /\S ~~[^~\n]+~~ \S/],
     ['open task item', /^- \[ \] \S/m],

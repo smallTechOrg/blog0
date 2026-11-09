@@ -11,7 +11,7 @@ export function render(bodyMd: string, title = 'Title', dek = 'Dek'): Promise<Re
 }
 
 export function html(blocks: Block[]): string {
-  return blocks.map((b) => (b.kind === 'html' ? b.html : `<!--figure:${b.figureId}:${b.known}-->`)).join('\n');
+  return blocks.map((b) => b.html).join('\n');
 }
 
 export function sentenceTexts(r: RenderedArticle): string[] {

@@ -395,7 +395,7 @@ describe('GET / HEAD /media/[...key]', () => {
     expect(res.headers.get('accept-ranges')).toBe('bytes');
     expect(res.headers.get('etag')).toMatch(/^"[0-9a-f]{64}"$/);
     expect(res.headers.get('last-modified')).toMatch(/GMT$/);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(res.headers.get('cache-control')).toBe('public, no-cache'); // images are revalidated (they can be replaced in place)
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('content-disposition')).toBe('inline; filename="sample.png"');
     expect(res.headers.get('x-request-id')).toBeTruthy();
@@ -480,7 +480,7 @@ describe('GET / HEAD /media/[...key]', () => {
       const res = await media(mediaGet, asset.key, { 'if-none-match': value });
       expect(res.status, value).toBe(304);
       expect(res.headers.get('etag')).toBe(etag);
-      expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+      expect(res.headers.get('cache-control')).toBe('public, no-cache'); // images are revalidated (they can be replaced in place)
       expect((await res.arrayBuffer()).byteLength).toBe(0);
     }
     const miss = await media(mediaGet, asset.key, { 'if-none-match': '"deadbeef"' });

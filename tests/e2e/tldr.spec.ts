@@ -127,8 +127,6 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     expect(await code.locator('span[style*="--shiki-light"]').count()).toBeGreaterThan(3);
     await expect(preview.locator('.footnotes')).toContainText('Notes');
     await expect(preview.locator('.footnotes')).toContainText('Production is where the 1% problems live');
-    await expect(preview.locator('figure.fig')).toHaveCount(2);
-    await expect(preview.locator('figure.fig .fig__k', { hasText: 'Two companies, same market' })).toBeVisible();
     await expect(preview.locator('.preview__stats')).toContainText(/eligible sentences/);
 
     const res = await page.request.get(`/api/admin/articles/${j.articleId}`);

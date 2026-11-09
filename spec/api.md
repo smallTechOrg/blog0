@@ -88,7 +88,7 @@ interface ArticleDetailDto {
   publicUrl: string | null;                      // absolute, when published
 }
 interface PreviewResultDto {
-  blocks: Array<{ kind: 'html'; html: string } | { kind: 'figure'; figureId: string; known: boolean }>;
+  blocks: Array<{ kind: 'html'; html: string }>;
   warnings: Array<{ code: string; message: string; line?: number }>;
   stats: { words: number; readMinutes: number };
   sentenceCount: number;                         // eligible
@@ -233,6 +233,8 @@ form parsed; `spec/architecture.md` §9.3).
 | Method & path | Auth | Request | Response `data` / notes |
 |---|---|---|---|
 | POST `/api/admin/uploads/images` | admin | multipart: `file` (required), `alt` (string ≤ 200, default `''`), `caption?` (≤ 200), `articleId?` (uuid of an article in this site, else 404) | 201 `ImageUploadResponse`. Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA` (incl. SVG), `IMAGE_TOO_LARGE`, `VALIDATION_FAILED`. |
+| GET `/api/admin/media` | admin | — | 200 `MediaLibraryResponse` `{ items }`: every image of the site, newest upload first, each with the articles (`usedIn`: articleId, slug, title, status) whose current or published Markdown links it. |
+| POST `/api/admin/media/:id/replace` | admin | multipart: `file` (required; same limits as an upload) | 200 `MediaReplaceResponse` `{ item }` — the image's file is replaced under the SAME `/media/<key>`. Errors: 404 (no such image), `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA` (incl. SVG), `IMAGE_TOO_LARGE`, `VALIDATION_FAILED`. |
 | POST `/api/admin/articles/:id/audio` | admin | multipart: `file` (required) | 200 `ListenResponse` with `status 'ready'`, `marks []`, `timing 'estimated'`, `uploadFingerprint` = the current revision's paragraphs fingerprint. Replaces the draft recording (old unreferenced file + row deleted). Errors: `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA`, `AUDIO_TOO_LONG`. `maxDuration = 120`. |
 | DELETE `/api/admin/articles/:id/audio` | admin | — | 200 `ListenResponse` with `status 'missing'`, `audio null`, `marks []` (draft cleared; published Listen untouched; unreferenced file + row deleted). Idempotent. |
 | GET `/api/admin/articles/:id/listen` | admin | — | `ListenStateDto` |

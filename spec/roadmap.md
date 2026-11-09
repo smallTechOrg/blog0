@@ -316,7 +316,7 @@ files live on local disk behind a storage interface and stream with HTTP range r
 get a Listen view with player + text side by side, the current paragraph softly highlighted on
 **estimated** timing, auto-follow with **Follow audio**, click-to-seek; upload ⇒ `ready`, a
 paragraph edit after upload shows a non-blocking `text_changed` warning, Listen never blocks
-publish. Capabilities: `listen-audio`, `listen-sync`, `media-images`.
+publish. Capabilities: `listen-audio`, `listen-sync`, `media-images` (later: pasted-Markdown image upload and the Admin → Media library, `media-library`, 2026-11-09).
 
 **Done** (commits `69d9986` Phase 3; `31de614` fix — tap-along removed, estimated timing).
 

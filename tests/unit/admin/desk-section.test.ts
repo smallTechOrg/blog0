@@ -9,6 +9,7 @@ describe('deskSection', () => {
     expect(deskSection('/admin')).toBe('/admin');
     expect(deskSection('/admin/articles/new')).toBe('/admin');
     expect(deskSection('/admin/articles/abc')).toBe('/admin');
+    expect(deskSection('/admin/media')).toBe('/admin/media');
     expect(deskSection('/admin/site')).toBe('/admin/site');
     expect(deskSection('/admin/subscribers')).toBe('/admin/subscribers');
     expect(deskSection('/admin/subscribers/abc')).toBe('/admin/subscribers');

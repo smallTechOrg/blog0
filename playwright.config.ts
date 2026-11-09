@@ -32,12 +32,13 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   // The walks share one database and run in this order (each needs the state the previous one
-  // leaves): tldr → reader → listen → smoke → newsletter. Project dependencies pin it.
+  // leaves): tldr → reader → listen → media → smoke → newsletter. Project dependencies pin it.
   projects: [
     { name: 'tldr', testMatch: 'tldr.spec.ts', use: { ...devices['Desktop Chrome'] } },
     { name: 'reader', testMatch: 'reader.spec.ts', dependencies: ['tldr'], use: { ...devices['Desktop Chrome'] } },
     { name: 'listen', testMatch: 'listen.spec.ts', dependencies: ['reader'], use: { ...devices['Desktop Chrome'] } },
-    { name: 'smoke', testMatch: 'smoke.spec.ts', dependencies: ['listen'], use: { ...devices['Desktop Chrome'] } },
+    { name: 'media', testMatch: 'media.spec.ts', dependencies: ['listen'], use: { ...devices['Desktop Chrome'] } },
+    { name: 'smoke', testMatch: 'smoke.spec.ts', dependencies: ['media'], use: { ...devices['Desktop Chrome'] } },
     { name: 'newsletter', testMatch: 'newsletter.spec.ts', dependencies: ['smoke'], use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: externalBaseUrl

@@ -6,11 +6,12 @@ import { useState } from 'react';
 
 import { apiRequest } from './api';
 
-// Admin header bar (spec/ui.md §4 DeskHeader): small wordmark "blog0 · desk", links Desk, Site,
+// Admin header bar (spec/ui.md §4 DeskHeader): small wordmark "blog0 · desk", links Desk, Media, Site,
 // Subscribers, Newsletter (Phase 7), the signed-in writer's name, Sign out.
 
 const LINKS = [
   { href: '/admin', label: 'Desk' },
+  { href: '/admin/media', label: 'Media' },
   { href: '/admin/site', label: 'Site' },
   { href: '/admin/subscribers', label: 'Subscribers' },
   { href: '/admin/newsletter', label: 'Newsletter' },
@@ -18,6 +19,7 @@ const LINKS = [
 
 /** The link that is current for a pathname: Desk owns /admin and the article screens. */
 export function deskSection(pathname: string): (typeof LINKS)[number]['href'] | null {
+  if (pathname === '/admin/media' || pathname.startsWith('/admin/media/')) return '/admin/media';
   if (pathname === '/admin/site' || pathname.startsWith('/admin/site/')) return '/admin/site';
   if (pathname === '/admin/subscribers' || pathname.startsWith('/admin/subscribers/')) return '/admin/subscribers';
   if (pathname === '/admin/newsletter' || pathname.startsWith('/admin/newsletter/')) return '/admin/newsletter';

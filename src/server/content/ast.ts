@@ -26,9 +26,6 @@ export interface MdNode {
   url?: string;
   title?: string | null;
   alt?: string | null;
-  /** blog0Figure (figure-markers plugin) */
-  figureId?: string;
-  known?: boolean;
 }
 
 export interface MdRoot extends MdNode { type: 'root'; children: MdNode[] }
