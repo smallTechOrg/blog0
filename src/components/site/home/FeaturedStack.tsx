@@ -79,7 +79,7 @@ export function FeaturedStack({ posts }: FeaturedStackProps) {
         onClick={unstack}
         onKeyDown={onKeyDown}
       >
-        <h2 id="feat-h">Featured Editorial</h2>
+        <h2 id="feat-h">Featured Articles</h2>
         <span className="sechead__hint" aria-hidden="true">
           ↑ top
         </span>

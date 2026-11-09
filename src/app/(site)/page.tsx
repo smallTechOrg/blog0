@@ -14,7 +14,7 @@ import { homeStructuredData, sitePageRouteMetadata } from '@/server/public/metad
 import { getCurrentSite } from '@/server/site/current';
 
 // Home (spec/ui.md §3 "Home"): exactly the design's Home — About (site record texts,
-// typed on the shared clock), the Featured Editorial pinned head + scroll stack, and Latest with
+// typed on the shared clock), the Featured Articles pinned head + scroll stack, and Latest Articles with
 // See More / View all articles. Nothing published → the Latest head with an empty state.
 // Old design hash links (`/#<slug>`, `/#<slug>/tldr`, …) are mapped to real routes client-side
 // by LegacyHashRedirect (spec/architecture.md divergences). Stage A: one JSON-LD block
@@ -38,7 +38,7 @@ export default async function HomePage() {
     <main className="col">
       <JsonLd data={homeStructuredData(site)} nonce={nonce} />
       <LegacyHashRedirect />
-      <HomeAbout strap={about.aboutStrap} stand={about.aboutStand} bodyParagraphs={about.aboutBodyParagraphs} />
+      <HomeAbout wordmark={about.wordmark} strap={about.aboutStrap} stand={about.aboutStand} bodyParagraphs={about.aboutBodyParagraphs} />
       {empty ? <HomeEmpty signedIn={signedIn} /> : null}
       <FeaturedStack posts={featured} />
       {latest.length ? <LatestFeed posts={latest} /> : null}

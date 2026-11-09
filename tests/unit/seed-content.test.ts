@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { loadSeedPosts, readSeedPostBody, SEED_POSTS } from '@/server/seed/posts';
-import { SITE_DEFAULTS } from '@/server/site/defaults';
+import { ABOUT_BODY_FULL, SITE_DEFAULTS } from '@/server/site/defaults';
 
 interface DesignPost { id: string; title: string; tag: string; date: string; author: string; excerpt: string; draft?: boolean; md: string }
 
@@ -48,14 +48,14 @@ describe('site defaults', () => {
       brandName: 'blog0',
       wordmark: 'blog0',
       publisherName: 'smallTech',
-      tagline: 'the meaning of life, universe, and everything',
-      contactEmail: 'hello@logzero.blog',
-      aboutStrap: 'Less noise. More signal.',
+      tagline: 'the meaning of life, universe and everything',
+      contactEmail: 'contact@smalltech.in',
+      aboutStrap: 'Fresh Hand-Typed Content.',
       timezone: 'Asia/Kolkata',
       socialXUrl: null,
-      socialLinkedinUrl: null,
+      socialLinkedinUrl: 'https://www.linkedin.com/company/smalltechorg/',
     });
-    expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toHaveLength(2);
+    expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toHaveLength(1);
     expect(SITE_DEFAULTS.aboutBodyMd).not.toMatch(/Placeholder/);
   });
 
@@ -66,15 +66,16 @@ describe('site defaults', () => {
     expect(SITE_DEFAULTS.wordmark.slice(-1)).toBe('0'); // the nought that spins
   });
 
-  it('seed the design ABOUT_BODY_FULL verbatim, one paragraph per entry', () => {
-    const src = readFileSync(path.join(process.cwd(), 'spec', 'design', 'design-app.js'), 'utf8');
-    const start = src.indexOf('var ABOUT_BODY_FULL = [');
-    const end = src.indexOf('\n];', start) + 3;
-    const design = new Function(`${src.slice(start, end)}\nreturn ABOUT_BODY_FULL;`)() as string[];
-
-    expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toEqual(design);
-    expect(SITE_DEFAULTS.aboutStand).toBe(/var ABOUT_STAND = '([^']+)';/.exec(src)?.[1]);
-    expect(SITE_DEFAULTS.aboutStrap).toBe(/var ABOUT_STRAP = '([^']+)';/.exec(src)?.[1]);
+  it('seed the About copy from Linear SMA-6 (replaces the design ABOUT_* texts)', () => {
+    // left column: the stand; right column: the mission, then what the publication covers
+    expect(SITE_DEFAULTS.aboutStand).toBe(
+      'Welcome to blog0, the official publication of smallTech, a software company based in Bengaluru, India.',
+    );
+    const body = SITE_DEFAULTS.aboutBodyMd.split('\n\n');
+    expect(body).toEqual([...ABOUT_BODY_FULL]);
+    expect(body).toEqual([
+      "smallTech's mission is to ensure tech enables the democratisation of power not the concentration of it. On this publication, you will find articles that delve into philosophy, politics, culture and how these intersect with tech.",
+    ]);
   });
 });
 

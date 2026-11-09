@@ -70,13 +70,13 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     expect(serverConsole).toMatch(/^start over: +.*rm -rf var\/pglite-e2e var\/storage-design-e2e var\/pglite-session-secret var\/pglite-e2e\.designer-admin\.txt$/m);
   });
 
-  test('home shows Featured Editorial and the 5 seeded articles', async ({ page }) => {
+  test('home shows Featured Articles and the 5 seeded articles', async ({ page }) => {
     const res = await page.goto('/');
 
     expect(res?.status()).toBe(200);
     // Designer mode is `next dev`: the nonce CSP is production-only (src/proxy.ts) — none here.
     expect(res!.headers()['content-security-policy']).toBeUndefined();
-    await expect(page.getByRole('heading', { name: 'Featured Editorial', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Featured Articles', exact: true })).toBeVisible();
     for (const title of SEED_TITLES) {
       await expect(page.getByRole('link', { name: title }).first()).toBeAttached();
     }

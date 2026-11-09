@@ -132,7 +132,7 @@ test.describe('reader site (blog0)', () => {
     const html = await res.text();
     expect(html).toContain('blog0');
     expect(html.match(/\blog0\b/g), 'the whole word "log0" appears nowhere in the home HTML').toBeNull();
-    expect(html).toContain('Featured Editorial');
+    expect(html).toContain('Featured Articles');
 
     await page.goto('/');
     await expect(page).toHaveTitle('blog0');
@@ -146,7 +146,9 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('.sitehead .wordmark__o')).toHaveText('0');
 
     await page.locator('.site-footer').scrollIntoViewIfNeeded();
-    await expect(page.locator('.ft-copy')).toContainText(/© 2026\s+blog0/);
+    // owner review 2026-11-09: "© <year> | smallTech | Privacy", no wordmark on the copyright line
+    await expect(page.locator('.ft-copy')).toContainText(/© \d{4}\s*smallTech\s*Privacy/);
+    await expect(page.locator('.ft-copy')).not.toContainText('blog0');
     // The footer's "> end of blog0" line is gone with the strip.
     await expect(page.locator('.ft-eof, .ft-us')).toHaveCount(0);
     expect(html).not.toContain('end of blog0');
@@ -226,24 +228,24 @@ test.describe('reader site (blog0)', () => {
     }
   });
 
-  test('home: About, Featured Editorial (3 seeded, rank order), Latest newest first with See More / View all', async ({ page }) => {
+  test('home: About, Featured Articles (3 seeded, rank order), Latest newest first with See More / View all', async ({ page }) => {
     await page.goto('/');
 
     const about = page.locator('section#about');
-    await expect(about.getByRole('heading', { name: 'About Us' })).toBeVisible();
+    await expect(about.getByRole('heading', { name: 'About blog0' })).toBeVisible();
     const strap = await about.locator('.abt__strap').textContent();
     expect(strap?.trim().length ?? 0).toBeGreaterThan(5);
     expect(await about.locator('.abt__body p').count()).toBeGreaterThan(0);
 
     const featured = page.locator('section[aria-labelledby="feat-h"]');
-    await expect(featured.getByRole('heading', { name: 'Featured Editorial' })).toBeVisible();
+    await expect(featured.getByRole('heading', { name: 'Featured Articles' })).toBeVisible();
     const featuredTitles = await featured.locator('.fcard h3').evaluateAll((hs) => hs.map((h) => h.getAttribute('aria-label')));
     expect(featuredTitles).toEqual(FEATURED_ORDER);
 
     const published = await publishedArticles();
     const latestExpected = published.filter((p) => !p.is_featured).map((p) => p.title);
     const latest = page.locator('section[aria-labelledby="feed-h"]');
-    await expect(latest.getByRole('heading', { name: 'Latest', exact: true })).toBeVisible();
+    await expect(latest.getByRole('heading', { name: 'Latest Articles', exact: true })).toBeVisible();
     const latestTitles = await latest.locator('.post h3').evaluateAll((hs) => hs.map((h) => h.getAttribute('aria-label')));
     expect(latestTitles).toEqual(latestExpected.slice(0, 5));
     for (const t of FEATURED_ORDER) expect(latestTitles).not.toContain(t);

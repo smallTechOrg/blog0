@@ -16,7 +16,7 @@ import { getDb } from '@/server/db/client';
 import { DEFAULT_PRIVACY_TEXT, site } from '@/server/db/schema';
 import { bumpConsentVersion, updateNewsletterSettings } from '@/server/newsletter/settings';
 import { getCurrentSite, resetCurrentSiteForTests } from '@/server/site/current';
-import { SITE_DEFAULTS } from '@/server/site/defaults';
+import { SEED_CONSENT_TEXT, SEED_CONSENT_VERSION, SITE_DEFAULTS } from '@/server/site/defaults';
 import { getSiteSettings, upgradeLegacyBrand } from '@/server/site/service';
 
 import { data, err, ORIGIN } from '../helpers/api';
@@ -61,12 +61,12 @@ describe('GET /api/admin/site', () => {
     expect(status).toBe(200);
     const expected: SiteSettingsDto = {
       tagline: SITE_DEFAULTS.tagline,
-      contactEmail: 'hello@logzero.blog',
-      aboutStrap: 'Less noise. More signal.',
+      contactEmail: 'contact@smalltech.in',
+      aboutStrap: 'Fresh Hand-Typed Content.',
       aboutStand: SITE_DEFAULTS.aboutStand,
       aboutBodyMd: SITE_DEFAULTS.aboutBodyMd,
       socialXUrl: null,
-      socialLinkedinUrl: null,
+      socialLinkedinUrl: 'https://www.linkedin.com/company/smalltechorg/',
       privacyText: DEFAULT_PRIVACY_TEXT,
       newsletterPostalAddress: '',
       newsletter: {
@@ -74,8 +74,8 @@ describe('GET /api/admin/site', () => {
         autoSend: false,
         digestDays: 7,
         digestPosts: 3,
-        consentText: 'One issue a week at most. Unsubscribe in one click; we never share the list.',
-        consentVersion: 'v1',
+        consentText: SEED_CONSENT_TEXT,
+        consentVersion: SEED_CONSENT_VERSION,
         modeSetAt: null,
       },
     };

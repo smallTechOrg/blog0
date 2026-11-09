@@ -121,7 +121,7 @@ export function NewsletterForm({ consentText }: NewsletterFormProps) {
   return (
     <section className="ft-left" id="newsletter" aria-labelledby="nl-h">
       <h2 className="ft-h2" id="nl-h">
-        One issue a week, on what actually changed
+        Join The Movement
       </h2>
       {done ? (
         <p className="ft-done" role="status">
@@ -172,8 +172,7 @@ export function NewsletterForm({ consentText }: NewsletterFormProps) {
             </button>
           </div>
           <p className="ft-micro">
-            {consentText}{' '}
-            <Link href="/privacy">Privacy</Link>
+            {consentText} Read our <Link href="/privacy">Privacy Policy</Link>.
           </p>
           <p className="ft-st" id="nl-st" aria-live={sendFailed ? undefined : 'polite'} role={sendFailed ? 'alert' : undefined}>
             {err}

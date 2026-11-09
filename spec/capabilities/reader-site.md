@@ -52,8 +52,8 @@ link previews — pre-filled with the five smallTech articles.
 - Old design links (`/#<id>`, `/#<id>/tldr`, `/#hl=…`, `/#archive`, `/#about`) land on the
   matching real page.
 - The brand everywhere is **blog0** (wordmark with the spinning nought, footer lines,
-  titles, copyright); contact mail stays `hello@logzero.blog`; the full design About text is
-  seeded; no RSS link or feed.
+  titles, copyright); contact mail is `contact@smalltech.in` and the About text is the
+  Linear SMA-6 copy; no RSS link or feed.
 - **No boot strip and no footer `> end of blog0` line** (owner decision, UI review 2026-10-20).
   **Page typewriter (owner, 2026-10-20):** every arrival at `/`, `/archive` or `/about` (load or
   client navigation) prints the whole page — every character and placeholder, every line, box,
@@ -76,7 +76,7 @@ link previews — pre-filled with the five smallTech articles.
   database with the same seeds.
 
 ## Success Criteria
-- [ ] After `pnpm db:seed:posts`, `/` shows "Featured Editorial" with the three seeded featured titles in rank order and "Latest" with the remaining two newest first; a second run reports 0 created.
+- [ ] After `pnpm db:seed:posts`, `/` shows "Featured Articles" with the three seeded featured titles in rank order and "Latest Articles" with the remaining two newest first; a second run reports 0 created.
 - [ ] After `pnpm seed:tldr` with a real key: exactly 5 `ai_generation` rows exist (one per slug, status `succeeded`), every seeded article has a published deck of 4–8 lines each byte-identical to a sentence of its article, and a second run prints `decks: 0 seeded (0 calls)` with no new rows.
 - [ ] `pnpm seed:tldr` with no real key (integration test runs it with the key blanked in-process): 0 `ai_generation` rows, 5 published decks built from `src/server/seed/decks/*.json`, every line verbatim in its article; a fixture line deliberately mangled in the test is dropped with a logged warning and the deck still publishes.
 - [ ] The committed fixture files are valid: a unit test loads each `src/server/seed/decks/<slug>.json`, renders the matching seed post, and asserts every fixture line matches an eligible sentence exactly (a fixture drifting from the article fails the unit gate).

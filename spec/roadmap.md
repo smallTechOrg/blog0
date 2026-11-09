@@ -268,7 +268,7 @@ pnpm test:integration                     # incl. site-settings, newsletter, pub
 pnpm build && pnpm test:e2e               # tldr → reader → listen → smoke on 3411 (decks from the fixture)
 # Boot check (background tool): pnpm start   then:
 curl -fsS http://localhost:3410/api/health                                   # "dbEngine":"postgres"
-curl -fsS http://localhost:3410/ | grep -c "Featured Editorial"              # >= 1
+curl -fsS http://localhost:3410/ | grep -c "Featured Articles"              # >= 1
 curl -fsS http://localhost:3410/ | grep -ow "log0" | wc -l                   # 0
 curl -fsS http://localhost:3410/p/humans-are-software/tldr | grep -c "tdeck" # >= 1
 ```

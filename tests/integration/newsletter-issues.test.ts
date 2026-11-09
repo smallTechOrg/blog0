@@ -627,14 +627,14 @@ describe('settings and status', () => {
     await addSubscriber('c@example.test', 'confirmed');
     await addSubscriber('p@example.test', 'pending');
     const before = data((await call<NewsletterSettingsResponse>(settingsGetRoute, 'GET', '/api/admin/newsletter/settings')).env);
-    expect(before.settings).toMatchObject({ mode: 'manual', autoSend: false, digestDays: 7, digestPosts: 3, consentVersion: 'v1', modeSetAt: null });
+    expect(before.settings).toMatchObject({ mode: 'manual', autoSend: false, digestDays: 7, digestPosts: 3, consentVersion: 'v2', modeSetAt: null });
     expect(before.status.sender).toMatchObject({ kind: 'stub', configured: true, healthy: null, listId: null, lastSyncAt: null });
     expect(before.status.mail.transport).toBe('stub');
     expect(before.status.counts).toMatchObject({ confirmed: 1, pending: 1, all: 2 });
     expect(before.status.digest).toBeNull();
 
     const after = data((await settings({ mode: 'digest', autoSend: true, consentText: 'A new promise.' })).env);
-    expect(after.settings).toMatchObject({ mode: 'digest', autoSend: true, consentText: 'A new promise.', consentVersion: 'v2' });
+    expect(after.settings).toMatchObject({ mode: 'digest', autoSend: true, consentText: 'A new promise.', consentVersion: 'v3' });
     expect(after.settings.modeSetAt).not.toBeNull();
     expect(after.status.digest).toEqual({ lastIssueAt: null, newPostsSince: 0, dueAt: null });
     expect(await issueRows()).toHaveLength(0);

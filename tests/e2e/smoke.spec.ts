@@ -53,7 +53,7 @@ test('home page renders the Latest list with a non-empty linked stylesheet', asy
   const response = await page.goto('/');
 
   expect(response?.status()).toBe(200);
-  await expect(page.getByRole('heading', { name: 'Latest', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Latest Articles', exact: true })).toBeVisible();
   const hrefs = await page.locator('link[rel="stylesheet"]').evaluateAll((links) =>
     links.map((l) => (l as HTMLLinkElement).href),
   );
@@ -140,7 +140,7 @@ test('no Content Security Policy console message across home, article, deck, Lis
   const messages = collectCspMessages(page);
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Latest', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Latest Articles', exact: true })).toBeVisible();
   await page.goto(`/p/${SEEDED_ARTICLE}`);
   await expect(page.locator('.readbody')).toBeVisible();
   await page.goto(`/p/${SEEDED_ARTICLE}/tldr`);

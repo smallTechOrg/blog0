@@ -91,13 +91,13 @@ One row per tenant; v0.1 has one (`slug = BLOG0_SITE_SLUG`, default `blog0`).
 | brand_name | text not null | `blog0` |
 | wordmark | text not null | public wordmark, `blog0` (last char — the nought — spins; user decision: brand is blog0, not the design's log0) |
 | publisher_name | text not null | `smallTech` |
-| tagline | text not null | `the meaning of life, universe, and everything` |
-| contact_email | text not null | `hello@logzero.blog` (design value; divergence #13) |
-| about_strap | text not null | `Less noise. More signal.` |
-| about_stand | text not null | `A publication from smallTech on the parts of applied AI that are hard to measure and easy to oversell.` |
-| about_body_md | text not null | design `ABOUT_BODY_FULL`, paragraphs separated by blank lines |
+| tagline | text not null | `the meaning of life, universe and everything` (Linear SMA-6) |
+| contact_email | text not null | `contact@smalltech.in` (Linear SMA-6; was the design value, divergence #13) |
+| about_strap | text not null | `Fresh Hand-Typed Content.` (Linear SMA-6) |
+| about_stand | text not null | `Welcome to blog0, the official publication of smallTech, …` (Linear SMA-6; full text in `src/server/site/defaults.ts`) |
+| about_body_md | text not null | the SMA-6 About body (`ABOUT_BODY_FULL` in `src/server/site/defaults.ts`), paragraphs separated by blank lines |
 | social_x_url | text null | footer icon hidden when null |
-| social_linkedin_url | text null | footer icon hidden when null |
+| social_linkedin_url | text null | `https://www.linkedin.com/company/smalltechorg/` (owner); footer icon hidden when null |
 | timezone | text not null default `Asia/Kolkata` | public date formatting. > **Assumed:** smallTech is India-based (smalltech.in). |
 | newsletter_mode | text not null default `manual` | Phase 7 (`0002_newsletter`): check in (`per_post`,`digest`,`manual`) — `spec/capabilities/newsletter-issues.md` |
 | newsletter_auto_send | boolean not null default false | Phase 7: automatic issues are sent without a click only when true |

@@ -188,9 +188,9 @@ many requests." / "Try the link again in N minutes." No typing animation on thes
 (no typing; reduced motion honoured).
 
 ### Home `/`
-Exactly the design `Home`: About section (`Typewriter` heading "About Us", strap/stand/body typed
-on the shared clock), **Featured Editorial** pinned head + scroll stack of up to 4 `card-lead`
-cards, **Latest** (non-featured) with **See More** (batches of 5, 280 ms) and **View all
+Exactly the design `Home`: About section (`Typewriter` heading "About <wordmark>" (Linear SMA-6), strap/stand/body typed
+on the shared clock), **Featured Articles** pinned head + scroll stack of up to 4 `card-lead`
+cards, **Latest Articles** (non-featured) with **See More** (batches of 5, 280 ms) and **View all
 articles**; "That’s everything in the feed." when exhausted. Empty: `HomeEmpty` ("Nothing
 published yet." plus, when signed in, a link to the desk). Card **TLDR** (only with a published
 deck) opens the deck overlay (data from `GET /api/public/articles/:slug/tldr`); card **Listen**

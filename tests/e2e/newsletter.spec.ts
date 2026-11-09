@@ -88,8 +88,8 @@ async function settings(page: Page): Promise<NewsletterSettingsResponse> {
 
 test('footer signup → "Signup recorded" (stub); the admin shows the address Pending with its proof of consent', async ({ page }) => {
   await page.goto('/');
-  // The consent line is followed by the Privacy link (fix pass); the stored consent text is the line alone.
-  const consentShown = (await page.locator('#newsletter .ft-micro').innerText()).trim().replace(/\s*Privacy$/, '');
+  // The consent line is followed by "Read our Privacy Policy." (Linear SMA-6); the stored consent text is the line alone.
+  const consentShown = (await page.locator('#newsletter .ft-micro').innerText()).trim().replace(/\s*Read our Privacy Policy\.$/, '');
   const browserUa = await page.evaluate(() => navigator.userAgent);
 
   await signupInFooter(page, EMAIL, NAME);
@@ -224,7 +224,7 @@ test('/privacy renders the seeded draft text in the site chrome and the footer c
   expect(firstParagraph.length).toBeGreaterThan(10);
 
   await page.goto('/');
-  await page.locator('#newsletter .ft-micro').getByRole('link', { name: 'Privacy' }).click();
+  await page.locator('#newsletter .ft-micro').getByRole('link', { name: 'Privacy Policy' }).click();
   await expect(page).toHaveURL(/\/privacy$/);
   await expect(page.getByRole('heading', { level: 1, name: 'Privacy' })).toBeVisible();
   await expect(page.locator('.abt__body')).toContainText(firstParagraph);

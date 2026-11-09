@@ -247,3 +247,82 @@ html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
 /* --- Stage A: newsletter honeypot (spec/ui.md §3 "Newsletter form") ---
    off-screen, never display:none (some bots skip hidden fields). */
 .ft-hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+/* --- Owner review 2026-11-09: both wordmarks (masthead and footer) share weight 500 (the design's
+   masthead weight; the footer's was 600), the footer's letter-spacing and the masthead's size.
+   The home About standfirst is regular weight (the design set it 600). --- */
+.wordmark, .ft-logo { font-weight: 500; letter-spacing: -0.02em; }
+/* the footer wordmark matches the masthead's size (design: 56px) */
+.ft-logo { font-size: 36px; }
+@media (min-width: 768px) { .ft-logo { font-size: 46px; } } /* the masthead's breakpoint (design.css) */
+.abt__stand { font-weight: 400; }
+
+/* Owner review 2026-11-09: no rule between home sections (About, Featured, Latest); the spacing and
+   each section's own header (with its accent underline) separate them. */
+.home-sec + .home-sec { border-top: 0; }
+
+/* Owner review 2026-11-09: footer topics and contact sit side by side at every width, spread to
+   the block's two edges (the email steps down to 16px on phones so both columns fit at 360px+),
+   and the bottom line is centred. */
+.ft-cols {
+  display: grid; gap: 24px; align-items: start; text-align: left;
+  grid-template-columns: max-content minmax(0, max-content);
+  /* topics on the block's left edge, contact on its right edge */
+  justify-content: space-between;
+}
+.ft-contact { min-width: 0; }
+.ft-contact .ft-mail { font-size: clamp(14px, 4vw, 16px); overflow-wrap: anywhere; }
+.ft-cols .ft-topics { margin: 0; }
+.ft-contact .ft-mail { margin: 0 0 8px; }
+/* the 44px tap targets centre the glyph; pull the row back so the first glyph lines up with the text */
+.ft-contact .ft-icons { margin-left: -12px; justify-content: flex-start; }
+@media (min-width: 800px) {
+  /* The design pinned the right block to the bottom of a 480px grid, below the form; now both
+     start on the same line. The form flush left, the right block flush right and never narrower than its content (on
+     tablets the form gives up the difference). Between 800px and ~1100px the gaps and the email
+     size step down so the form shrinks only as much as it must. */
+  .ft-grid {
+    min-height: 0; grid-template-columns: minmax(0, 520px) max-content;
+    justify-content: space-between; column-gap: clamp(32px, 4vw, 56px);
+  }
+  /* one left edge for the wordmark and the topics; contact sits on the right edge */
+  .ft-right { align-self: start; justify-self: stretch; text-align: left; }
+  .ft-right .ft-logo { justify-content: flex-start; }
+  .ft-cols { column-gap: clamp(28px, 3.5vw, 56px); }
+  .ft-contact .ft-mail { font-size: clamp(16px, 1.6vw, 18px); white-space: nowrap; overflow-wrap: normal; }
+  .ft-right .ft-contact .ft-icons { justify-content: flex-start; }
+}
+/* From 1200px both halves fit at the full 520px, so the right block matches the form. (Letting it
+   grow below that took the space from the form: both tracks grow at the same rate.) */
+@media (min-width: 1200px) {
+  .ft-grid { grid-template-columns: minmax(0, 520px) minmax(max-content, 520px); }
+}
+.ft-bar { justify-content: center; text-align: center; }
+.ft-copy { justify-content: center; flex-wrap: wrap; }
+/* smallTech links to smalltech.in (owner review): keep the logo aligned as the old span did */
+.ft-copy a { display: inline-flex; align-items: center; transition: color 200ms var(--f-ease); }
+.ft-copy a:hover { color: var(--f-accent); }
+
+/* Owner review 2026-11-09: on the home page's About, Featured and Latest sections, everything set
+   heavier than regular drops one weight. Regular (400) text stays: it is the lightest weight loaded,
+   and a light serif would read poorly at body sizes. */
+.home-sec .sechead h2 { font-weight: 500; }                 /* section heads: 600 → 500 */
+.home-sec .abt__strap { font-weight: 400; }                 /* About strap: 500 → 400 */
+.home-sec :is(.fcard, .post) h3 { font-weight: 500; }       /* card titles: 600 → 500 */
+.home-sec .tag { font-weight: 500; }                        /* topic tags: 600 → 500 */
+.home-sec .quick__btn { font-weight: 500; }                 /* TLDR / Listen + minutes: 600 → 500 */
+.home-sec .btn-outline { font-weight: 400; }                /* See more / View all: 500 → 400 */
+
+/* Owner review 2026-11-09: the About texts (standfirst and body, on the home page and /about) one
+   step lighter than regular: Source Serif 4 Light, loaded for this in src/app/layout.tsx. */
+.abt__stand, .abt__body p, .about-stand { font-weight: 300; }
+/* …and the regular text in Featured and Latest, one step lighter too (400 → 300): card deks,
+   dates, the feed's end line and the pinned head's "↑ top" hint. */
+.home-sec :is(.fcard, .post) p, .home-sec .meta, .home-sec .feed__status, .home-sec .sechead__hint { font-weight: 300; }
+
+/* Owner review 2026-11-09: Featured cards use the same type as Latest rows (titles 20px → 21px from
+   768px, descriptions 16px at the body's 1.68); the card itself is the differentiation. The design
+   set the lead card at 26px → 29px titles and 16.5px / 1.5 descriptions. */
+.home-sec .fcard h3 { font-size: 20px; line-height: 1.22; letter-spacing: -0.022em; }
+@media (min-width: 768px) { .home-sec .fcard h3 { font-size: 21px; } }
+.home-sec .fcard p { font-size: 16px; line-height: 1.68; }

@@ -85,7 +85,7 @@ export function useAsciiHand(footRef: RefObject<HTMLElement | null>, cvRef: RefO
     function draw(t: number) {
       ctx!.clearRect(0, 0, W, H);
       ctx!.font = font;
-      ctx!.fillStyle = '#BF8938';
+      ctx!.fillStyle = '#d68a2e'; // Gold Master (src/styles/brand.css)
       for (let i = 0; i < cells.length; i++) {
         const k = cells[i];
         /* kept faint: texture behind the type, not competing with it */

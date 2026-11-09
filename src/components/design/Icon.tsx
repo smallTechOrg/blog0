@@ -20,7 +20,8 @@ export type IconName =
   | 'linkedin'
   | 'bolt'
   | 'text'
-  | 'headphones';
+  | 'headphones'
+  | 'globe';
 
 const PATHS: Record<IconName, ReactElement> = {
   search: (
@@ -74,6 +75,13 @@ const PATHS: Record<IconName, ReactElement> = {
     />
   ),
   share: <path d="M12 15V4M8.5 7.2L12 3.7l3.5 3.5M5 13.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-5.5" />,
+  // Not in the design: drawn to match (24 grid, 1.7 stroke) for the footer's publisher link.
+  globe: (
+    <>
+      <circle cx={12} cy={12} r={8.5} />
+      <path d="M3.5 12h17M12 3.5c-2.3 2.4-3.5 5.2-3.5 8.5s1.2 6.1 3.5 8.5c2.3-2.4 3.5-5.2 3.5-8.5S14.3 5.9 12 3.5z" />
+    </>
+  ),
   linkedin: (
     <>
       <rect x={3.5} y={3.5} width={17} height={17} rx={2.5} />

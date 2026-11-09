@@ -16,6 +16,9 @@ import { NewsletterForm } from './NewsletterForm';
    X / LinkedIn only when the site has their URLs, no RSS (div. 12). No
    "> end of <brand>" line (dropped with the boot strip, UI review 2026-10-20).
    ============================================================ */
+/** The publisher's website, behind the footer's globe icon. */
+const PUBLISHER_URL = 'https://smalltech.in';
+
 export interface FooterProps {
   site: SiteViewModel;
 }
@@ -40,64 +43,66 @@ export function Footer({ site }: FooterProps) {
               {tail}
             </span>
           </div>
-          {/* the real topics, each opening the archive filtered to it */}
-          {site.topics.length ? (
-            <nav aria-label="Footer topics" id="topics">
-              <ul className="ft-topics">
-                {site.topics.map((t) => (
-                  <li key={t}>
-                    <button type="button" onClick={() => router.push('/archive?topic=' + encodeURIComponent(t))}>
-                      {t}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-          ) : null}
-          <hr className="ft-dot" />
-          <p className="ft-pitch">Tips, corrections, or a pitch:</p>
-          <a className="ft-mail" href={'mailto:' + site.contactEmail}>
-            {site.contactEmail}
-          </a>
-          <ul className="ft-icons">
-            {site.socialXUrl ? (
-              <li>
-                <a href={site.socialXUrl} aria-label={site.wordmark + ' on X'} target="_blank" rel="noopener noreferrer">
-                  <Icon name="x" size={20} />
-                </a>
-              </li>
+          {/* Topics and contact side by side (owner review 2026-11-09): one compact row, not a stack. */}
+          <div className="ft-cols">
+            {/* the real topics, each opening the archive filtered to it */}
+            {site.topics.length ? (
+              <nav aria-label="Footer topics" id="topics">
+                <ul className="ft-topics">
+                  {site.topics.map((t) => (
+                    <li key={t}>
+                      <button type="button" onClick={() => router.push('/archive?topic=' + encodeURIComponent(t))}>
+                        {t}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
             ) : null}
-            {site.socialLinkedinUrl ? (
-              <li>
-                <a
-                  href={site.socialLinkedinUrl}
-                  aria-label={site.wordmark + ' on LinkedIn'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Icon name="linkedin" size={20} />
-                </a>
-              </li>
-            ) : null}
-            <li>
-              <a href={'mailto:' + site.contactEmail} aria-label={'Email ' + site.wordmark}>
-                <Icon name="mail" size={20} />
+            <div className="ft-contact">
+              <p className="ft-pitch">Want to reach out?</p>
+              <a className="ft-mail" href={'mailto:' + site.contactEmail}>
+                {site.contactEmail}
               </a>
-            </li>
-          </ul>
+              <ul className="ft-icons">
+                {site.socialLinkedinUrl ? (
+                  <li>
+                    <a
+                      href={site.socialLinkedinUrl}
+                      aria-label={site.publisherName + ' on LinkedIn'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Icon name="linkedin" size={20} />
+                    </a>
+                  </li>
+                ) : null}
+                <li>
+                  <a href={PUBLISHER_URL} aria-label={site.publisherName + ' website'} target="_blank" rel="noopener noreferrer">
+                    <Icon name="globe" size={20} />
+                  </a>
+                </li>
+                {site.socialXUrl ? (
+                  <li>
+                    <a href={site.socialXUrl} aria-label={site.wordmark + ' on X'} target="_blank" rel="noopener noreferrer">
+                      <Icon name="x" size={20} />
+                    </a>
+                  </li>
+                ) : null}
+              </ul>
+            </div>
+          </div>
         </section>
       </div>
       <div className="ft-bar">
         <p className="ft-copy">
-          <span>
-            {'© ' + site.year + ' '}
-            <b>{' ' + site.wordmark}</b>
-          </span>
+          {/* owner review 2026-11-09: no wordmark here, the footer already carries it */}
+          <span>{'© ' + site.year}</span>
           <i aria-hidden="true" />
-          <span>
+          <a href={PUBLISHER_URL} target="_blank" rel="noopener noreferrer">
             <span className="brandmark__logo" aria-hidden="true" />
             {site.publisherName}
-          </span>
+          </a>
           <i aria-hidden="true" />
           <Link href="/privacy">Privacy</Link>
         </p>

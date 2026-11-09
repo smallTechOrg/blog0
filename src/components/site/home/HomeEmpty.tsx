@@ -6,7 +6,7 @@ export function HomeEmpty({ signedIn }: { signedIn: boolean }) {
   return (
     <section className="home-sec" aria-labelledby="feed-h">
       <div className="sechead">
-        <h2 id="feed-h">Latest</h2>
+        <h2 id="feed-h">Latest Articles</h2>
       </div>
       <div className="feed__cta">
         <p className="feed__status" aria-live="polite">

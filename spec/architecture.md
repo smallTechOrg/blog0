@@ -2014,8 +2014,8 @@ timings, copy). Numbers are stable (other files cite them).
 7. **TLDR selection** (user): Jev picks 4–8 lines server-side; writers may hand-edit and reorder; the design heuristic is not ported. **Phase 8 (user):** Jev is the OpenRouter decisions model `typesafe/jev-1.13`; it scores every eligible sentence and the top k (k = 4–8 by length) form the deck in document order; per-line reasons are removed — the editor shows each line's relevance score instead and sorts the sentence picker by it. The reader-facing disclosure copy (divergence 8) is unchanged: "Lines selected by Jev (AI), verbatim from the article."
 9. **Listen without a recording**: the capsule's Listen (and the deck's mode-switcher Listen) stays visible but **disabled** with `title="No recording yet"` / `aria-label="Listen — no recording yet"` (same treatment as TLDR without a deck); card Listen buttons are hidden.
 12. **Footer links**: X/LinkedIn only when the site has their URLs; no RSS (user).
-13. **Contact mail**: `hello@logzero.blog` (seeded, editable in Admin → Site).
-14. **About copy**: the design's full `ABOUT_BODY_FULL` is seeded.
+13. **Contact mail**: `contact@smalltech.in` (Linear SMA-6) (seeded, editable in Admin → Site).
+14. **About copy**: the Linear SMA-6 copy is seeded (it replaced the design `ABOUT_*` texts).
 15. **Newsletter success copy**: Phase 2 used the design's "You’re in. First issue lands Thursday."; **Phase 7 amends it** to "Almost there — check your inbox and confirm." (double opt-in makes the old line false), and the line under the form becomes the site's editable consent text (default "One issue a week at most. Unsubscribe in one click; we never share the list.").
 19. **Featured**: per-article `is_featured` + `featured_rank`, stack treatment, max 4; seeded `ai-will-destroy-the-world`, `tech-company-first`, `humans-are-software`.
 20. **Seeded decks** (user): `pnpm seed:tldr` (Jev with a real key, committed fixture without); the design's paraphrased arrays are never seeded.

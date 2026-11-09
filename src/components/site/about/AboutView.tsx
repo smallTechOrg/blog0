@@ -20,7 +20,7 @@ export function AboutView({ wordmark, stand, strap, paragraphs, as = 'main' }: A
     <Tag className="col">
       <header className="pagehead">
         <h1>{'About ' + wordmark}</h1>
-        <p>{stand}</p>
+        <p className="about-stand">{stand}</p>
         <p className="abt__strap">{strap}</p>
       </header>
       <AboutBody paragraphs={paragraphs} />

@@ -5,9 +5,9 @@ import type { SiteSettingsDto } from '@/lib/api/dto';
 import { SITE_SETTINGS_LIMITS } from '@/lib/api/dto';
 
 const SAVED: SiteSettingsDto = {
-  tagline: 'the meaning of life, universe, and everything',
-  contactEmail: 'hello@logzero.blog',
-  aboutStrap: 'Less noise. More signal.',
+  tagline: 'the meaning of life, universe and everything',
+  contactEmail: 'contact@smalltech.in',
+  aboutStrap: 'Fresh Hand-Typed Content.',
   aboutStand: 'A publication from smallTech.',
   aboutBodyMd: 'One.\n\nTwo.',
   socialXUrl: null,

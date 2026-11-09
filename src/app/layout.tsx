@@ -13,15 +13,17 @@ import '@/styles/index.css';
 // per-request CSP nonce on the request (`x-nonce`); the theme script carries it so it still runs
 // before first paint under the strict script policy (spec/architecture.md §6).
 
-const head = Space_Grotesk({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--nf-head', display: 'swap' });
+// 300 (all three families): the home page's About, Featured and Latest text one step lighter
+// (owner review 2026-11-09; src/styles/additions.css).
+const head = Space_Grotesk({ subsets: ['latin'], weight: ['300', '400', '500', '600', '700'], variable: '--nf-head', display: 'swap' });
 const body = Source_Serif_4({
   subsets: ['latin'],
-  weight: ['400', '600'],
+  weight: ['300', '400', '600'],
   style: ['normal', 'italic'],
   variable: '--nf-body',
   display: 'swap',
 });
-const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--nf-mono', display: 'swap' });
+const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['300', '400', '500'], variable: '--nf-mono', display: 'swap' });
 
 export const metadata: Metadata = {
   title: 'blog0',

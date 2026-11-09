@@ -125,7 +125,7 @@ describe('POST /api/newsletter — double opt-in signup (happy path)', () => {
 
     const events = await eventsOf('a@b.com');
     expect(events.map((e) => e.kind)).toEqual(['signup', 'confirmation_sent']);
-    expect(events[0]).toMatchObject({ source: 'footer', userAgent: UA, ip: null, details: { sourceUrl: '/p/humans-are-software', consentVersion: 'v1' } });
+    expect(events[0]).toMatchObject({ source: 'footer', userAgent: UA, ip: null, details: { sourceUrl: '/p/humans-are-software', consentVersion: 'v2' } });
     expect(events[1].details).toEqual({ outcome: 'stubbed', transport: 'stub' });
 
     const messages = await messagesTo('a@b.com');
@@ -145,7 +145,7 @@ describe('POST /api/newsletter — double opt-in signup (happy path)', () => {
     const mail = logs.find('newsletter.mail')[0];
     expect(mail).toMatchObject({ transport: 'stub', outcome: 'stubbed', kind: 'confirmation', to_masked: 'a***@b.com' });
     expect(JSON.stringify(logs.find('newsletter.signup'))).not.toContain('a@b.com');
-    expect(logs.find('newsletter.signup')[0]).toMatchObject({ outcome: 'pending_created', source_url: '/p/humans-are-software', consent_version: 'v1' });
+    expect(logs.find('newsletter.signup')[0]).toMatchObject({ outcome: 'pending_created', source_url: '/p/humans-are-software', consent_version: 'v2' });
   });
 
   it('records the real client IP only with a trusted proxy', async () => {

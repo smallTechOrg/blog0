@@ -38,7 +38,7 @@ export function LatestFeed({ posts }: LatestFeedProps) {
   return (
     <section className="home-sec" aria-labelledby="feed-h">
       <div className="sechead">
-        <h2 id="feed-h">Latest</h2>
+        <h2 id="feed-h">Latest Articles</h2>
       </div>
       {posts.slice(0, count).map((p) => (
         <PostCard key={p.slug} post={p} />

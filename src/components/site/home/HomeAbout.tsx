@@ -10,16 +10,18 @@ import { Typewriter } from '@/components/design/Typewriter';
    block takes its full height immediately.
    ============================================================ */
 export interface HomeAboutProps {
+  /** The heading reads "About <wordmark>", like the /about page. */
+  wordmark: string;
   strap: string;
   stand: string;
   bodyParagraphs: string[];
 }
 
-export function HomeAbout({ strap, stand, bodyParagraphs }: HomeAboutProps) {
+export function HomeAbout({ wordmark, strap, stand, bodyParagraphs }: HomeAboutProps) {
   return (
     <section className="home-sec" id="about" aria-labelledby="about-h">
       <div className="sechead">
-        <Typewriter tag="h2" id="about-h" text="About Us" />
+        <Typewriter tag="h2" id="about-h" text={'About ' + wordmark} />
       </div>
       <div className="abt">
         <div className="abt__lead">

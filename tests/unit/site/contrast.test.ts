@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 const STYLES = path.join(process.cwd(), 'src', 'styles');
 const DESIGN = readFileSync(path.join(STYLES, 'design.css'), 'utf8');
 const ADDITIONS = readFileSync(path.join(STYLES, 'additions.css'), 'utf8');
+// Linear SMA-5: the smallTech brand tokens, loaded after additions.css (src/styles/index.css).
+const BRAND = readFileSync(path.join(STYLES, 'brand.css'), 'utf8');
 
 const THEMES = {
   light: ':root',
@@ -34,7 +36,7 @@ function customProps(css: string, selector: string): Record<string, string> {
 }
 
 function effective(selector: string): Record<string, string> {
-  return { ...customProps(DESIGN, selector), ...customProps(ADDITIONS, selector) };
+  return { ...customProps(DESIGN, selector), ...customProps(ADDITIONS, selector), ...customProps(BRAND, selector) };
 }
 
 function rgb(hex: string): [number, number, number] {
@@ -80,5 +82,23 @@ describe('--faint contrast (WCAG AA, 4.5:1)', () => {
     expect(customProps(DESIGN, ':root')['--faint']).toBe('#8C8F95');
     expect(customProps(DESIGN, ':root[data-theme="dark"]')['--faint']).toBe('#857F75');
     for (const selector of Object.values(THEMES)) expect(customProps(ADDITIONS, selector)['--faint']).toBeDefined();
+  });
+});
+
+describe('brand tokens (Linear SMA-5) keep WCAG AA', () => {
+  for (const [name, selector] of Object.entries(THEMES)) {
+    it(`${name}: --text, --muted and --accent-ink ≥ 4.5:1 against --bg and --surface`, () => {
+      const vars = effective(selector);
+      for (const fg of ['--text', '--muted', '--accent-ink', '--faint']) {
+        for (const bg of ['--bg', '--surface']) {
+          expect(contrast(vars[fg], vars[bg]), `${selector} ${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
+  }
+
+  it('buttons: Terminal Ink on a Gold Master fill ≥ 4.5:1', () => {
+    const vars = effective(':root');
+    expect(contrast(vars['--on-accent'], vars['--accent'])).toBeGreaterThanOrEqual(4.5);
   });
 });
