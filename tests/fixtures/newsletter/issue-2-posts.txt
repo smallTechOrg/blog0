@@ -1,0 +1,31 @@
+blog0 — Issue #7
+
+blog0 · 2 new articles
+
+Two new pieces this week — both short. Read the archive (https://example.com/archive).
+
+———
+
+Analysis · 8 Oct 2026
+Why decks <work>
+The strongest lines, in order.
+
+The deck shows the strongest lines of the article in order. Each slide holds exactly one sentence from the text.
+
+Read: http://localhost:3410/p/why-decks
+TLDR: http://localhost:3410/p/why-decks/tldr
+
+———
+
+Perspectives · 10 Oct 2026
+Listen first
+
+Read: http://localhost:3410/p/listen-first
+Listen: http://localhost:3410/p/listen-first/listen
+
+———
+
+Unsubscribe: %%BLOG0_UNSUBSCRIBE_URL%%
+Privacy: http://localhost:3410/privacy
+%%BLOG0_CONSENT_LINE%%
+© 2026 blog0 | smallTech

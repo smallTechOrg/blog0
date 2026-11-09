@@ -1,0 +1,54 @@
+# Local-verification override of deploy/vm/docker-compose.yml (spec/architecture.md §12.7) - the VM stack
+# unchanged on this machine, nothing leaves it (`pnpm deploy:local` = deploy/local/verify.sh copies this
+# file next to the VM compose and runs deploy/vm/deploy-remote.sh against it):
+#   * `postgres` (PG17 = Cloud SQL ai-agent-db, TLS on with a throw-away cert) stands in for Cloud SQL;
+#   * `mailpit` is Listmonk's ONLY SMTP (never a real relay);
+#   * direct ports on 127.0.0.1 via compose.env: blog0 3490, Listmonk 3491 (never the dev stack's :9000/:5433
+#     nor :3410); Postgres 3494; Mailpit 3495.
+# Own project name and volumes: the dev stack `blog0` is never touched.
+name: blog0-prodlocal
+
+services:
+  postgres:
+    image: postgres:17
+    environment: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres, POSTGRES_DB: postgres }
+    # Cloud SQL requires SSL: generate a self-signed certificate, then start the stock entrypoint with ssl=on.
+    command:
+      - sh
+      - -c
+      - >-
+        mkdir -p /ssl && openssl req -new -x509 -days 2 -nodes -subj /CN=postgres -keyout /ssl/k.pem -out /ssl/c.pem
+        && chown postgres /ssl/k.pem /ssl/c.pem && chmod 600 /ssl/k.pem
+        && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/ssl/c.pem -c ssl_key_file=/ssl/k.pem -c max_connections=60
+    ports: ['127.0.0.1:3494:5432'] # host-side assertions in verify.sh
+    volumes:
+      - pgdata-local:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-init-db.sh:ro
+    healthcheck: { test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U postgres -d blog0'], interval: 3s, timeout: 3s, retries: 40 }
+
+  mailpit: # SMTP sink: UI/API on 127.0.0.1:3495
+    image: axllent/mailpit:v1.31.6 # = the root docker-compose.yml test stack
+    environment: { MP_MAX_MESSAGES: '500', TZ: Etc/UTC }
+    ports: ['127.0.0.1:3495:8025']
+    healthcheck: { test: ['CMD', '/mailpit', 'readyz'], interval: 3s, timeout: 3s, retries: 20 }
+
+  release:
+    depends_on: { postgres: { condition: service_healthy } }
+  seed:
+    depends_on: { postgres: { condition: service_healthy } }
+  listmonk-install:
+    depends_on: { postgres: { condition: service_healthy } }
+  blog0:
+    depends_on: { postgres: { condition: service_healthy } }
+  scheduler:
+    depends_on: { postgres: { condition: service_healthy } }
+    volumes:
+      - media-backup-local:/backup/media # MEDIA_BACKUP_DEST=/backup/media (verify.sh rewrites it in compose.env)
+  listmonk:
+    depends_on:
+      postgres: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
+
+volumes:
+  pgdata-local: {}
+  media-backup-local: {}

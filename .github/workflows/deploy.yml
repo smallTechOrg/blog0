@@ -1,0 +1,212 @@
+# blog0 deploy as code (spec/architecture.md §12.7; docs/deploy-gcp.md). Build on GitHub Actions (never on
+# the VM, never Cloud Build) -> push to Artifact Registry -> ship env + compose over an IAP SSH tunnel ->
+# deploy/vm/deploy-remote.sh on blog0-vm (migrations, seed, Listmonk, `compose up`; containers restart,
+# the VM does not). Auth = Workload Identity Federation as blog0-deployer (no keys). The VM env files are
+# rendered here from repository secrets/variables (set by `bash infra/bootstrap.sh`) and deleted from the
+# runner and the VM afterwards. Rollback = run this workflow (workflow_dispatch) at an earlier ref.
+name: deploy
+
+on:
+  push:
+    branches: [main, feature/blog0-20261012-1519-v0.1]
+    paths-ignore:
+      - 'docs/**'
+      - 'spec/**'
+      - '**.md'
+      - 'NOTES.md'
+      - 'infra/**' # infrastructure changes are provision.yml's
+      - '.github/workflows/provision.yml'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: blog0-deploy
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GCP_ZONE: ${{ vars.GCP_ZONE }}
+  GCP_INSTANCE: ${{ vars.GCP_INSTANCE }}
+  AR_REPO: ${{ vars.AR_REPO }}
+  SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+  STAGE: /tmp/blog0-stage
+
+jobs:
+  deploy:
+    name: build, ship, deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the repository variables
+        run: |
+          missing=""
+          for v in GCP_PROJECT GCP_REGION GCP_ZONE GCP_INSTANCE AR_REPO SITE_DOMAIN GCP_WIF_PROVIDER GCP_DEPLOYER_SA; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::repository variables not set:$missing - run 'bash infra/bootstrap.sh' first (docs/deploy-gcp.md)"
+            exit 1
+          fi
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_DEPLOYER_SA: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: The VM must exist and be RUNNING
+        run: |
+          status="$(gcloud compute instances describe "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --format='value(status)' 2>/dev/null || true)"
+          if [ "$status" != "RUNNING" ]; then
+            echo "::error::VM ${GCP_INSTANCE} is '${status:-missing}', not RUNNING - run the 'provision' workflow first (docs/deploy-gcp.md)"
+            exit 1
+          fi
+          echo "VM ${GCP_INSTANCE}: RUNNING"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" -q
+
+      - name: Image names
+        id: img
+        run: |
+          base="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${AR_REPO}"
+          echo "app=${base}/blog0" >>"$GITHUB_OUTPUT"
+          echo "scheduler=${base}/blog0-scheduler" >>"$GITHUB_OUTPUT"
+
+      - name: Build + push the app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: app
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.img.outputs.app }}:${{ github.sha }}
+            ${{ steps.img.outputs.app }}:latest
+          cache-from: type=gha,scope=blog0
+          cache-to: type=gha,scope=blog0,mode=max
+
+      - name: Build + push the scheduler image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: scheduler
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.img.outputs.scheduler }}:${{ github.sha }}
+            ${{ steps.img.outputs.scheduler }}:latest
+          cache-from: type=gha,scope=blog0
+          cache-to: type=gha,scope=blog0,mode=max
+
+      - name: Render the VM env files (from secrets; never printed)
+        env:
+          BACKUP_BUCKET: ${{ vars.BACKUP_BUCKET }}
+          CLOUDSQL_PRIVATE_IP: ${{ vars.CLOUDSQL_PRIVATE_IP }}
+          BLOG0_SESSION_SECRET: ${{ secrets.BLOG0_SESSION_SECRET }}
+          BLOG0_UNSUBSCRIBE_SECRET: ${{ secrets.BLOG0_UNSUBSCRIBE_SECRET }}
+          BLOG0_NEWSLETTER_WEBHOOK_SECRET: ${{ secrets.BLOG0_NEWSLETTER_WEBHOOK_SECRET }}
+          BLOG0_OPENROUTER_API_KEY: ${{ secrets.BLOG0_OPENROUTER_API_KEY }}
+          BLOG0_JEV_MODEL: ${{ secrets.BLOG0_JEV_MODEL }}
+          BLOG0_DB_OWNER_PASSWORD: ${{ secrets.BLOG0_DB_OWNER_PASSWORD }}
+          BLOG0_DB_APP_PASSWORD: ${{ secrets.BLOG0_DB_APP_PASSWORD }}
+          LISTMONK_DB_PASSWORD: ${{ secrets.LISTMONK_DB_PASSWORD }}
+          LISTMONK_ADMIN_USER: ${{ secrets.LISTMONK_ADMIN_USER }}
+          LISTMONK_ADMIN_PASSWORD: ${{ secrets.LISTMONK_ADMIN_PASSWORD }}
+          BLOG0_ADMIN_EMAIL: ${{ secrets.BLOG0_ADMIN_EMAIL }}
+          BLOG0_ADMIN_NAME: ${{ secrets.BLOG0_ADMIN_NAME }}
+          BLOG0_ADMIN_PASSWORD: ${{ secrets.BLOG0_ADMIN_PASSWORD }}
+          BLOG0_SMTP_HOST: ${{ secrets.BLOG0_SMTP_HOST }}
+          BLOG0_SMTP_PORT: ${{ secrets.BLOG0_SMTP_PORT }}
+          BLOG0_SMTP_USER: ${{ secrets.BLOG0_SMTP_USER }}
+          BLOG0_SMTP_PASS: ${{ secrets.BLOG0_SMTP_PASS }}
+          BLOG0_SMTP_FROM: ${{ secrets.BLOG0_SMTP_FROM }}
+          BLOG0_HEARTBEAT_BACKUP_URL: ${{ secrets.BLOG0_HEARTBEAT_BACKUP_URL }}
+          BLOG0_HEARTBEAT_TICK_URL: ${{ secrets.BLOG0_HEARTBEAT_TICK_URL }}
+        run: |
+          set +x
+          umask 077
+          # Secrets are masked by Actions; mask the derived identifiers too.
+          for v in BLOG0_SMTP_USER BLOG0_ADMIN_EMAIL BLOG0_SMTP_FROM; do
+            [ -z "${!v}" ] || echo "::add-mask::${!v}"
+          done
+          mkdir -p "${RUNNER_TEMP}/blog0-env"
+          bash deploy/vm/render-env.sh "${RUNNER_TEMP}/blog0-env" "${GITHUB_SHA}"
+          install -m 0600 deploy/vm/docker-compose.yml deploy/vm/deploy-remote.sh deploy/listmonk-api.sh deploy/listmonk-settings.sh "${RUNNER_TEMP}/blog0-env/"
+
+      - name: Ship to the VM (IAP tunnel)
+        run: |
+          ssh_flags=(--zone "$GCP_ZONE" --project "$GCP_PROJECT" --tunnel-through-iap --quiet --strict-host-key-checking=no)
+          gcloud compute ssh "$GCP_INSTANCE" "${ssh_flags[@]}" --command "umask 077 && mkdir -p ${STAGE} && rm -f ${STAGE}/*"
+          cd "${RUNNER_TEMP}/blog0-env"
+          gcloud compute scp "${ssh_flags[@]}" docker-compose.yml compose.env blog0.env release.env listmonk.env \
+            deploy-remote.sh listmonk-api.sh listmonk-settings.sh "${GCP_INSTANCE}:${STAGE}/"
+          cp "${GITHUB_WORKSPACE}/scripts/deploy-smoke.sh" ./deploy-smoke.sh
+          gcloud compute scp "${ssh_flags[@]}" deploy-smoke.sh "${GCP_INSTANCE}:/tmp/blog0-deploy-smoke.sh"
+
+      - name: Deploy on the VM
+        run: |
+          gcloud compute ssh "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --tunnel-through-iap --quiet \
+            --strict-host-key-checking=no --command "sudo bash ${STAGE}/deploy-remote.sh ${GITHUB_SHA}" | tee "${RUNNER_TEMP}/deploy-remote.log"
+
+      - name: Remove the rendered env files from the runner
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/blog0-env"
+
+      - name: Smoke on the VM (direct ports)
+        run: |
+          gcloud compute ssh "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --tunnel-through-iap --quiet \
+            --strict-host-key-checking=no \
+            --command "bash /tmp/blog0-deploy-smoke.sh --direct http://127.0.0.1:3410; rc=\$?; rm -f /tmp/blog0-deploy-smoke.sh; exit \$rc"
+
+      - name: Public smoke + summary
+        run: |
+          cert_status="$(gcloud compute ssl-certificates describe blog0-cert-v2 --global --project "$GCP_PROJECT" --format='value(managed.status)' 2>/dev/null || echo 'not created')"
+          domain_status="$(gcloud compute ssl-certificates describe blog0-cert-v2 --global --project "$GCP_PROJECT" --format=json 2>/dev/null | jq -r '.managed.domainStatus // {} | to_entries | map("\(.key)=\(.value)") | join(", ")' || true)"
+          lb_ip="$(gcloud compute forwarding-rules describe zero-vanguard-fr-https --global --project "$GCP_PROJECT" --format='value(IPAddress)' 2>/dev/null || true)"
+          lb_ip="${lb_ip:-34.8.199.41}"
+          lb_code="$(curl -sS -k -m 20 -o /dev/null -w '%{http_code}' --resolve "${SITE_DOMAIN}:443:${lb_ip}" "https://${SITE_DOMAIN}/api/health/ready" 2>/dev/null || echo 000)"
+          echo "LB-facing check (--resolve ${SITE_DOMAIN}:443:${lb_ip}, -k): /api/health/ready -> ${lb_code} (informational)"
+          public="skipped"
+          if [ "$cert_status" = "ACTIVE" ]; then
+            ok=0
+            for i in 1 2 3 4 5 6; do
+              if bash scripts/deploy-smoke.sh "https://${SITE_DOMAIN}"; then ok=1; break; fi
+              echo "public smoke attempt ${i} failed; retrying in 20 s"
+              sleep 20
+            done
+            if [ "$ok" != 1 ]; then echo "::error::public smoke failed against the live domains"; public="FAILED"; else public="PASS"; fi
+          else
+            echo "waiting on DNS/cert (status: ${cert_status}${domain_status:+; ${domain_status}}) - the VM-local smoke above passed; add the GoDaddy A record (${SITE_DOMAIN}) -> ${lb_ip} (docs/deploy-gcp.md)"
+          fi
+          mem="$(grep -E '^ *(Mem|Swap):' "${RUNNER_TEMP}/deploy-remote.log" | sed 's/^ *//' || true)"
+          {
+            echo "## blog0 deploy"
+            echo ""
+            echo "- sha: \`${GITHUB_SHA}\`"
+            echo "- site: https://${SITE_DOMAIN}  |  Listmonk public paths: https://${SITE_DOMAIN}/lm"
+            echo "- certificate blog0-cert-v2: \`${cert_status}\` ${domain_status}"
+            echo "- LB IP: ${lb_ip} (LB-facing /api/health/ready -> ${lb_code})"
+            echo "- public smoke: ${public}"
+            echo ""
+            echo "Memory headroom on the VM (\`free -m\`):"
+            echo '```'
+            echo "${mem:-n/a}"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          [ "$public" != "FAILED" ]

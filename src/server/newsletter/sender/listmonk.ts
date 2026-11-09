@@ -1,0 +1,662 @@
+import 'server-only';
+
+import type { ListmonkConfig } from '@/server/config';
+import { log, maskEmail } from '@/server/log';
+
+import {
+  CONSENT_PLACEHOLDER,
+  SenderError,
+  UNSUBSCRIBE_PLACEHOLDER,
+  type NewsletterSender,
+  type SenderHealth,
+  type SenderIssue,
+  type SenderStats,
+  type SenderSubscriber,
+  type SenderSuppression,
+  type SenderSyncResult,
+  type ProviderDeleteOutcome,
+  type ProviderDeleteTarget,
+} from './types';
+import { providerOptOutWins } from './opt-out';
+import { isPublicUrl } from './public-host';
+
+// Listmonk adapter (spec/architecture.md §13.3; Listmonk v5.1.0, API-user token auth).
+// Plain `fetch`, 15 s timeout per call, one retry on network error / 5xx after 500 ms; every call
+// logs `newsletter.provider` (method, path, status, ms — never the token, never a full email).
+// Verified against v5.1.0: duplicate POST /api/subscribers → 409; an unknown campaign/list → 400;
+// starting a running campaign → 400 ("Only paused campaigns and drafts can be started"), hence
+// the status read in `sendIssue`; re-enabling a blocklisted subscriber leaves its list
+// subscription `unsubscribed`, hence the membership re-add in `syncSubscriber`. An unsubscribe on
+// Listmonk's side (List-Unsubscribe header / its unsubscribe page) only sets the list subscription
+// `unsubscribed` (subscriber stays `enabled`, `subscription_updated_at` = the opt-out time); that is
+// an opt-out too: `fetchSuppressions` reports it and `syncSubscriber` never re-adds over it unless
+// blog0's consent / confirmation is newer (sender/opt-out.ts).
+
+export const BLOG0_TEMPLATE_NAME = 'blog0-issue';
+/** The issue HTML verbatim, then Listmonk's open-tracking pixel (`{{ TrackView }}` prints the `<img>`;
+ *  verified v5.1.0). `#ensureTemplate` rewrites an existing `blog0-issue` template whose body differs. */
+export const BLOG0_TEMPLATE_BODY = '{{ template "content" . }}\n{{ TrackView }}';
+export const UNSUBSCRIBE_EXPRESSION = '{{ .Subscriber.Attribs.blog0_unsubscribe_url }}';
+export const CONSENT_EXPRESSION = '{{ .Subscriber.Attribs.blog0_consent_line }}';
+/** Attribute blog0 stamps on every blocklist IT makes (mirror of a blog0 suppression). Such a
+ *  blocklist is blog0's own state, not a provider opt-out: it never overrides a later blog0
+ *  confirmation and is never pulled back by `fetchSuppressions` — no cross-clock comparison needed.
+ *  A re-enable writes the blog0 attribs, which drops it. */
+export const BLOG0_BLOCKLIST_MARKER = 'blog0_blocklisted_at';
+
+const TIMEOUT_MS = 15_000;
+const RETRY_BACKOFF_MS = 500;
+/** Stage A: how long a `trackingPublic` answer is reused (per process). */
+export const TRACKING_CACHE_MS = 10 * 60 * 1000;
+
+/**
+ * Listmonk runs subject, body and altbody through Go's text/template: a literal `{{` / `}}` in blog0's
+ * rendered text (a post title such as "Templating with {{ x }}") would be parsed as an action. One
+ * regex pass turns each delimiter into an action that prints it (`{{ "{{" }}`, `{{ "}}" }}`); the
+ * inserted text is never re-scanned.
+ */
+export function escapeGoTemplate(text: string): string {
+  return text.replace(/\{\{|\}\}/g, (m) => (m === '{{' ? '{{ "{{" }}' : '{{ "}}" }}'));
+}
+
+/** blog0 placeholders (§13.4) → Listmonk template expressions over the subscriber attributes, after
+ *  escaping every literal template delimiter already in the body. */
+export function toListmonkExpressions(body: string): string {
+  return escapeGoTemplate(body).split(UNSUBSCRIBE_PLACEHOLDER).join(UNSUBSCRIBE_EXPRESSION).split(CONSENT_PLACEHOLDER).join(CONSENT_EXPRESSION);
+}
+
+/** Paths whose links are never click-tracked: the unsubscribe page / one-click endpoint (links.ts) and
+ *  the privacy page. A path ending in one of these also matches under a base path. */
+const UNTRACKED_PATH = /(?:\/newsletter\/unsubscribe|\/api\/newsletter\/unsubscribe|\/privacy)\/?$/i;
+const TRACK_SUFFIX = '@TrackLink';
+
+function decodeHtmlAttr(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|#39|#x27);/gi, (_, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", '#x27': "'" })[e.toLowerCase()] ?? _);
+}
+
+/** True for an absolute http(s) URL that is a content link (not unsubscribe / privacy). */
+function isTrackable(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  try {
+    return !UNTRACKED_PATH.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Click tracking for the body sent to Listmonk only (the stored / previewed issue and the stub stay
+ * untracked): every `href` holding an absolute http(s) content link becomes `{{ TrackLink "<url>" }}`
+ * (the URL HTML-decoded and written as a Go string literal, so `&amp;`, quotes and braces survive —
+ * the `url@TrackLink` shorthand would keep `&amp;` in the redirect target). Unsubscribe and privacy
+ * links, `mailto:`, relative / anchor hrefs and template expressions are left alone. Idempotent: a
+ * TrackLink expression is not an http URL, and a `url@TrackLink` href is normalised once.
+ */
+export function trackLinks(html: string, action: (url: string) => string = trackLinkAction): string {
+  return html.replace(/\bhref=(["'])(.*?)\1/gi, (whole, quote: string, raw: string) => {
+    let url = decodeHtmlAttr(raw.trim());
+    if (url.endsWith(TRACK_SUFFIX)) url = url.slice(0, -TRACK_SUFFIX.length);
+    if (!isTrackable(url)) return whole;
+    return `href=${quote}${action(url)}${quote}`;
+  });
+}
+
+function trackLinkAction(url: string): string {
+  return `{{ TrackLink ${JSON.stringify(url)} }}`;
+}
+
+/** The campaign HTML for Listmonk: content links tracked, author braces escaped, placeholders →
+ *  expressions. Tracked hrefs are tokens during the escape pass so their TrackLink actions are never
+ *  escaped (and author text that merely looks like one is). */
+export function toListmonkCampaignBody(html: string): string {
+  const actions: string[] = [];
+  const tokenised = trackLinks(html, (url) => {
+    actions.push(trackLinkAction(url));
+    return `%%BLOG0_TRACK_${actions.length - 1}%%`;
+  });
+  return toListmonkExpressions(tokenised).replace(/%%BLOG0_TRACK_(\d+)%%/g, (token, n: string) => actions[Number(n)] ?? token);
+}
+
+/** Address-shaped runs, plain or percent-encoded (`a%40b.c`). */
+const EMAIL_LIKE = /[^\s'"<>()=&?@]+(?:@|%40)[^\s'"<>()&?@]+/gi;
+
+/** The request path without its query string — the query can carry a subscriber's address. */
+export function safePath(path: string): string {
+  return path.replace(/\?.*$/, '');
+}
+
+/** Drops anything address-shaped from provider text (an error message may echo the query). */
+export function redactEmails(text: string): string {
+  return text.replace(EMAIL_LIKE, '[email]');
+}
+
+/** Single-quoted SQL literal for Listmonk's `query=` filter (it is passed to Postgres as-is). */
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+interface ListmonkListRef {
+  id: number;
+  name?: string;
+  subscription_status?: string;
+  subscription_updated_at?: string;
+}
+
+interface ListmonkSubscriber {
+  id: number;
+  email: string;
+  name: string;
+  status: 'enabled' | 'disabled' | 'blocklisted';
+  attribs: Record<string, unknown>;
+  lists: ListmonkListRef[];
+  updated_at: string;
+}
+
+interface ListmonkCampaign {
+  id: number;
+  status: 'draft' | 'scheduled' | 'running' | 'paused' | 'cancelled' | 'finished';
+  to_send: number;
+  sent: number;
+  views: number;
+  clicks: number;
+  bounces: number;
+  body: string;
+}
+
+interface ListmonkBounce {
+  id: number;
+  email: string;
+  type: 'hard' | 'soft' | 'complaint';
+  source: string;
+  created_at: string;
+  campaign?: { id?: number; name?: string } | null;
+  meta?: unknown;
+}
+
+interface ListmonkTemplate {
+  id: number;
+  name: string;
+  type: string;
+  body?: string;
+}
+
+interface Paged<T> {
+  results: T[];
+  total: number;
+}
+
+type Json = Record<string, unknown> | unknown[] | string | number | boolean | null;
+
+interface CallOptions {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  path: string;
+  body?: Json;
+  /** Statuses returned to the caller as `{ status, data: null }` instead of throwing. */
+  tolerate?: number[];
+  /** Per-call timeout (default 15 s). */
+  timeoutMs?: number;
+  /** false → a single attempt (no retry on network error / 5xx). */
+  retry?: boolean;
+}
+
+interface CallResult<T> {
+  status: number;
+  data: T;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (isJsonObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function parseDate(value: string | undefined): Date | null {
+  if (value === undefined || value === '') return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** A blocklist blog0 made itself (it carries BLOG0_BLOCKLIST_MARKER). */
+export function isBlog0Blocklist(row: { attribs?: Record<string, unknown> | null }): boolean {
+  const v = row.attribs?.[BLOG0_BLOCKLIST_MARKER];
+  return typeof v === 'string' && v !== '';
+}
+
+/**
+ * The opt-out a Listmonk subscriber carries for `listId`, or null (a blocklist blog0 made itself is
+ * not a provider opt-out — blog0 already holds that suppression): `blocklisted` (at = the later of
+ * the subscriber's `updated_at` and the list subscription's `subscription_updated_at`), else a
+ * list-level `unsubscribed` subscription (at = `subscription_updated_at`).
+ */
+export function listmonkOptOut(
+  row: Pick<ListmonkSubscriber, 'status' | 'updated_at' | 'lists'> & { attribs?: Record<string, unknown> | null },
+  listId: number,
+): { kind: 'blocklisted' | 'list_unsubscribed'; at: Date } | null {
+  if (row.status === 'blocklisted' && isBlog0Blocklist(row)) return null;
+  const membership = row.lists.find((l) => l.id === listId);
+  const subscriptionAt = membership?.subscription_status === 'unsubscribed' ? parseDate(membership.subscription_updated_at) : null;
+  if (row.status === 'blocklisted') {
+    const updatedAt = parseDate(row.updated_at);
+    const times = [updatedAt, subscriptionAt].filter((d): d is Date => d !== null).map((d) => d.getTime());
+    // No usable timestamp → an invalid Date, which providerOptOutWins treats as "the opt-out wins" (fail safe).
+    return { kind: 'blocklisted', at: times.length > 0 ? new Date(Math.max(...times)) : new Date(Number.NaN) };
+  }
+  if (membership?.subscription_status === 'unsubscribed') {
+    return { kind: 'list_unsubscribed', at: subscriptionAt ?? new Date(Number.NaN) };
+  }
+  return null;
+}
+
+export class ListmonkSender implements NewsletterSender {
+  readonly kind = 'listmonk' as const;
+  readonly #baseUrl: string;
+  readonly #auth: string;
+  readonly #listId: number;
+  #templateId: number | null = null;
+  #tracking: { value: boolean; at: number } | null = null;
+
+  constructor(config: ListmonkConfig) {
+    this.#baseUrl = config.url.replace(/\/+$/, '');
+    this.#auth = `token ${config.apiUser}:${config.apiToken.reveal()}`;
+    this.#listId = config.listId;
+  }
+
+  get listId(): number {
+    return this.#listId;
+  }
+
+  // --- HTTP --------------------------------------------------------------------------------------
+
+  async #call<T>(options: CallOptions): Promise<CallResult<T>> {
+    const { method, path, body, tolerate = [], timeoutMs = TIMEOUT_MS, retry = true } = options;
+    const url = `${this.#baseUrl}${path}`;
+    // Every message / log line below names the path WITHOUT its query (B1: `?query=subscribers.email=…`
+    // carries an address; SenderError messages reach logs, `last_error` and stderr).
+    const shown = safePath(path);
+    const started = Date.now();
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method,
+          headers: {
+            authorization: this.#auth,
+            accept: 'application/json',
+            ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+          cache: 'no-store',
+        });
+      } catch (error) {
+        const timedOut = error instanceof Error && error.name === 'TimeoutError';
+        if (attempt === 1 && retry) {
+          this.#logCall(method, path, null, started, attempt, 'retry', error);
+          await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+          continue;
+        }
+        this.#logCall(method, path, null, started, attempt, 'failed', error);
+        throw new SenderError(
+          timedOut ? 'TIMEOUT' : 'UNAVAILABLE',
+          timedOut
+            ? `Listmonk did not answer ${method} ${shown} within ${timeoutMs / 1000} s`
+            : `Listmonk unreachable at ${this.#baseUrl}: ${redactEmails(error instanceof Error ? error.message : String(error))}`,
+        );
+      }
+
+      if (response.status >= 500 && attempt === 1 && retry) {
+        this.#logCall(method, path, response.status, started, attempt, 'retry');
+        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+        continue;
+      }
+
+      const text = await response.text();
+      let parsed: unknown = null;
+      if (text !== '') {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          this.#logCall(method, path, response.status, started, attempt, 'invalid');
+          throw new SenderError('INVALID', `Listmonk answered ${method} ${shown} with non-JSON (${response.status})`, response.status);
+        }
+      }
+
+      if (response.ok) {
+        this.#logCall(method, path, response.status, started, attempt, 'ok');
+        return { status: response.status, data: (isJsonObject(parsed) ? parsed.data : parsed) as T };
+      }
+      if (tolerate.includes(response.status)) {
+        this.#logCall(method, path, response.status, started, attempt, 'ok');
+        return { status: response.status, data: null as T };
+      }
+      const message = isJsonObject(parsed) && typeof parsed.message === 'string' ? parsed.message : response.statusText;
+      this.#logCall(method, path, response.status, started, attempt, 'failed');
+      throw new SenderError('HTTP', `Listmonk ${method} ${shown} → ${response.status}: ${redactEmails(message)}`, response.status);
+    }
+  }
+
+  #logCall(method: string, path: string, status: number | null, started: number, attempt: number, outcome: string, error?: unknown): void {
+    log.info('newsletter.provider', {
+      provider: 'listmonk',
+      method,
+      path: safePath(path),
+      status,
+      attempt,
+      outcome,
+      ms: Date.now() - started,
+      error: error instanceof Error ? redactEmails(error.message) : undefined,
+    });
+  }
+
+  // --- subscribers -------------------------------------------------------------------------------
+
+  async #findByEmail(email: string): Promise<ListmonkSubscriber | null> {
+    const query = encodeURIComponent(`subscribers.email=${sqlLiteral(email.toLowerCase())}`);
+    const { data } = await this.#call<Paged<ListmonkSubscriber>>({ method: 'GET', path: `/api/subscribers?query=${query}&per_page=1` });
+    const row = data?.results?.[0];
+    if (!row) return null;
+    return row.email.toLowerCase() === email.toLowerCase() ? row : null;
+  }
+
+  #membershipConfirmed(row: ListmonkSubscriber): boolean {
+    return row.lists.some((l) => l.id === this.#listId && l.subscription_status === 'confirmed');
+  }
+
+  /** Blocklist (one PUT: status + the blog0 marker; existing memberships are passed through untouched —
+   *  Listmonk itself marks them `unsubscribed` on a blocklist). */
+  async #blocklist(existing: ListmonkSubscriber): Promise<void> {
+    await this.#call({
+      method: 'PUT',
+      path: `/api/subscribers/${existing.id}`,
+      body: {
+        email: existing.email,
+        name: existing.name,
+        status: 'blocklisted',
+        lists: existing.lists.map((l) => l.id),
+        attribs: { ...existing.attribs, [BLOG0_BLOCKLIST_MARKER]: new Date().toISOString() },
+      },
+    });
+  }
+
+  async #ensureMembership(id: number): Promise<void> {
+    await this.#call({
+      method: 'PUT',
+      path: '/api/subscribers/lists',
+      body: { ids: [id], action: 'add', target_list_ids: [this.#listId], status: 'confirmed' },
+    });
+  }
+
+  async syncSubscriber(s: SenderSubscriber): Promise<SenderSyncResult> {
+    const existing = await this.#findByEmail(s.email);
+
+    if (s.status === 'blocklisted') {
+      // A suppressed blog0 row: blocklist only — never create or touch a list membership.
+      if (existing === null) {
+        const { data } = await this.#call<ListmonkSubscriber>({
+          method: 'POST',
+          path: '/api/subscribers',
+          body: { email: s.email, name: s.name ?? '', status: 'blocklisted', lists: [], attribs: { ...s.attribs, [BLOG0_BLOCKLIST_MARKER]: new Date().toISOString() } },
+        });
+        return { providerId: String(data.id), changed: true };
+      }
+      if (existing.status === 'blocklisted') return { providerId: String(existing.id), changed: false };
+      await this.#blocklist(existing);
+      return { providerId: String(existing.id), changed: true };
+    }
+
+    const body = {
+      email: s.email,
+      name: s.name ?? '',
+      status: 'enabled',
+      lists: [this.#listId],
+      attribs: s.attribs,
+      preconfirm_subscriptions: true,
+    };
+
+    if (existing === null) {
+      const { data } = await this.#call<ListmonkSubscriber>({ method: 'POST', path: '/api/subscribers', body });
+      return { providerId: String(data.id), changed: true };
+    }
+
+    // An opt-out at Listmonk newer than blog0's latest consent / confirmation wins: write nothing
+    // (no re-enable, no membership re-add) and hand it back for blog0 to record.
+    const optOut = listmonkOptOut(existing, this.#listId);
+    if (optOut !== null && providerOptOutWins(optOut.at, { consentedAt: s.attribs.consented_at, confirmedAt: s.attribs.confirmed_at })) {
+      log.info('newsletter.provider', { provider: 'listmonk', action: 'sync', email: maskEmail(s.email), providerId: String(existing.id), outcome: 'provider_opt_out', optOut: optOut.kind });
+      return {
+        providerId: String(existing.id),
+        changed: false,
+        optOut: {
+          email: existing.email,
+          reason: 'unsubscribed',
+          at: optOut.at,
+          details: { providerId: String(existing.id), providerStatus: existing.status, optOut: optOut.kind, listId: this.#listId },
+        },
+      };
+    }
+
+    // No blog0 name: Listmonk derived one from the address on create — keep it, never compare it
+    // (comparing against '' made every re-sync report `changed`; S7.3 regression).
+    if (s.name === null) body.name = existing.name;
+    const same =
+      existing.status === 'enabled' &&
+      existing.name === body.name &&
+      stableJson(existing.attribs) === stableJson(s.attribs) &&
+      this.#membershipConfirmed(existing);
+    if (same) return { providerId: String(existing.id), changed: false };
+
+    const { data } = await this.#call<ListmonkSubscriber>({ method: 'PUT', path: `/api/subscribers/${existing.id}`, body });
+    if (!this.#membershipConfirmed(data)) await this.#ensureMembership(existing.id);
+    log.info('newsletter.provider', { provider: 'listmonk', action: 'sync', email: maskEmail(s.email), providerId: String(existing.id), outcome: 'updated' });
+    return { providerId: String(existing.id), changed: true };
+  }
+
+  async removeSubscriber(email: string): Promise<{ changed: boolean }> {
+    const existing = await this.#findByEmail(email);
+    if (existing === null || existing.status === 'blocklisted') return { changed: false };
+    await this.#blocklist(existing);
+    log.info('newsletter.provider', { provider: 'listmonk', action: 'blocklist', email: maskEmail(email), providerId: String(existing.id), outcome: 'blocklisted' });
+    return { changed: true };
+  }
+
+  async findSubscriberId(email: string): Promise<string | null> {
+    const row = await this.#findByEmail(email);
+    return row === null ? null : String(row.id);
+  }
+
+  /** GET /api/subscribers/:id; Listmonk v5.1.0 answers an unknown id with 400 "… not found" (404 tolerated too). */
+  async #getById(providerId: string): Promise<ListmonkSubscriber | null> {
+    if (!/^\d+$/.test(providerId)) return null;
+    const { status, data } = await this.#call<ListmonkSubscriber | null>({ method: 'GET', path: `/api/subscribers/${providerId}`, tolerate: [400, 404] });
+    return status === 200 && data ? data : null;
+  }
+
+  /**
+   * Erasure: DELETE /api/subscribers/:id (Listmonk removes its list memberships too; campaign counters
+   * stay). The record is found by id when blog0 knows it — and, during the erase itself, only if it
+   * still carries that address — else by address. Nothing found / a 404 on the DELETE → `not_found`,
+   * which counts as done (verified v5.1.0: a DELETE of an unknown id answers 200).
+   */
+  async deleteSubscriber(target: ProviderDeleteTarget): Promise<{ outcome: ProviderDeleteOutcome; providerId: string | null }> {
+    let found: ListmonkSubscriber | null = null;
+    if (target.providerId !== null) {
+      const byId = await this.#getById(target.providerId);
+      if (byId !== null && (target.email === null || byId.email.toLowerCase() === target.email.toLowerCase())) found = byId;
+    }
+    if (found === null && target.email !== null) found = await this.#findByEmail(target.email);
+    if (found === null) {
+      log.info('newsletter.provider', { provider: 'listmonk', action: 'delete', providerId: target.providerId, outcome: 'not_found' });
+      return { outcome: 'not_found', providerId: target.providerId };
+    }
+    const providerId = String(found.id);
+    const owner = found.attribs?.blog0_subscriber_id;
+    if (target.keep !== undefined && typeof owner === 'string' && owner !== '' && (await target.keep(owner))) {
+      log.info('newsletter.provider', { provider: 'listmonk', action: 'delete', providerId, outcome: 'kept' });
+      return { outcome: 'kept', providerId };
+    }
+    const { status } = await this.#call({ method: 'DELETE', path: `/api/subscribers/${providerId}`, tolerate: [404] });
+    const outcome = status === 404 ? 'not_found' : 'deleted';
+    log.info('newsletter.provider', { provider: 'listmonk', action: 'delete', providerId, outcome });
+    return { outcome, providerId };
+  }
+
+  // --- campaigns ---------------------------------------------------------------------------------
+
+  async #ensureTemplate(): Promise<number> {
+    if (this.#templateId !== null) return this.#templateId;
+    const { data } = await this.#call<ListmonkTemplate[]>({ method: 'GET', path: '/api/templates' });
+    const found = (data ?? []).find((t) => t.name === BLOG0_TEMPLATE_NAME && t.type === 'campaign');
+    if (found) {
+      if (found.body !== BLOG0_TEMPLATE_BODY) {
+        // An older blog0 template (pre-tracking body) or a hand edit: bring it back to blog0's body.
+        await this.#call({ method: 'PUT', path: `/api/templates/${found.id}`, body: { name: BLOG0_TEMPLATE_NAME, type: 'campaign', body: BLOG0_TEMPLATE_BODY } });
+        log.info('newsletter.provider', { provider: 'listmonk', action: 'template', templateId: found.id, outcome: 'updated' });
+      }
+      this.#templateId = found.id;
+      return found.id;
+    }
+    const created = await this.#call<ListmonkTemplate>({
+      method: 'POST',
+      path: '/api/templates',
+      body: { name: BLOG0_TEMPLATE_NAME, type: 'campaign', body: BLOG0_TEMPLATE_BODY },
+    });
+    this.#templateId = created.data.id;
+    return created.data.id;
+  }
+
+  async createIssue(i: SenderIssue): Promise<{ campaignId: string }> {
+    const templateId = await this.#ensureTemplate();
+    const { data } = await this.#call<ListmonkCampaign>({
+      method: 'POST',
+      path: '/api/campaigns',
+      body: {
+        name: `blog0 #${i.number} — ${i.subject}`,
+        subject: escapeGoTemplate(i.subject),
+        lists: [this.#listId],
+        type: 'regular',
+        content_type: 'html',
+        body: toListmonkCampaignBody(i.html),
+        altbody: toListmonkExpressions(i.text),
+        template_id: templateId,
+        tags: ['blog0', `issue:${i.issueId}`],
+      },
+    });
+    return { campaignId: String(data.id) };
+  }
+
+  async #campaign(campaignId: string): Promise<ListmonkCampaign> {
+    if (!/^\d+$/.test(campaignId)) throw new SenderError('INVALID', `not a Listmonk campaign id: ${campaignId}`);
+    const { data } = await this.#call<ListmonkCampaign>({ method: 'GET', path: `/api/campaigns/${campaignId}` });
+    return data;
+  }
+
+  async sendIssue(campaignId: string): Promise<void> {
+    const campaign = await this.#campaign(campaignId);
+    if (campaign.status === 'running' || campaign.status === 'finished') return;
+    if (campaign.status === 'cancelled') throw new SenderError('INVALID', `Listmonk campaign ${campaignId} is cancelled`);
+    await this.#call({ method: 'PUT', path: `/api/campaigns/${campaignId}/status`, body: { status: 'running' } });
+  }
+
+  async fetchStats(campaignId: string): Promise<SenderStats> {
+    const c = await this.#campaign(campaignId);
+    return { recipients: c.to_send, sent: c.sent, delivered: null, opens: c.views, clicks: c.clicks, bounces: c.bounces, unsubscribes: null };
+  }
+
+  // --- provider → blog0 --------------------------------------------------------------------------
+
+  async fetchSuppressions(since: Date): Promise<SenderSuppression[]> {
+    const out: SenderSuppression[] = [];
+    const query = encodeURIComponent(`subscribers.status='blocklisted' AND subscribers.updated_at > ${sqlLiteral(since.toISOString())}`);
+    const blocklisted = await this.#call<Paged<ListmonkSubscriber>>({ method: 'GET', path: `/api/subscribers?query=${query}&per_page=all` });
+    for (const row of blocklisted.data?.results ?? []) {
+      if (isBlog0Blocklist(row)) continue; // blog0's own suppression mirrored — not a provider event
+      out.push({ email: row.email, reason: 'unsubscribed', at: new Date(row.updated_at), details: { providerId: String(row.id), providerStatus: row.status, optOut: 'blocklisted' } });
+    }
+    // List-level unsubscribes (List-Unsubscribe header / Listmonk's unsubscribe page): the subscriber
+    // stays `enabled`, only its subscription to the blog0 list turns `unsubscribed` (verified v5.1.0:
+    // GET /api/subscribers?list_id=…&subscription_status=unsubscribed; the subscriber's own
+    // `updated_at` does not move, `subscription_updated_at` does). Blocklisted rows are reported above.
+    const unsubscribed = await this.#call<Paged<ListmonkSubscriber>>({
+      method: 'GET',
+      path: `/api/subscribers?list_id=${this.#listId}&subscription_status=unsubscribed&per_page=all`,
+    });
+    for (const row of unsubscribed.data?.results ?? []) {
+      if (row.status === 'blocklisted') continue;
+      const optOut = listmonkOptOut(row, this.#listId);
+      if (optOut === null || optOut.kind !== 'list_unsubscribed') continue;
+      // An unparseable timestamp is still reported (fail safe), dated `since` + 1 ms.
+      const at = Number.isNaN(optOut.at.getTime()) ? new Date(since.getTime() + 1) : optOut.at;
+      if (!(at > since)) continue;
+      out.push({
+        email: row.email,
+        reason: 'unsubscribed',
+        at,
+        details: { providerId: String(row.id), providerStatus: row.status, optOut: 'list_unsubscribed', listId: this.#listId },
+      });
+    }
+    const bounces = await this.#call<Paged<ListmonkBounce>>({ method: 'GET', path: '/api/bounces?per_page=all' });
+    for (const b of bounces.data?.results ?? []) {
+      const at = new Date(b.created_at);
+      if (!(at > since)) continue;
+      if (b.type === 'soft') continue;
+      out.push({
+        email: b.email,
+        reason: b.type === 'complaint' ? 'complaint' : 'bounced',
+        at,
+        details: { providerRef: String(b.id), bounceType: b.type, source: b.source, campaign: b.campaign?.name ?? null },
+      });
+    }
+    return out;
+  }
+
+  // --- tracking (Stage A) ---------------------------------------------------------------------------
+
+  /**
+   * Can opens / clicks be counted? Listmonk's pixel and link redirects live under its `app.root_url`;
+   * a reader's mail client must reach that host. `GET /api/settings` (3 s, no retry; needs the API
+   * user's `settings:get`) → `app.root_url`; any failure → `BLOG0_LISTMONK_URL`. Cached 10 min per
+   * process. Never throws. (The settings payload carries SMTP credentials: nothing of it is logged.)
+   */
+  async trackingPublic(now: number = Date.now()): Promise<boolean> {
+    if (this.#tracking !== null && now - this.#tracking.at < TRACKING_CACHE_MS) return this.#tracking.value;
+    let rootUrl = this.#baseUrl;
+    try {
+      const { data } = await this.#call<Record<string, unknown> | null>({ method: 'GET', path: '/api/settings', timeoutMs: 3000, retry: false });
+      const fromSettings = isJsonObject(data) ? data['app.root_url'] : undefined;
+      if (typeof fromSettings === 'string' && fromSettings.trim() !== '') rootUrl = fromSettings.trim();
+    } catch {
+      // fall back to BLOG0_LISTMONK_URL
+    }
+    const value = isPublicUrl(rootUrl);
+    this.#tracking = { value, at: now };
+    return value;
+  }
+
+  // --- health ------------------------------------------------------------------------------------
+
+  async healthcheck(): Promise<SenderHealth> {
+    try {
+      await this.#call({ method: 'GET', path: '/api/health' });
+      const { status, data } = await this.#call<{ id: number; name: string } | null>({
+        method: 'GET',
+        path: `/api/lists/${this.#listId}`,
+        tolerate: [400, 404],
+      });
+      if (data === null || status !== 200) return { ok: false, message: `list ${this.#listId} not found` };
+      return { ok: true, message: `Listmonk ok · list ${data.name}`, listName: data.name };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+}

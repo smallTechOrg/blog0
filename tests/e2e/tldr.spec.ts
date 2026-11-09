@@ -1,0 +1,525 @@
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+
+import { createArticleApi, e2eAdmin, originOf, signIn, signInThroughForm } from './helpers/admin';
+import { markdownPlainText, readE2eArticle } from './helpers/article-text';
+import { generationRows } from './helpers/db';
+import { jevKeyPlan, PENDING_KEY_TITLE } from './helpers/jev-key';
+import { LOG_NOT_WIRED_REASON, apiRequests, logFileNotWired, readServerLog } from './helpers/logs';
+
+// TLDR golden path (capability jev-tldr; spec/roadmap.md "How the user tests it"): sign in, paste
+// an article, live preview, save, Generate with Jev (real OpenRouter decisions call: Jev scores
+// every sentence and the top k become the deck, each line labelled "relevance 0.xx" — or a
+// visible PENDING KEY skip and the hand-pick fallback), hand-edit + preview + save the deck, publish, read it
+// live, play the TLDR deck, then edit a deck sentence → stale, the live page keeps the old deck,
+// nothing regenerates. Finally the server log carries the api.request / llm.call lines.
+//
+// One browser context is shared by the serial steps so the journey reads top to bottom.
+
+const TITLE = 'Tech Company First — an E2E walk';
+const DEK = 'Why the last 1% still needs people who understand the software.';
+const TOPIC = 'Op-Ed';
+const MARKDOWN = readE2eArticle();
+const ARTICLE_TEXT = markdownPlainText(MARKDOWN);
+const DISCLOSURE = {
+  jev: 'Lines selected by Jev (AI)',
+  editors: 'Lines selected by the editors, verbatim from the article.',
+};
+
+// Phase 8: Jev is the decisions model typesafe/jev-1.13 ranking with prompt jev-rank-v1 (spec/agent.md).
+const JEV_MODEL = 'typesafe/jev-1.13';
+const JEV_PROMPT_VERSION = 'jev-rank-v1';
+const RELEVANCE = /^relevance [01]\.\d\d$/;
+
+const keyPlan = jevKeyPlan();
+const pendingKey = keyPlan !== 'real';
+
+interface Journey {
+  context: BrowserContext;
+  page: Page;
+  articleId: string;
+  slug: string;
+  /** True once the real Generate step produced a deck from Jev. */
+  generatedByJev: boolean;
+  /** Deck lines as published (in order). */
+  publishedLines: string[];
+  generationCount: number;
+}
+
+const j: Partial<Journey> = { generatedByJev: false };
+
+function journey(): Journey {
+  return j as Journey;
+}
+
+async function deckTexts(page: Page): Promise<string[]> {
+  return page.locator('#panel-tldr .deck__text').allInnerTexts();
+}
+
+/** The scores shown on the article-line rows, in display order (NaN for an unscored row). */
+async function pickerScores(page: Page): Promise<number[]> {
+  const rows = page.locator('#panel-tldr .picker__line');
+  const out: number[] = [];
+  for (const row of await rows.all()) {
+    const rel = row.locator('.tldr-rel');
+    out.push((await rel.count()) === 0 ? Number.NaN : Number((await rel.innerText()).replace('relevance ', '')));
+  }
+  return out;
+}
+
+test.describe.configure({ mode: 'serial' });
+
+test.describe('golden path: paste → TLDR → publish → read', () => {
+  test.beforeAll(async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+    j.context = context;
+    j.page = await context.newPage();
+  });
+
+  test.afterAll(async () => {
+    await j.context?.close();
+  });
+
+  test('an unauthenticated request to an admin API answers 401 UNAUTHENTICATED', async ({ playwright }, testInfo) => {
+    const anon = await playwright.request.newContext({ baseURL: testInfo.project.use.baseURL });
+
+    const res = await anon.get('/api/admin/articles');
+
+    expect(res.status()).toBe(401);
+    expect(await res.json()).toMatchObject({ ok: false, error: { code: 'UNAUTHENTICATED' } });
+    await anon.dispose();
+  });
+
+  test('/admin redirects to sign-in; signing in lands on the desk (the 5 seeded posts from global setup)', async () => {
+    const { page } = journey();
+
+    await page.goto('/admin');
+
+    await expect(page).toHaveURL(/\/admin\/login\?next=%2Fadmin$/);
+    await signInThroughForm(page);
+    // Global setup seeds the 5 design articles (seedPosts) before this walk.
+    await expect(page.locator('.admin-table tbody tr')).toHaveCount(5);
+    await expect(page.locator('.admin-table__title', { hasText: 'Humans are Software' })).toBeVisible();
+  });
+
+  test('New article → paste Markdown → the editor shows "Saved · rev 1" and a live Read preview', async () => {
+    const { page } = journey();
+    await page.getByRole('link', { name: 'New article' }).click();
+    await expect(page.getByRole('heading', { name: 'New article' })).toBeVisible();
+
+    await page.getByLabel('Title').fill(TITLE);
+    await page.getByLabel('Topic').fill(TOPIC);
+    await page.getByLabel('Dek').fill(DEK);
+    await page.getByLabel(/^Markdown/).fill(MARKDOWN);
+    await page.getByRole('button', { name: 'Create' }).click();
+
+    await expect(page).toHaveURL(/\/admin\/articles\/[0-9a-f-]{36}$/);
+    j.articleId = page.url().split('/').pop()!;
+    await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 1');
+    await expect(page.getByLabel('Markdown', { exact: true })).toHaveValue(MARKDOWN);
+    const preview = page.getByRole('region', { name: 'Live preview' });
+    await expect(preview.getByRole('heading', { level: 1, name: TITLE })).toBeVisible();
+    await expect(preview.locator('.prose').getByRole('heading', { name: 'The 1% in practice' })).toBeVisible();
+    await expect(preview.locator('.prose table')).toBeVisible();
+    await expect(preview.locator('.prose table td', { hasText: 'Debugging a production outage' })).toBeVisible();
+    // Shiki: a highlighted <pre> with per-token coloured spans (dual-theme CSS variables).
+    const code = preview.locator('.prose pre.shiki');
+    await expect(code).toContainText('export function share');
+    expect(await code.locator('span[style*="--shiki-light"]').count()).toBeGreaterThan(3);
+    await expect(preview.locator('.footnotes')).toContainText('Notes');
+    await expect(preview.locator('.footnotes')).toContainText('Production is where the 1% problems live');
+    await expect(preview.locator('figure.fig')).toHaveCount(2);
+    await expect(preview.locator('figure.fig .fig__k', { hasText: 'Two companies, same market' })).toBeVisible();
+    await expect(preview.locator('.preview__stats')).toContainText(/eligible sentences/);
+
+    const res = await page.request.get(`/api/admin/articles/${j.articleId}`);
+    j.slug = (await res.json()).data.article.slug as string;
+    expect(j.slug).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+  });
+
+  test('the draft article URL answers 404 before publishing', async () => {
+    const { page, slug } = journey();
+
+    const res = await page.request.get(`/p/${slug}`);
+
+    expect(res.status()).toBe(404);
+    expect(await res.text()).toContain('That article isn’t here.');
+  });
+
+  test(`Generate with Jev (real OpenRouter call)${pendingKey ? ` — ${PENDING_KEY_TITLE}` : ''}`, async () => {
+    test.skip(keyPlan === 'pending-skip', PENDING_KEY_TITLE);
+    expect(keyPlan, 'CI=true requires a real BLOG0_OPENROUTER_API_KEY (PENDING KEY is a failure under CI)').toBe('real');
+    test.setTimeout(180_000);
+    const { page, articleId } = journey();
+    await page.getByRole('tab', { name: /^TLDR/ }).click();
+    await expect(page.locator('#panel-tldr .tldrtab__empty')).toContainText('No deck yet.');
+
+    const panel = page.locator('#panel-tldr');
+    await expect(panel.locator('.tldrtab__head .admin-hint')).toHaveText(/^Jev will pick (the top \d+|all \d+) lines for this length$/);
+
+    await page.getByRole('button', { name: 'Generate with Jev' }).click();
+
+    await expect(panel.locator('.admin-ok')).toContainText(
+      /Jev ranked \d+ sentences and picked the top \d+ — saved as your draft deck/,
+      { timeout: 150_000 },
+    );
+    const lines = await deckTexts(page);
+    expect(lines.length).toBeGreaterThanOrEqual(4);
+    expect(lines.length).toBeLessThanOrEqual(8);
+    const articleLines = await panel.locator('.picker__line .picker__text').allInnerTexts();
+    for (const line of lines) {
+      expect(articleLines, `deck line is one of the article's sentences: ${line}`).toContain(line);
+      expect(ARTICLE_TEXT, 'deck line is verbatim from the article').toContain(line);
+    }
+    // Each deck line shows Jev's relevance score instead of a reason; no reasons anywhere.
+    const metas = await panel.locator('.deck__meta').allInnerTexts();
+    expect(metas).toHaveLength(lines.length);
+    for (const meta of metas) expect(meta).toMatch(/^Jev · relevance [01]\.\d\d$/);
+    for (const rel of await panel.locator('.deck__meta .tldr-rel').allInnerTexts()) expect(rel).toMatch(RELEVANCE);
+    await expect(panel.locator('.deck__reason')).toHaveCount(0);
+    await expect(panel.locator('.deck')).not.toContainText(/\breasons?\b|Jev:/i);
+    await expect(panel.locator('.tldrtab__meta')).toHaveText(
+      new RegExp(
+        `^Jev · ${JEV_MODEL.replace(/[./]/g, '\\$&')} · ${JEV_PROMPT_VERSION} · ranked \\d+ sentences( in \\d+ requests)? · ` +
+          `[\\d,]+ tokens · (\\$\\d+\\.\\d{4}|cost n/a) · `,
+      ),
+    );
+
+    // The picker defaults to "By relevance": every eligible sentence is scored, highest first.
+    const sortSwitch = panel.getByRole('radiogroup', { name: 'Sort article lines' });
+    await expect(sortSwitch.getByRole('radio', { name: 'By relevance' })).toHaveAttribute('aria-checked', 'true');
+    await expect(sortSwitch.getByRole('radio', { name: 'In article order' })).toHaveAttribute('aria-checked', 'false');
+    const scores = await pickerScores(page);
+    expect(scores.length).toBe(articleLines.length);
+    for (const score of scores) expect(Number.isNaN(score), 'every eligible sentence is scored').toBe(false);
+    for (let i = 1; i < scores.length; i += 1) {
+      expect(scores[i], `row ${i + 1} is not ranked above row ${i}`).toBeLessThanOrEqual(scores[i - 1]);
+    }
+    expect(scores[0]).toBe(Math.max(...scores));
+    // Pure top-k: the deck's lowest score is ≥ every unpicked sentence's score (both as displayed).
+    const deckScores = metas.map((m) => Number(m.replace(/^.*relevance /, '')));
+    const unpicked = scores.filter((_, i) => !lines.includes(articleLines[i]));
+    expect(Math.min(...deckScores)).toBeGreaterThanOrEqual(Math.max(...unpicked));
+    await expect(panel.locator('.picker__line.is-on')).toHaveCount(lines.length);
+    await expect(panel.locator('.picker__sec').first()).toBeVisible();
+
+    // "In article order" shows today's grouped list under the article's headings (scores kept).
+    await sortSwitch.getByRole('radio', { name: 'In article order' }).click();
+    await expect(sortSwitch.getByRole('radio', { name: 'In article order' })).toHaveAttribute('aria-checked', 'true');
+    await expect(panel.locator('.picker__head', { hasText: 'The 1% in practice' })).toBeVisible();
+    const inOrder = await panel.locator('.picker__line .picker__text').allInnerTexts();
+    expect([...inOrder].sort()).toEqual([...articleLines].sort());
+    await expect(panel.locator('.picker__line .tldr-rel')).toHaveCount(inOrder.length);
+    await sortSwitch.getByRole('radio', { name: 'By relevance' }).click();
+    await expect(sortSwitch.getByRole('radio', { name: 'By relevance' })).toHaveAttribute('aria-checked', 'true');
+
+    const rows = await generationRows(articleId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'succeeded', model: JEV_MODEL, prompt_version: JEV_PROMPT_VERSION });
+    expect(rows[0].total_tokens).toBeGreaterThan(0);
+    j.generatedByJev = true;
+  });
+
+  test('hand-edit the deck (remove, add from the article, move up), preview it, save it', async () => {
+    const { page } = journey();
+    const panel = page.locator('#panel-tldr');
+    if (!(await panel.isVisible())) await page.getByRole('tab', { name: /^TLDR/ }).click();
+    const picker = panel.locator('.picker input[type="checkbox"]');
+    await expect(picker.first()).toBeVisible();
+    const total = await picker.count();
+    expect(total).toBeGreaterThan(8);
+
+    if (!j.generatedByJev) {
+      // Hand-pick fallback (spec/agent.md §6): five lines spread through the article.
+      for (const i of [0, 3, 6, 9, 12]) await picker.nth(i).check();
+      await expect(panel.locator('.deck__item')).toHaveCount(5);
+      for (const meta of await panel.locator('.deck__meta').allInnerTexts()) expect(meta).toBe('Added by you');
+    }
+    const before = await deckTexts(page);
+
+    // Remove one.
+    await panel.getByRole('button', { name: 'Remove line 2' }).click();
+    await expect(panel.locator('.deck__item')).toHaveCount(before.length - 1);
+    expect(await deckTexts(page)).not.toContain(before[1]);
+    // Add one from the article lines (the last unchecked sentence).
+    const unchecked = panel.locator('.picker__line:not(.is-on)');
+    const added = (await unchecked.last().locator('.picker__text').innerText()).trim();
+    await unchecked.last().locator('input').check();
+    await expect(panel.locator('.deck__item')).toHaveCount(before.length);
+    const afterAdd = await deckTexts(page);
+    expect(afterAdd).toContain(added);
+    // A writer line shows "Added by you" plus its score when Jev scored it.
+    await expect(panel.locator('.deck__item', { hasText: added }).locator('.deck__meta')).toHaveText(
+      j.generatedByJev ? /^Added by you · relevance [01]\.\d\d$/ : 'Added by you',
+    );
+    // Move one up.
+    await panel.getByRole('button', { name: 'Move line 3 up' }).click();
+    const afterMove = await deckTexts(page);
+    expect(afterMove[1]).toBe(afterAdd[2]);
+    expect(afterMove[2]).toBe(afterAdd[1]);
+    for (const line of afterMove) expect(ARTICLE_TEXT).toContain(line);
+
+    // Preview deck: the real TldrDeck plays the unsaved draft.
+    await panel.getByRole('button', { name: 'Preview deck' }).click();
+    const deck = page.locator('.tdeck');
+    await expect(deck).toBeVisible();
+    await expect(deck.locator('.tdeck__big')).toHaveText(TITLE);
+    await expect(deck.locator('.tdeck__note')).toContainText(j.generatedByJev ? DISCLOSURE.jev : DISCLOSURE.editors);
+    await expect(deck.locator('.tdeck__seg')).toHaveCount(afterMove.length + 1);
+    await page.keyboard.press('ArrowRight');
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(afterMove[0]);
+    await page.keyboard.press('Escape');
+    await expect(deck).toBeHidden();
+
+    await panel.getByRole('button', { name: 'Save deck' }).click();
+    await expect(panel.getByText('Deck saved.')).toBeVisible();
+    expect(await deckTexts(page)).toEqual(afterMove);
+    await expect(page.locator('#tab-tldr .tabchip')).toHaveText('ready');
+    j.publishedLines = afterMove;
+  });
+
+  test('Publish → View live shows the Read view with title, body and published line', async () => {
+    const { page, context, slug } = journey();
+
+    await page.getByRole('button', { name: 'Publish', exact: true }).click();
+
+    const viewLive = page.getByRole('link', { name: 'View live ↗' });
+    await expect(viewLive).toBeVisible();
+    const [live] = await Promise.all([context.waitForEvent('page'), viewLive.click()]);
+    await live.waitForLoadState();
+    await expect(live).toHaveURL(new RegExp(`/p/${slug}$`));
+    await expect(live.locator('.readhead h1')).toHaveAttribute('aria-label', TITLE);
+    await expect(live.locator('.readhead .dek')).toHaveText(DEK);
+    await expect(live.locator('.readhead__by')).toContainText(e2eAdmin().displayName);
+    await expect(live.locator('.readhead__by')).toContainText(/\d{1,2} [A-Z][a-z]{2} \d{4}/);
+    await expect(live.locator('.readbody')).toContainText('Humans are creatures of convenience.');
+    await expect(live.locator('.readbody table')).toBeVisible();
+    await live.close();
+  });
+
+  test('the article page links non-empty stylesheets that carry the deck styles', async () => {
+    const { page, slug } = journey();
+    await page.goto(`/p/${slug}`);
+
+    const hrefs = await page
+      .locator('link[rel="stylesheet"]')
+      .evaluateAll((links) => links.map((l) => (l as HTMLLinkElement).href));
+
+    expect(hrefs.length).toBeGreaterThan(0);
+    const bodies: string[] = [];
+    for (const href of hrefs) {
+      const css = await page.request.get(href);
+      expect(css.status(), href).toBe(200);
+      const text = await css.text();
+      expect(text.trim().length, href).toBeGreaterThan(0);
+      bodies.push(text);
+    }
+    expect(bodies.some((b) => b.includes('.tdeck__track'))).toBe(true);
+    expect(bodies.some((b) => b.includes('.modedock'))).toBe(true);
+  });
+
+  test('TLDR in the capsule plays the published deck at /p/<slug>/tldr; reload keeps it; Esc closes', async () => {
+    const { page, slug, publishedLines } = journey();
+    await page.goto(`/p/${slug}`);
+
+    await page.locator('.modedock').getByRole('tab', { name: /^TLDR — \d+ min$/ }).click();
+
+    await expect(page).toHaveURL(new RegExp(`/p/${slug}/tldr$`));
+    const deck = page.locator('.tdeck');
+    await expect(deck).toBeVisible();
+    await expect(deck.locator('.tdeck__big')).toHaveText(TITLE);
+    await expect(deck.locator('.tdeck__note')).toContainText(j.generatedByJev ? DISCLOSURE.jev : DISCLOSURE.editors);
+    const segs = deck.locator('.tdeck__seg');
+    await expect(segs).toHaveCount(publishedLines.length + 1);
+    await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+    // The deck's own mode switcher is the capsule: no recording → Listen disabled with its copy.
+    const deckListen = deck.locator('.tdeck__foot').getByRole('tab', { name: 'Listen — no recording yet' });
+    await expect(deckListen).toBeDisabled();
+    await expect(deckListen).toHaveAttribute('title', 'No recording yet');
+    // Auto-advance: the intro holds 3.8 s, then the deck moves on with no input.
+    await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'true', { timeout: 8_000 });
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[0]);
+    await deck.getByRole('button', { name: 'Pause the summary' }).click();
+    await page.keyboard.press('ArrowRight');
+    await expect(segs.nth(2)).toHaveAttribute('aria-selected', 'true');
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[1]);
+    // The progress bar is also the navigation: clicking a segment jumps straight to that slide.
+    const last = publishedLines.length;
+    await segs.nth(last).click();
+    await expect(segs.nth(last)).toHaveAttribute('aria-selected', 'true');
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[last - 1]);
+    await segs.nth(0).click();
+    await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+    await expect(deck.locator('.tdeck__slide[aria-hidden="false"] .tdeck__big')).toHaveText(TITLE);
+
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`/p/${slug}/tldr$`));
+    await expect(page.locator('.tdeck')).toBeVisible();
+    await expect(page.locator('.tdeck .tdeck__big')).toHaveText(TITLE);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.tdeck')).toBeHidden();
+    await expect(page).toHaveURL(new RegExp(`/p/${slug}$`));
+    await expect(page.locator('.modedock')).toBeVisible();
+  });
+
+  test('the TLDR intro card holds 3.8 s before auto-advancing (fake clock, own context)', async ({ browser }, testInfo) => {
+    const { slug, publishedLines } = journey();
+    // A separate reader context: its fake clock never touches the shared journey page.
+    const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+    try {
+      await context.clock.install();
+      await context.clock.pauseAt(Date.now() + 60_000);
+      const page = await context.newPage();
+      await page.goto(`/p/${slug}/tldr`);
+      const deck = page.locator('.tdeck');
+      await expect(deck).toBeVisible();
+      const segs = deck.locator('.tdeck__seg');
+      await expect(segs).toHaveCount(publishedLines.length + 1);
+      await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+      await expect(deck.getByRole('button', { name: 'Pause the summary' })).toBeVisible();
+
+      await page.clock.runFor(3_700);
+      await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
+      await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'false');
+
+      await page.clock.runFor(200);
+      await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'true');
+      await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[0]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('editing a deck sentence makes TLDR stale; the live page keeps the old deck; nothing regenerates', async () => {
+    const { page, articleId, slug, publishedLines } = journey();
+    const generationsBefore = (await generationRows(articleId)).length;
+    expect(generationsBefore).toBe(j.generatedByJev ? 1 : 0);
+    await page.goto(`/admin/articles/${articleId}`);
+    const editor = page.getByLabel('Markdown', { exact: true });
+    await expect(editor).toHaveValue(MARKDOWN);
+    const target = publishedLines.find((l) => MARKDOWN.includes(l));
+    expect(target, 'some deck line appears verbatim in the Markdown source').toBeTruthy();
+    const edited = target!.replace(/(\w+)(\W*)$/, 'nowadays$2');
+    expect(edited).not.toBe(target);
+
+    await editor.fill(MARKDOWN.replace(target!, edited));
+    await expect(page.locator('.pubbar__state')).toHaveText('Unsaved changes');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+    await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 2');
+    await expect(page.locator('#tab-tldr .tabchip')).toHaveText('stale');
+    await page.getByRole('tab', { name: /^TLDR/ }).click();
+    await expect(page.locator('#panel-tldr .tldrtab__stale')).toBeVisible();
+    // sid = pid + '-s' + k and pid hashes the paragraph text (spec/architecture.md §4), so the edited
+    // line — and any deck line sharing its paragraph — is flagged.
+    await expect(
+      page.locator('#panel-tldr .deck__item', { hasText: target! }).locator('.deck__missing'),
+    ).toHaveText('No longer in the article');
+    const live = await page.context().newPage();
+    await live.goto(`/p/${slug}/tldr`);
+    const deck = live.locator('.tdeck');
+    await expect(deck).toBeVisible();
+    await expect(deck.locator('.tdeck__seg')).toHaveCount(publishedLines.length + 1);
+    await expect(deck.locator('.tdeck__slide').filter({ hasText: target! })).toHaveCount(1);
+    await expect(deck.locator('.tdeck__slide').filter({ hasText: edited })).toHaveCount(0);
+    await expect(live.locator('.readbody')).toContainText(target!);
+    await live.close();
+    expect((await generationRows(articleId)).length).toBe(generationsBefore);
+  });
+
+  test('the server log has api.request lines for save, publish (and generate + llm.call when Jev ran)', async () => {
+    test.skip(logFileNotWired(), LOG_NOT_WIRED_REASON);
+    const { articleId } = journey();
+
+    const lines = readServerLog();
+
+    expect(apiRequests(lines, 'POST', '/api/admin/articles').some((l) => l.status === 201 || l.status === 200)).toBe(true);
+    expect(apiRequests(lines, 'PATCH', `/api/admin/articles/${articleId}`)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ status: 200, latency_ms: expect.any(Number) })]),
+    );
+    expect(apiRequests(lines, 'PUT', `/api/admin/articles/${articleId}/tldr`)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ status: 200 })]),
+    );
+    expect(apiRequests(lines, 'POST', `/api/admin/articles/${articleId}/publish`)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ status: 200, user_id: expect.any(String) })]),
+    );
+    const generate = apiRequests(lines, 'POST', `/api/admin/articles/${articleId}/tldr/generate`);
+    if (!j.generatedByJev) {
+      expect(generate).toHaveLength(0);
+      return;
+    }
+    expect(generate).toHaveLength(1);
+    expect(generate[0]).toMatchObject({ status: 200 });
+    const calls = lines.filter((l) => l.event === 'llm.call' && l.request_id === generate[0].request_id);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      expect(call).toMatchObject({
+        model: JEV_MODEL,
+        prompt_version: JEV_PROMPT_VERSION,
+        latency_ms: expect.any(Number),
+        outcome: 'ok',
+      });
+    }
+  });
+});
+
+// capability article-authoring: "never loses typed text on a failed save". Two editors on the same
+// draft: B saves first, then A's save is refused with the conflict banner and A's typing stays in
+// the textarea (nothing overwritten on the server either). Its own throwaway draft, deleted after,
+// so the shared state the later projects rely on is untouched.
+test.describe('two editors on one article: a stale save is refused and keeps the typed text', () => {
+  const BODY = 'The first paragraph of a draft two people are editing at once.';
+  const A_TEXT = `${BODY}\n\nWriter A adds this paragraph while B is also editing.`;
+  const B_TEXT = `${BODY}\n\nWriter B saved this paragraph first.`;
+
+  test('A saves after B → "Someone saved a newer version (rev 2 by …). Reload to continue." and A keeps its text', async ({ browser }, testInfo) => {
+    const baseURL = testInfo.project.use.baseURL;
+    const origin = originOf(testInfo);
+    const contextA = await browser.newContext({ baseURL });
+    let contextB: BrowserContext | undefined;
+    let articleId: string | undefined;
+    try {
+      const pageA = await contextA.newPage();
+      await signIn(pageA);
+      contextB = await browser.newContext({ baseURL, storageState: await contextA.storageState() });
+      const pageB = await contextB.newPage();
+      const created = await createArticleApi(contextA.request, origin, { title: 'Two editors, one draft', bodyMd: BODY });
+      articleId = created.id;
+
+      await pageA.goto(`/admin/articles/${articleId}`);
+      await pageB.goto(`/admin/articles/${articleId}`);
+      const editorA = pageA.getByLabel('Markdown', { exact: true });
+      const editorB = pageB.getByLabel('Markdown', { exact: true });
+      await expect(editorA).toHaveValue(BODY);
+      await expect(editorB).toHaveValue(BODY);
+      await expect(pageA.locator('.pubbar__state')).toHaveText('Saved · rev 1');
+
+      await editorB.fill(B_TEXT);
+      await pageB.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(pageB.locator('.pubbar__state')).toHaveText('Saved · rev 2');
+      const latest = await contextB.request.get(`/api/admin/articles/${articleId}`);
+      const by = (await latest.json()).data.article.currentRevision.createdBy as string;
+      expect(by.length).toBeGreaterThan(0);
+
+      await editorA.fill(A_TEXT);
+      await pageA.getByRole('button', { name: 'Save', exact: true }).click();
+
+      await expect(pageA.locator('.editor__conflict p')).toHaveText(`Someone saved a newer version (rev 2 by ${by}). Reload to continue.`);
+      await expect(pageA.locator('.editor__conflict').getByRole('button', { name: 'Reload' })).toBeVisible();
+      await expect(editorA).toHaveValue(A_TEXT);
+      await expect(pageA.locator('.pubbar__state')).not.toHaveText(/^Saved/);
+      // The server still holds B's revision — A's stale save overwrote nothing.
+      const after = await contextA.request.get(`/api/admin/articles/${articleId}`);
+      const article = (await after.json()).data.article;
+      expect(article.currentRevision.number).toBe(2);
+      expect(article.currentRevision.bodyMd).toBe(B_TEXT);
+    } finally {
+      if (articleId) {
+        const del = await contextA.request.delete(`/api/admin/articles/${articleId}`, { headers: { origin } });
+        expect(del.status(), await del.text()).toBe(200);
+      }
+      await contextB?.close();
+      await contextA.close();
+    }
+  });
+});

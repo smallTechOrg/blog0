@@ -1,0 +1,28 @@
+{
+  "slug": "ai-will-destroy-the-world",
+  "model": "typesafe/jev-1.13",
+  "promptVersion": "jev-rank-v1",
+  "capturedAt": "2026-10-13T15:01:30.700Z",
+  "lines": [
+    {
+      "text": "AI will destroy the world.",
+      "relevance": 0.85
+    },
+    {
+      "text": "It doesn’t need to but it will.",
+      "relevance": 0.72
+    },
+    {
+      "text": "And it will for reasons not based on technology.",
+      "relevance": 0.79
+    },
+    {
+      "text": "We are rushing into it without adequate knowledge.",
+      "relevance": 0.82
+    },
+    {
+      "text": "Secondly, we don’t know how AI works.",
+      "relevance": 0.73
+    }
+  ]
+}

@@ -1,0 +1,120 @@
+# blog0 on blog0-vm (GCP deploy as code — spec/architecture.md §12.7; docs/deploy-gcp.md).
+# Shipped to /opt/blog0 by .github/workflows/deploy.yml and driven ONLY by deploy/vm/deploy-remote.sh:
+#   docker compose --project-directory /opt/blog0 -f /opt/blog0/docker-compose.yml --env-file /opt/blog0/compose.env …
+# Images are built on GitHub Actions and pulled from Artifact Registry (never built on the VM).
+# No Caddy, no Cloud SQL proxy: the shared Google load balancer terminates TLS and routes the ONE host
+#   blog0.smalltech.in → :3410 (blog0). Listmonk's public endpoints (click redirect, open pixel, unsubscribe page)
+# are served by blog0 itself under https://blog0.smalltech.in/lm: the image's Next.js rewrites proxy an
+# allow-list of /lm/* to http://listmonk:9000 over this compose network (src/lib/http/listmonk-proxy.ts);
+# Listmonk's root URL is https://blog0.smalltech.in/lm. Only the LB proxy/health-check ranges (port 3410)
+# and IAP SSH reach the VM (blog0-* firewall rules); Listmonk's :9000 is bound to 127.0.0.1 (SSH tunnel).
+# Postgres = Cloud SQL over its private IP with TLS (sslmode=require / ssl_mode=require); the instance is
+# shared, so every pool is tiny: blog0 4, scheduler 2, Listmonk 4 open / 2 idle, one-offs 1–2.
+# Memory (e2-micro, 1 GB RAM + 2 GB swap): blog0 512m (node heap 384 MB), Listmonk 192m, scheduler 192m.
+# Env files (rendered by deploy/vm/render-env.sh, mode 600): blog0.env, release.env, listmonk.env,
+# compose.env; listmonk-api.env (the Listmonk API user + token + list id) is written on the VM by
+# deploy-remote.sh. Local verification of this exact file: deploy/local/docker-compose.yml (`pnpm deploy:local`).
+name: blog0-prod
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 10m, max-file: '3' }
+
+services:
+  # ---- one-offs (profile `ops`: `docker compose run --rm <service>`; never started by `up`) ----
+  release: # migrate (schema owner) → 0 pending → restricted role blog0_app → site + first admin; idempotent
+    profiles: [ops]
+    image: ${BLOG0_IMAGE:?set BLOG0_IMAGE}:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG}
+    command: [node, release.mjs]
+    env_file: [blog0.env, release.env]
+    environment: { BLOG0_NEWSLETTER_SENDER: stub, NODE_OPTIONS: --max-old-space-size=256 }
+    mem_limit: 384m
+    logging: *logging
+    restart: 'no'
+
+  seed: # first deploy only: the 5 posts + committed deck fixtures when the site has zero articles (0 AI calls)
+    profiles: [ops]
+    image: ${BLOG0_IMAGE:?set BLOG0_IMAGE}:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG}
+    command: [node, seed-content.mjs]
+    env_file: [blog0.env]
+    environment: { BLOG0_NEWSLETTER_SENDER: stub, BLOG0_SMTP_HOST: '', BLOG0_DB_POOL_MAX: '2', NODE_OPTIONS: --max-old-space-size=256 }
+    mem_limit: 384m
+    logging: *logging
+    restart: 'no'
+
+  listmonk-install: # `--install --idempotent` (first run only) then `--upgrade`
+    profiles: [ops]
+    image: listmonk/listmonk:v5.1.0 # pinned; keep in step with `listmonk` below and the root docker-compose.yml
+    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config ''"]
+    env_file: [listmonk.env]
+    environment: { LISTMONK_app__address: '0.0.0.0:9000', TZ: Etc/UTC, PUID: '1000', PGID: '1000' } # app.address is read by --install too
+    mem_limit: 192m
+    logging: *logging
+    restart: 'no'
+
+  listmonk-ops: # node + curl + bash (the scheduler image) on the compose network: API user + settings scripts
+    profiles: [ops]
+    image: ${BLOG0_SCHEDULER_IMAGE:?set BLOG0_SCHEDULER_IMAGE}:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG}
+    entrypoint: [bash]
+    env_file: [listmonk.env]
+    volumes: ['${BLOG0_OPS_DIR:-./ops}:/ops:ro']
+    mem_limit: 192m
+    logging: *logging
+    restart: 'no'
+
+  # ---- long-running ----
+  blog0:
+    image: ${BLOG0_IMAGE:?set BLOG0_IMAGE}:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG}
+    env_file:
+      - blog0.env
+      - path: listmonk-api.env
+        required: false
+    environment: { BLOG0_DB_POOL_MAX: '4', NODE_OPTIONS: --max-old-space-size=384 }
+    ports: ['${BLOG0_HTTP_BIND:-0.0.0.0}:${BLOG0_HOST_PORT:-3410}:3410'] # the LB's backend port (firewall: LB ranges only)
+    volumes: [blog0-storage:/data/storage]
+    mem_limit: 512m
+    mem_reservation: 256m
+    # healthcheck: the image's (GET /api/health/live); stop grace > BLOG0_SHUTDOWN_TIMEOUT_MS + 2 s
+    stop_grace_period: 15s
+    logging: *logging
+    restart: unless-stopped
+
+  scheduler: # supercronic: hourly newsletter tick, daily media backup (deploy/scheduler/crontab)
+    image: ${BLOG0_SCHEDULER_IMAGE:?set BLOG0_SCHEDULER_IMAGE}:${BLOG0_IMAGE_TAG:?set BLOG0_IMAGE_TAG}
+    env_file:
+      - blog0.env
+      - path: listmonk-api.env
+        required: false
+    environment:
+      MEDIA_BACKUP_DEST: ${MEDIA_BACKUP_DEST:?set MEDIA_BACKUP_DEST}
+      BLOG0_DB_POOL_MAX: '2'
+      NODE_OPTIONS: --max-old-space-size=160
+    volumes: [blog0-storage:/data/storage:ro]
+    mem_limit: 192m
+    logging: *logging
+    restart: unless-stopped
+
+  listmonk:
+    image: listmonk/listmonk:v5.1.0 # pinned
+    command: [sh, -c, "./listmonk --config ''"] # install/upgrade run first as the `listmonk-install` one-off
+    env_file: [listmonk.env]
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      TZ: Etc/UTC
+      # The entrypoint chowns /listmonk (incl. uploads) to PUID:PGID and drops root via su-exec.
+      PUID: '1000'
+      PGID: '1000'
+    # Not reachable from the LB or the network: blog0 reaches it as http://listmonk:9000 on the compose
+    # network; the host binds loopback only, for the admin UI through an IAP SSH tunnel (docs/deploy-gcp.md →
+    # Listmonk admin).
+    ports: ['${LISTMONK_HTTP_BIND:-127.0.0.1}:${LISTMONK_HOST_PORT:-9000}:9000']
+    volumes: [listmonk-uploads:/listmonk/uploads]
+    # v5: /api/health needs a session or token; the login page is the unauthenticated probe.
+    healthcheck: { test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:9000/admin/login >/dev/null || exit 1'], interval: 10s, timeout: 5s, retries: 30 }
+    mem_limit: 192m
+    logging: *logging
+    restart: unless-stopped
+
+volumes:
+  blog0-storage: {}
+  listmonk-uploads: {}

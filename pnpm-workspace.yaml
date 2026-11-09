@@ -1,0 +1,9 @@
+# pnpm >= 10 blocks dependency lifecycle scripts unless explicitly allowed.
+# Only these packages may run their install/build scripts (non-interactive installs).
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - zod@4.6.6
+  - nodemailer@10.1.7

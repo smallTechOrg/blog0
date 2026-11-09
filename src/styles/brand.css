@@ -1,0 +1,122 @@
+/* ============================================================
+   brand.css — the smallTech Branding Kit (Linear SMA-5), loaded last.
+   Source: Figma "smallTech Brand Guidelines" v1.2, pages 09–13
+   (Color palette, Color tokens and scales, Color in use, Typeface,
+   Type scale). design.css stays the verbatim ported design; this file
+   only re-points its tokens at the brand.
+
+   Palette (the file's colour variables, not the hex labels printed on
+   page 09, which are stale):
+     Readme       #f5f1ee  default background (light)
+     Terminal Ink #1c1b18  text, dark backgrounds
+     Gold Master  #d68a2e  fills, buttons, key shapes; text only on Terminal Ink
+     Merged #708d55 · Reverted #c54c3c · Pending #2a6fb0  status/charts, <5%
+
+   Two deliberate departures, both for WCAG AA (tests/unit/site/contrast.test.ts):
+   - light --accent-ink is Gold Master/70 #83602e: Gold Master itself is
+     2.5:1 on Readme and the brand forbids it as text there.
+   - dark --surface is Readme/90 #2e2d2c, not the brand's #4f4d4a, on which
+     the brand's own muted text (#939290) is only 2.7:1.
+   ============================================================ */
+
+/* Colours only: the site keeps its own typefaces (Space Grotesk, Source Serif 4, JetBrains Mono),
+   not the brand's Montserrat (owner decision on SMA-5). */
+
+/* --- light (Readme) --- */
+:root {
+  --bg: #f5f1ee;
+  --bg-blur: rgba(245, 241, 238, 0.62);
+  --bg-head: rgba(245, 241, 238, 0.93);
+  --text: #1c1b18;
+  --accent: #d68a2e;
+  --accent-ink: #83602e;
+  --on-accent: #1c1b18;
+  --accent-soft: rgba(214, 138, 46, 0.20);
+  --accent-softer: rgba(214, 138, 46, 0.10);
+  --muted: #4f4d4a;
+  --faint: #686464;
+  --surface: #fbfbf9;
+  --surface-2: #e8e3dc; /* the old card step (#F6F4F0 → #E9E6DE) applied to Readme; warm, not Terminal Ink grey */
+  --border: #c4c3c0;
+  --border-strong: #b9b6b1;
+  --grid-line: rgba(28, 27, 24, 0.055);
+  --tex-dot: rgba(28, 27, 24, 0.055);
+  --tex-line: rgba(28, 27, 24, 0.022);
+  --band: #1c1b18;
+  --band-text: #f5f1ee;
+  --band-muted: #939290;
+  --band-line: rgba(245, 241, 238, 0.16);
+  --shadow: 0 1px 1px rgba(28,27,24,.04), 0 10px 26px rgba(28,27,24,.07);
+  --thumb-a: #e4e3e3;
+  --thumb-b: #cac9c8;
+  --positive: #708d55;
+  --negative: #c54c3c;
+  --neutral: #2a6fb0;
+}
+
+/* --- dark (Terminal Ink); the same block twice: explicit choice, OS preference --- */
+:root[data-theme="dark"] {
+  --bg: #1c1b18;
+  --bg-blur: rgba(28, 27, 24, 0.6);
+  --bg-head: rgba(28, 27, 24, 0.93);
+  --text: #f5f1ee;
+  --accent: #d68a2e;
+  --accent-ink: #d68a2e;
+  --on-accent: #1c1b18;
+  --accent-soft: rgba(214, 138, 46, 0.26);
+  --accent-softer: rgba(214, 138, 46, 0.14);
+  --muted: #b9b6b1;
+  --faint: #989594;
+  --surface: #2e2d2c;
+  --surface-2: #2b2925; /* the previous fill: the dark background did not change */
+  --border: #4f4d4a;
+  --border-strong: #7b7977;
+  --grid-line: rgba(245, 241, 238, 0.05);
+  --tex-dot: rgba(245, 241, 238, 0.055);
+  --tex-line: rgba(245, 241, 238, 0.02);
+  --band: #120c0b;
+  --band-text: #f5f1ee;
+  --band-muted: #939290;
+  --band-line: rgba(245, 241, 238, 0.12);
+  --thumb-a: #2e2d2c;
+  --thumb-b: #3c3737;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1b18;
+    --bg-blur: rgba(28, 27, 24, 0.6);
+    --bg-head: rgba(28, 27, 24, 0.93);
+    --text: #f5f1ee;
+    --accent: #d68a2e;
+    --accent-ink: #d68a2e;
+    --on-accent: #1c1b18;
+    --accent-soft: rgba(214, 138, 46, 0.26);
+    --accent-softer: rgba(214, 138, 46, 0.14);
+    --muted: #b9b6b1;
+    --faint: #989594;
+    --surface: #2e2d2c;
+    --surface-2: #2b2925; /* the previous fill: the dark background did not change */
+    --border: #4f4d4a;
+    --border-strong: #7b7977;
+    --grid-line: rgba(245, 241, 238, 0.05);
+    --tex-dot: rgba(245, 241, 238, 0.055);
+    --tex-line: rgba(245, 241, 238, 0.02);
+    --band: #120c0b;
+    --band-text: #f5f1ee;
+    --band-muted: #939290;
+    --band-line: rgba(245, 241, 238, 0.12);
+    --thumb-a: #2e2d2c;
+    --thumb-b: #3c3737;
+  }
+}
+
+/* --- footer: the brand's dark layout (page 11) — Terminal Ink band,
+   Gold Master allowed as text on it --- */
+.site-footer {
+  --f-bg: #1c1b18; --f-strong: #ffffff; --f-text: #f5f1ee; --f-soft: #b9b6b1;
+  --f-sub: #a3b095; --f-muted: #939290; --f-rule: #3c3737; --f-field: #686464;
+  --f-accent: #d68a2e; --f-accent-deep: #b2823b; --f-on-accent: #1c1b18;
+}
+
+/* Owner review 2026-11-09: the whole footer wordmark is Gold Master, not only the spinning nought. */
+.ft-logo { color: var(--f-accent); }

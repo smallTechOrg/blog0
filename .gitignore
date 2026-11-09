@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+
+# Next.js build output
+.next/
+# alternate build dirs (BLOG0_DIST_DIR, e.g. .next-gate)
+.next-*/
+out/
+# release-step bundle (pnpm build:release → dist/release.mjs; built inside the image)
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# secrets — .env.example is committed, every real value lives in .env
+.env
+.env.*.local
+.env.local
+# docker-compose `--profile app` env file (runbook); var/listmonk-dev.env is covered by var/ below
+blog0.env
+# GCP deploy: rendered env files never get committed (deploy/local/render.env is the committed dev-only
+# input of `pnpm deploy:local`); the bootstrap's generated secrets, first-admin note and LB backups stay local.
+/deploy/*.env
+/deploy/vm/*.env
+var/prod/
+var/prod-admin.txt
+var/lb-backup-*
+
+# runtime data (storage, backups)
+var/
+
+# test output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# OS
+.DS_Store

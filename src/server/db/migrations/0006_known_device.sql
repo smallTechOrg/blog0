@@ -1,0 +1,1 @@
+ALTER TABLE "app_user" ADD COLUMN "devices_valid_after" timestamp with time zone;
