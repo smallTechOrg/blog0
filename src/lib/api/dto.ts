@@ -70,7 +70,7 @@ export interface ArticleDetailDto {
   publicUrl: string | null;                      // absolute, when published
 }
 export interface PreviewResultDto {
-  blocks: Array<{ kind: 'html'; html: string } | { kind: 'figure'; figureId: string; known: boolean }>;
+  blocks: Array<{ kind: 'html'; html: string }>;
   warnings: Array<{ code: string; message: string; line?: number }>;
   stats: { words: number; readMinutes: number };
   sentenceCount: number;                         // eligible
@@ -266,6 +266,26 @@ export interface PublicListenDto {
   /** Absolute …/p/<slug>/listen. */
   shareUrl: string;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Media library (images)
+// ---------------------------------------------------------------------------------------------
+
+/** An article whose current or published Markdown shows an image. */
+export interface MediaUsageDto { articleId: string; slug: string; title: string; status: 'draft' | 'published' }
+/** One uploaded image in the library. `url` is the `/media/<key>` address the Markdown uses. */
+export interface MediaLibraryItemDto {
+  id: string; key: string; url: string; filename: string; mimeType: string; bytes: number;
+  width: number | null; height: number | null;
+  /** ISO time of the first upload. */
+  createdAt: string; uploadedBy: string;
+  /** Articles whose current or published revision references the image (newest-edited first). */
+  usedIn: MediaUsageDto[];
+}
+/** GET /api/admin/media → data (images only, newest first). */
+export interface MediaLibraryResponse { items: MediaLibraryItemDto[] }
+/** POST /api/admin/media/:id/replace → data. The same `url` now serves the new file. */
+export interface MediaReplaceResponse { item: MediaLibraryItemDto }
 
 // ---------------------------------------------------------------------------------------------
 // Site settings

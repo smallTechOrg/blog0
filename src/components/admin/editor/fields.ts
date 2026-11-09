@@ -17,8 +17,8 @@ export interface EditorFields {
 export type FieldPatch = Omit<UpdateArticleRequest, 'baseRevisionId'>;
 
 const KEYS: Array<keyof EditorFields> = [
-  'title', 'dek', 'bodyMd', 'topic', 'slug', 'bylineName', 'isFeatured', 'featuredRank', 'inProgress',
-];
+  'title', 'dek', 'bodyMd', 'topic', 'slug', 'isFeatured', 'featuredRank', 'inProgress',
+]; // not bylineName: it is the author's display name, never sent (owner decision 2026-11-09)
 
 export function fieldsFrom(a: ArticleDetailDto): EditorFields {
   return {

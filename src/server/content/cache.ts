@@ -6,7 +6,7 @@ import { RENDER_VERSION, renderArticle } from './render';
 
 // In-memory LRU of rendered revisions (spec/architecture.md §4), keyed by
 // `revisionId + ':' + RENDER_VERSION` (+ `':dims'` for the published page's render with image
-// dimensions — Stage A; a revision's media dimensions never change). Revisions are immutable, so an entry never goes stale.
+// dimensions — Stage A; a media replacement calls clearRenderCache). Revisions are immutable, so an entry only goes stale through those dimensions.
 // Preview renders are NOT cached — call renderArticle() directly for those.
 // Callers must treat the returned object as read-only (it is shared between requests).
 
@@ -44,6 +44,11 @@ export function renderCacheSize(): number {
   return entries.size;
 }
 
-export function resetRenderCacheForTests(): void {
+/** Drops every cached render (a replaced image changes the dimensions a render embeds). */
+export function clearRenderCache(): void {
   entries.clear();
+}
+
+export function resetRenderCacheForTests(): void {
+  clearRenderCache();
 }

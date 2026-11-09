@@ -84,8 +84,8 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 | `AboutBody`, `About` | `components/site/about/*`, `app/(site)/about/page.tsx` | |
 | `Archive` (+ topic pills) | `app/(site)/archive/page.tsx`, `components/site/archive/*` | topic in `?topic=` |
 | `HLProvider` (sentence), `AnnotationLayer` | `components/reader/ParagraphShare.tsx` + `ShareMenu.tsx` | paragraph unit (div. 2, 3); a selection inside a `.para` opens the same menu |
-| `mdToHtml`, `articleBlocks`, `ArticleProse` | server content pipeline → `components/reader/ArticleBody.tsx` | blocks → `.prose` html + figures |
-| `FigSlide47`, `FigAB`, `FIGURES` | `components/figures/FigSlide47.tsx`, `FigAB.tsx`, `registry.ts` | data constants verbatim |
+| `mdToHtml`, `articleBlocks`, `ArticleProse` | server content pipeline → `components/reader/ArticleBody.tsx` | blocks → `.prose` html |
+| _(removed 2026-11-09)_ `FigSlide47`, `FigAB`, `FIGURES` | — | the two built-in figures of the "Before you become an AI company" article were dropped, with the `@@fig:<id>@@` markers |
 | `TldrDeck`, `tldrDwell`, `tldrType`, `tldrMinutes`, `tdeckSlide` | `components/reader/TldrDeck.tsx`, `lib/deck/timing.ts` | slides from the published deck; layout `column` |
 | `ShareLinkButton` | `components/reader/ShareLinkButton.tsx` | copies, then opens `ShareMenu` (div. 3) |
 | `ArticlePage` (modebar strip, readhead, readbody, capsule, artfoot) | `components/reader/ArticleView.tsx`, `ModeBar.tsx`, `ModeCapsule.tsx`, `ReadHead.tsx`, `ArticleFoot.tsx` | modes read/tldr/listen |
@@ -301,7 +301,7 @@ Player only — no text, no highlight, no follow.
 ## 4. Admin screens
 
 All admin pages import `src/styles/admin.css` and reuse design tokens/components. Header bar
-(`DeskHeader`): small wordmark "blog0 · desk", links **Desk**, **Site**, **Subscribers**,
+(`DeskHeader`): small wordmark "blog0 · desk", links **Desk**, **Media**, **Site**, **Subscribers**,
 **Newsletter** (Phase 7; Phase 4 would add AI usage, Team), the user's name, **Sign out**.
 
 **Load pattern (every admin screen).** Data is fetched client-side through
@@ -344,7 +344,7 @@ to the editor.
   History = `StubNotice` labelled "Not built yet": "Every save is already kept (N revisions).
   Browsing and restoring arrives in a later version." (revision history deferred, no phase).
 - **Write tab**: fields Title, Dek, Topic; **Settings** disclosure: Slug (locked note after
-  publish), Byline, Featured (toggle + rank), "Show ‘Draft — in progress’ badge". Split view ≥
+  publish), Byline (read-only: the author's display name, not editable per article), Featured (toggle + rank), "Show ‘Draft — in progress’ badge". Split view ≥
   1100 px: `MarkdownEditor` (monospace textarea, Tab inserts 2 spaces, word count) left; **Live
   preview** (`LivePreview`) right rendered with the real `ReadHead` + `ArticleBody` inside
   `.readbody`. < 1100 px: Write/Preview toggle. Preview states: "Updating…" (keep the last render
@@ -358,6 +358,12 @@ to the editor.
     image"): preview thumbnail, **Alt text** (empty → "Empty alt marks the image decorative" and
     still proceeds), **Caption**, **Insert** / **Cancel**. Uploading: "Uploading… 42%" (XHR
     progress). Error: `.admin-error` under the toolbar with **Try again**.
+  - **Pasting** into the Markdown field (`use-paste-images.ts`; `media-images.md` → "Pasted
+    Markdown"): text whose images are embedded as `data:` URLs is held back while each image is
+    uploaded, then inserted with `/media/<key>` addresses; a status line under the toolbar reads
+    "Uploading pasted image 2 of 5…" → "Uploaded 5 pasted images." (`role=status`, clears after 4 s) or an
+    `.admin-error` (`role=alert`) "… Nothing was pasted — try again." An image-only clipboard
+    (a screenshot) opens the Image dialog.
 - **TLDR tab (`TldrTab`)** (Phase 8: relevance ranking replaces reasons):
   - Header: status chip, bounds hint "Jev will pick the top <k> lines for this length"
     (`bounds.target`; "all <k> lines" when k = sentence count), primary **Generate with Jev** (or
@@ -470,6 +476,17 @@ behaviour: `spec/capabilities/newsletter-issues.md`):
   not legal advice.") and **Newsletter postal address** (textarea ≤ 300, helper "Printed in every
   issue footer and confirmation email. Often required by anti-spam law; leave empty only if you are
   sure.").
+
+### Media `/admin/media` (`components/admin/media/MediaLibraryView.tsx`; capability media-library)
+- **Head**: title "Media · <count>" and a hint; a filter box (filename, key or the title of an article using the image).
+- **Grid of cards** (`.medlib` / `.medcard`, newest upload first): thumbnail, filename, "W × H · size · TYPE",
+  "Uploaded <when> by <who>", **Used in** the linked articles (with "· draft") or "Not used in any article";
+  buttons **Copy Markdown** (`![alt](/media/…)`), **Copy link** (absolute URL) and **Replace…**.
+- **Replace…** opens the file picker (images only); the chosen file is previewed in the card with
+  "Replace with <name>? The article(s) using this image will show the new one." and **Replace** /
+  **Cancel**; Replace shows its upload progress, then the card updates in place (same address).
+- States: loading, error + Retry (or Sign in again), empty ("No images yet. Add one with the Image
+  button in an article's editor, or paste Markdown that includes images."), no match for the filter.
 
 ### Subscribers `/admin/subscribers` (Phase 7 rewrite of `SubscribersView.tsx`)
 Behaviour: `spec/capabilities/newsletter-list.md`. Loads `GET /api/admin/subscribers?status=&q=`

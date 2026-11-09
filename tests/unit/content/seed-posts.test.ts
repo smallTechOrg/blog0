@@ -27,23 +27,17 @@ describe('the five seed posts', () => {
       expect(s.words).toBeGreaterThanOrEqual(5);
     }
     for (const p of r.paragraphs) expect(out).toContain(`data-pid="${p.pid}"`);
-    expect(out).not.toContain('@@fig');
+    expect(out).not.toContain('@@fig'); // the figure markers were removed from the seed bodies
     expect(new Set(r.paragraphs.map((p) => p.pid)).size).toBe(r.paragraphs.length);
     expect(await render(post.bodyMd, post.title, post.dek)).toEqual(r);
   });
 
-  it('renders tech-company-first with both known figures between prose blocks', async () => {
+  it('renders tech-company-first as one prose block (its figures were removed)', async () => {
     const post = posts.find((p) => p.slug === 'tech-company-first')!;
 
     const r = await render(post.bodyMd, post.title, post.dek);
 
-    expect(r.blocks.map((b) => (b.kind === 'figure' ? `${b.figureId}:${b.known}` : 'html'))).toEqual([
-      'html',
-      'slide47:true',
-      'html',
-      'ab-companies:true',
-      'html',
-    ]);
+    expect(r.blocks.map((b) => b.kind)).toEqual(['html']);
     expect(r.sentences.map((s) => s.text)).toEqual(expect.arrayContaining([
       'Humans are creatures of convenience.',
       'Even the smallest barrier to act discourages us.',

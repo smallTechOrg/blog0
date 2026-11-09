@@ -4,7 +4,7 @@ import 'server-only';
 // public pages). Types live in src/lib/content/types.ts.
 
 export { renderArticle, RENDER_VERSION } from './render';
-export { getRenderedRevision, renderCacheKey, renderCacheSize, resetRenderCacheForTests, RENDER_CACHE_MAX } from './cache';
+export { clearRenderCache, getRenderedRevision, renderCacheKey, renderCacheSize, resetRenderCacheForTests, RENDER_CACHE_MAX } from './cache';
 export { splitSentences, buildSentences, ABBREVIATIONS, MIN_ELIGIBLE_WORDS } from './sentences';
 export { paragraphHash, plainText } from './paragraph-ids';
 export { computeFingerprints, normalizeText, sha256Hex } from './fingerprint';

@@ -17,7 +17,10 @@ interface Ctx {
   params: Promise<{ key?: string | string[] }>;
 }
 
-const CACHE_CONTROL = 'public, max-age=31536000, immutable';
+/** Audio never changes under its key. Images can be replaced in place (Admin → Media), so they are
+ *  revalidated on every view: the ETag (the file's sha256) makes that a cheap 304 when unchanged. */
+const CACHE_CONTROL_AUDIO = 'public, max-age=31536000, immutable';
+const CACHE_CONTROL_IMAGE = 'public, no-cache';
 
 function notFound(requestId: string): Response {
   return respond(errEnvelope('NOT_FOUND', 'No such media.', requestId), 404, requestId);
@@ -53,7 +56,7 @@ async function serve(request: Request, ctx: Ctx, head: boolean): Promise<Respons
       'accept-ranges': 'bytes',
       etag,
       'last-modified': row.createdAt.toUTCString(),
-      'cache-control': CACHE_CONTROL,
+      'cache-control': row.kind === 'image' ? CACHE_CONTROL_IMAGE : CACHE_CONTROL_AUDIO,
       'x-content-type-options': 'nosniff',
       'content-disposition': `inline; filename="${asciiFilename(row.originalFilename)}"`,
       'x-request-id': requestId,

@@ -79,10 +79,6 @@ An inline image ![tiny icon](/media/test/icon.png) sits in the middle of this se
 
 <div class="raw">This raw HTML line must never reach the page.</div>
 
-@@fig:slide47@@
-
-@@fig:does-not-exist@@
-
 This exact paragraph appears twice in the article on purpose.
 
 This exact paragraph appears twice in the article on purpose.
