@@ -312,13 +312,13 @@ describe('newsletter settings (Phase 7: site.newsletter_* behind PATCH /api/admi
     const t = new Date('2026-10-13T06:00:00Z');
 
     const first = await updateNewsletterSettings(siteId, { mode: 'per_post', autoSend: true }, actor, t);
-    expect(first).toMatchObject({ mode: 'per_post', autoSend: true, modeSetAt: t.toISOString(), consentVersion: 'v1' });
+    expect(first).toMatchObject({ mode: 'per_post', autoSend: true, modeSetAt: t.toISOString(), consentVersion: SEED_CONSENT_VERSION });
 
     const same = await updateNewsletterSettings(siteId, { mode: 'per_post' }, actor, new Date(t.getTime() + 1000));
     expect(same.modeSetAt).toBe(t.toISOString()); // unchanged mode → no new stamp
 
     const text = await updateNewsletterSettings(siteId, { consentText: '  Two issues a month, tops.  ' }, actor);
-    expect(text).toMatchObject({ consentText: 'Two issues a month, tops.', consentVersion: 'v2' });
+    expect(text).toMatchObject({ consentText: 'Two issues a month, tops.', consentVersion: 'v3' });
     const typed = await updateNewsletterSettings(siteId, { consentText: 'Three.', consentVersion: 'gdpr-2026' }, actor);
     expect(typed).toMatchObject({ consentText: 'Three.', consentVersion: 'gdpr-2026' });
     const bumped = await updateNewsletterSettings(siteId, { consentText: 'Four.' }, actor);

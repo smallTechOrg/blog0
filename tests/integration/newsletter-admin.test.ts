@@ -38,6 +38,7 @@ import { unsubscribeToken } from '@/server/newsletter/links';
 import { StubNewsletterSender } from '@/server/newsletter/sender';
 import { confirmByToken, subscribe, unsubscribeByToken } from '@/server/newsletter/service';
 import { resetCurrentSiteForTests } from '@/server/site/current';
+import { SEED_CONSENT_VERSION } from '@/server/site/defaults';
 
 import { call, data, err, ORIGIN } from '../helpers/api';
 import { prepareTestDatabase, resetDb } from '../helpers/db';
@@ -199,7 +200,7 @@ describe('GET /api/admin/subscribers', () => {
     expect(d.total).toBe(3);
     expect(d.counts).toEqual({ all: 3, pending: 1, confirmed: 1, unsubscribed: 1, bounced: 0, legacy_unconfirmed: 0 });
     expect(Number.isNaN(Date.parse(d.now))).toBe(false);
-    expect(d.subscribers[2]).toMatchObject({ status: 'confirmed', sourceUrl: '/p/first', consentVersion: 'v1', source: 'footer', pendingExpired: false, canSendConfirmation: false, providerSyncedAt: null });
+    expect(d.subscribers[2]).toMatchObject({ status: 'confirmed', sourceUrl: '/p/first', consentVersion: SEED_CONSENT_VERSION, source: 'footer', pendingExpired: false, canSendConfirmation: false, providerSyncedAt: null });
     expect(d.subscribers[1]).toMatchObject({ status: 'pending', canSendConfirmation: true });
     expect(d.subscribers[0].unsubscribedAt).not.toBeNull();
 
@@ -230,8 +231,8 @@ describe('GET /api/admin/subscribers', () => {
     const lines = (await csv.text()).trimEnd().split('\r\n');
     expect(lines[0]).toBe('email,name,status,subscribed_at,confirmed_at,unsubscribed_at,source,source_url,consent_version');
     expect(lines).toHaveLength(3);
-    expect(lines[1]).toMatch(/^formula@example\.com,"'=HYPERLINK\(""x""\)",pending,20\d\d-[^,]+,,,footer,\/,v1$/);
-    expect(lines[2]).toMatch(/^csv@example\.com,,unsubscribed,20\d\d-[^,]+,20\d\d-[^,]+,20\d\d-[^,]+,footer,\/archive\?topic=Op-Ed,v1$/);
+    expect(lines[1]).toMatch(/^formula@example\.com,"'=HYPERLINK\(""x""\)",pending,20\d\d-[^,]+,,,footer,\/,v2$/);
+    expect(lines[2]).toMatch(/^csv@example\.com,,unsubscribed,20\d\d-[^,]+,20\d\d-[^,]+,20\d\d-[^,]+,footer,\/archive\?topic=Op-Ed,v2$/);
     const filtered = await listRoute(new Request(`${ORIGIN}/api/admin/subscribers?format=csv&status=pending`, { headers: { cookie: admin.cookie, host: 'localhost:3410' } }), ctx);
     expect((await filtered.text()).trimEnd().split('\r\n')).toHaveLength(2);
     expect(subscribersToCsv([])).toBe('email,name,status,subscribed_at,confirmed_at,unsubscribed_at,source,source_url,consent_version\r\n');
@@ -244,7 +245,7 @@ describe('GET /api/admin/subscribers', () => {
     expect(bundle.format).toBe('blog0-newsletter-audit/1');
     expect(bundle.exportedBy).toBe('desk@example.test');
     expect(bundle.site).toEqual({ slug: currentSite.slug, brandName: 'blog0' });
-    expect(bundle.settings).toEqual({ mode: 'manual', autoSend: false, digestDays: 7, digestPosts: 3, consentText: currentSite.newsletterConsentText, consentVersion: 'v1', modeSetAt: null });
+    expect(bundle.settings).toEqual({ mode: 'manual', autoSend: false, digestDays: 7, digestPosts: 3, consentText: currentSite.newsletterConsentText, consentVersion: SEED_CONSENT_VERSION, modeSetAt: null });
     expect(bundle.subscribers.map((s) => s.email)).toEqual(['formula@example.com', 'csv@example.com']); // filters ignored
     const db = getDb();
     for (const s of bundle.subscribers) {
@@ -282,7 +283,7 @@ describe('subscriber detail, send-confirmation and admin unsubscribe', () => {
       signupIp: null,
       confirmedUserAgent: 'Mail/1',
       consentText: currentSite.newsletterConsentText,
-      consentVersion: 'v1',
+      consentVersion: SEED_CONSENT_VERSION,
       sourceUrl: '/p/x',
       confirmationSentCount: 1,
       confirmTokenExpiresAt: null,
@@ -437,14 +438,14 @@ describe('IP retention (pruneIps — pnpm newsletter:tick)', () => {
 
     expect(first).toEqual({ pruned: 2, eventRows: 5 }); // old: signup + confirmation_sent + confirmed carried IPs (3); never: signup + confirmation_sent (2)
     const o = await row('old@example.com');
-    expect(o).toMatchObject({ signupIp: null, confirmedIp: null, signupUserAgent: 'Old UA', confirmedUserAgent: 'Old Mail', signupSourceUrl: '/p/old', consentVersion: 'v1', status: 'confirmed' });
+    expect(o).toMatchObject({ signupIp: null, confirmedIp: null, signupUserAgent: 'Old UA', confirmedUserAgent: 'Old Mail', signupSourceUrl: '/p/old', consentVersion: SEED_CONSENT_VERSION, status: 'confirmed' });
     expect(o.consentText).toBe(currentSite.newsletterConsentText);
     expect(o.ipPrunedAt?.toISOString()).toBe(now.toISOString());
     const oEvents = await getDb().select().from(newsletterSubscriberEvent).where(eq(newsletterSubscriberEvent.subscriberId, o.id)).orderBy(newsletterSubscriberEvent.createdAt);
     expect(oEvents.map((e) => e.kind)).toEqual(['signup', 'confirmation_sent', 'confirmed', 'ip_pruned']);
     expect(oEvents.every((e) => e.ip === null)).toBe(true);
     expect(oEvents[0].userAgent).toBe('Old UA');
-    expect(oEvents[2].details).toMatchObject({ consentVersion: 'v1' });
+    expect(oEvents[2].details).toMatchObject({ consentVersion: SEED_CONSENT_VERSION });
     expect(oEvents[3]).toMatchObject({ source: 'system', details: { hadSignupIp: true, hadConfirmedIp: true } });
     expect(await row('never@example.com')).toMatchObject({ signupIp: null, status: 'pending' });
     expect(neverConfirmed.subscriber.signupIp).toBe('203.0.113.11');
