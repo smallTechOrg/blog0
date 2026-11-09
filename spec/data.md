@@ -119,7 +119,7 @@ Admins/writers. No roles in v0.1 — every user is an admin.
 | id | uuid pk | |
 | site_id | uuid fk | |
 | email | text not null | stored lower-cased; unique (site_id, email) |
-| display_name | text not null | default byline |
+| display_name | text not null | the byline on every article this user created (read live, so a rename updates them all) |
 | password_hash | text not null | argon2id PHC string |
 | last_login_at | timestamptz null | |
 | disabled_at | timestamptz null | disabled users cannot sign in (Phase 4 UI) |
@@ -148,7 +148,7 @@ The stable identity of a piece; content lives in revisions.
 | slug_is_custom | boolean not null default false | true once a writer edits the slug; while false and never published, title changes re-derive the slug |
 | status | text not null default `draft` | check in (`draft`,`submitted`,`approved`,`published`) |
 | topic | text not null default '' | e.g. Perspectives, Op-Ed, Educational, Analysis; required to publish |
-| byline_name | text not null | defaults to creator's display_name |
+| byline_name | text not null | creator's display_name at creation; kept for the record, not shown. Readers and the editor see the creator's current display_name (owner decision 2026-11-09); the article API no longer sets it |
 | created_by | uuid fk → app_user | |
 | current_revision_id | uuid null fk → article_revision on delete set null | latest saved revision |
 | published_revision_id | uuid null fk → article_revision on delete set null | what readers see |

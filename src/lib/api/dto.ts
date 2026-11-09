@@ -92,7 +92,7 @@ export type GetArticleResponse = ArticleResponse;
 /** PATCH /api/admin/articles/:id */
 export interface UpdateArticleRequest {
   baseRevisionId: string;
-  title?: string; dek?: string; bodyMd?: string; topic?: string; slug?: string; bylineName?: string;
+  title?: string; dek?: string; bodyMd?: string; topic?: string; slug?: string;
   isFeatured?: boolean; featuredRank?: number | null; inProgress?: boolean;
 }
 export interface UpdateArticleResponse { article: ArticleDetailDto; revisionCreated: boolean }

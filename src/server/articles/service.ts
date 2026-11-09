@@ -209,7 +209,6 @@ export async function updateArticle(
 
       const patch: Partial<typeof article.$inferInsert> = {};
       if (body.topic !== undefined && body.topic !== row.topic) patch.topic = body.topic;
-      if (body.bylineName !== undefined && body.bylineName !== row.bylineName) patch.bylineName = body.bylineName;
       if (body.isFeatured !== undefined && body.isFeatured !== row.isFeatured) patch.isFeatured = body.isFeatured;
       if (body.featuredRank !== undefined && body.featuredRank !== row.featuredRank) patch.featuredRank = body.featuredRank;
       if (body.inProgress !== undefined && body.inProgress !== row.inProgress) patch.inProgress = body.inProgress;

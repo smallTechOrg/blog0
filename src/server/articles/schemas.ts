@@ -39,7 +39,6 @@ export const updateArticleBody = z.object({
     .max(MAX.slug)
     .regex(SLUG_RE, 'Use lowercase letters, digits and single hyphens.')
     .optional(),
-  bylineName: z.string().trim().min(1).max(MAX.byline).optional(),
   isFeatured: z.boolean().optional(),
   featuredRank: z.number().int().min(0).max(10_000).nullable().optional(),
   inProgress: z.boolean().optional(),
