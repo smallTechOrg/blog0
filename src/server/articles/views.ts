@@ -82,7 +82,7 @@ export async function buildArticleDetail(siteId: string, row: ArticleRow, now: D
     latestGeneration(siteId, row.id, 'tldr', db),
     revisionCount(siteId, row.id, db),
     siteTopics(siteId, db),
-    userNames(siteId, [revision.createdBy], db),
+    userNames(siteId, [revision.createdBy, row.createdBy], db),
   ]);
   return {
     id: row.id,
@@ -90,7 +90,8 @@ export async function buildArticleDetail(siteId: string, row: ArticleRow, now: D
     slugLocked: row.firstPublishedAt !== null,
     status: row.status,
     topic: row.topic,
-    bylineName: row.bylineName,
+    // The byline is the author's current display name (owner decision 2026-11-09), not a stored copy.
+    bylineName: names.get(row.createdBy) ?? row.bylineName,
     isFeatured: row.isFeatured,
     featuredRank: row.featuredRank,
     inProgress: row.inProgress,

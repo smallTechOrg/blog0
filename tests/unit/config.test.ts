@@ -45,7 +45,7 @@ describe('loadConfig', () => {
     expect(config.jevTimeoutMs).toBe(45_000);
     expect(config.logLevel).toBe('info');
     expect(config.logFile).toBeNull();
-    expect(config.adminName).toBe('Sai Krishna V');
+    expect(config.adminName).toBe('Vennamaneni Sai Krishna');
     expect(config.storageDir).toBe('./var/storage');
     expect([config.maxAudioMb, config.maxAudioMinutes, config.maxImageMb]).toEqual([50, 30, 8]);
     expect(config.testDatabaseUrl).toBeNull();

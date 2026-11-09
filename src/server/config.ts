@@ -176,7 +176,7 @@ export const CONFIG_DEFAULTS = {
   jevModel: 'typesafe/jev-1.13',
   jevTimeoutMs: 45_000,
   logLevel: 'info' as LogLevel,
-  adminName: 'Sai Krishna V',
+  adminName: 'Vennamaneni Sai Krishna',
   storageDir: './var/storage',
   maxAudioMb: 50,
   maxAudioMinutes: 30,

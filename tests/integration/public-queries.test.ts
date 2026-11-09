@@ -1,5 +1,6 @@
 // Public (reader) queries. Real blog0_test Postgres; articles are inserted directly with
 // the schema (the articles service is a separate slice) and rendered with the real pipeline.
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
@@ -7,7 +8,7 @@ import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { DECK_DISCLOSURE } from '@/lib/view-models';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
-import { site, type SiteRow } from '@/server/db/schema';
+import { appUser, site, type SiteRow } from '@/server/db/schema';
 import { getHomeSections, isAdminSignedIn } from '@/server/public/home';
 import { articleMetadata, pageTitle } from '@/server/public/metadata';
 import { getPublishedArticle, listPublishedPostCards, nextArticleOf, publishedSlugExists } from '@/server/public/articles';
@@ -46,6 +47,14 @@ afterEach(() => {
 });
 
 describe('getPublishedArticle', () => {
+  it('bylines follow the author: renaming the user renames the byline on the next read, whatever byline_name stored', async () => {
+    await seedArticle({ slug: 'renamed', title: 'Renamed', bodyMd: BODY_B, bylineName: 'Old Name' });
+    expect((await getPublishedArticle('renamed'))?.bylineName).toBe('Writer');
+
+    await getDb().update(appUser).set({ displayName: 'Vennamaneni Sai Krishna' }).where(eq(appUser.siteId, siteRow.id));
+    expect((await getPublishedArticle('renamed'))?.bylineName).toBe('Vennamaneni Sai Krishna');
+  });
+
   it('returns the published article view model with formatted date, blocks, times and absolute urls', async () => {
     const pre = await renderArticle({ title: 'Measure the work', dek: 'Benchmarks are not the job.', bodyMd: BODY_A });
     await seedArticle({ slug: 'measure-the-work', title: 'Measure the work', dek: 'Benchmarks are not the job.', bodyMd: BODY_A, firstPublishedAt: day(8), deck: deckFrom(pre, [0, 2]) });
@@ -58,7 +67,7 @@ describe('getPublishedArticle', () => {
     expect(vm.title).toBe('Measure the work');
     expect(vm.dek).toBe('Benchmarks are not the job.');
     expect(vm.topic).toBe('Analysis');
-    expect(vm.bylineName).toBe('Sai Krishna V');
+    expect(vm.bylineName).toBe('Writer'); // the author's display name (tests/helpers/seed-articles.ts seedUser)
     expect(vm.publishedLabel).toBe('8 Sep 2026');
     expect(vm.updatedLabel).toBeNull();
     expect(vm.inProgress).toBe(false);

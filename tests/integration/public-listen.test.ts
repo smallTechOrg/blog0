@@ -273,7 +273,7 @@ describe('GET /api/public/articles/:slug/listen', () => {
       audio: { url: `/media/${audio.key}`, mimeType: 'audio/mpeg', durationMs: DURATION_MS },
       marks,
       timing: 'synced',
-      bylineName: 'Asha Writer',
+      bylineName: 'Writer', // the author's display name, not the stored byline
       times: { read: 1, tldr: null, listen: 2 },
       shareUrl: 'http://localhost:3410/p/synced/listen',
     });

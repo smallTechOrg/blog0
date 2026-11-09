@@ -229,14 +229,14 @@ describe('create and save', () => {
     expect(unknown.status).toBe(404);
   });
 
-  it('applies metadata (byline, featured, rank, in-progress badge) without a revision', async () => {
+  it('applies metadata (featured, rank, in-progress badge) without a revision; a byline in the body is ignored', async () => {
     const created = await create({ title: 'Meta', bodyMd: BODY });
 
     const res = data(
       (
         await patch(created.id, {
           baseRevisionId: created.currentRevision.id,
-          bylineName: 'Sai Krishna V',
+          bylineName: 'Someone Else',
           isFeatured: true,
           featuredRank: 2,
           inProgress: true,
@@ -245,7 +245,8 @@ describe('create and save', () => {
     );
 
     expect(res.revisionCreated).toBe(false);
-    expect(res.article).toMatchObject({ bylineName: 'Sai Krishna V', isFeatured: true, featuredRank: 2, inProgress: true });
+    // the byline is always the author's display name (owner decision 2026-11-09)
+    expect(res.article).toMatchObject({ bylineName: 'Asha Writer', isFeatured: true, featuredRank: 2, inProgress: true });
   });
 });
 

@@ -19,7 +19,7 @@ import { isValidSlug } from '../articles/slug';
 import { getConfig } from '../config';
 import { getRenderedRevision } from '../content';
 import { getDb } from '../db/client';
-import { article, articleFormat, articleRevision } from '../db/schema';
+import { appUser, article, articleFormat, articleRevision } from '../db/schema';
 import { readListenPayload, readTldrPayload, type ListenPayload, type TldrPayload } from '../formats/payload';
 import { log } from '../log';
 import { getCurrentSite } from '../site/current';
@@ -131,7 +131,9 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       id: article.id,
       slug: article.slug,
       topic: article.topic,
-      bylineName: article.bylineName,
+      // The author's current display name: renaming the user renames every byline (owner decision
+      // 2026-11-09); article.byline_name is only the name at creation.
+      bylineName: appUser.displayName,
       inProgress: article.inProgress,
       firstPublishedAt: article.firstPublishedAt,
       lastPublishedAt: article.lastPublishedAt,
@@ -145,6 +147,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
     })
     .from(article)
     .innerJoin(articleRevision, onPublishedRevision)
+    .innerJoin(appUser, eq(appUser.id, article.createdBy))
     .leftJoin(articleFormat, onTldr)
     .leftJoin(listenFormat, onListen)
     .where(and(publishedWhere(site.id), eq(article.slug, slug)))
