@@ -91,11 +91,11 @@ One row per tenant; v0.1 has one (`slug = BLOG0_SITE_SLUG`, default `blog0`).
 | brand_name | text not null | `blog0` |
 | wordmark | text not null | public wordmark, `blog0` (last char — the nought — spins; user decision: brand is blog0, not the design's log0) |
 | publisher_name | text not null | `smallTech` |
-| tagline | text not null | `the meaning of life, universe and everything` (Linear SMA-6) |
+| tagline | text not null | `smallTech's official publication` (was `the meaning of life, universe and everything`; owner, 2026-11-11) |
 | contact_email | text not null | `contact@smalltech.in` (Linear SMA-6; was the design value, divergence #13) |
-| about_strap | text not null | `Fresh Hand-Typed Content.` (Linear SMA-6) |
-| about_stand | text not null | `Welcome to blog0, the official publication of smallTech, …` (Linear SMA-6; full text in `src/server/site/defaults.ts`) |
-| about_body_md | text not null | the SMA-6 About body (`ABOUT_BODY_FULL` in `src/server/site/defaults.ts`), paragraphs separated by blank lines |
+| about_strap | text not null | `Fresh Hand-Typed Content Available Here.` (owner, 2026-11-11) |
+| about_stand | text not null | `Welcome to blog0, the official publication of [smallTech](https://smalltech.in), …` — the About texts accept `[label](https://…)` links (http/https only; `src/lib/inline-links.ts`); full text in `src/server/site/defaults.ts` |
+| about_body_md | text not null | the About body (`ABOUT_BODY_FULL` in `src/server/site/defaults.ts`, two paragraphs: who we are, what the publication covers), paragraphs separated by blank lines; accepts `[label](https://…)` links |
 | social_x_url | text null | footer icon hidden when null |
 | social_linkedin_url | text null | `https://www.linkedin.com/company/smalltechorg/` (owner); footer icon hidden when null |
 | timezone | text not null default `Asia/Kolkata` | public date formatting. > **Assumed:** smallTech is India-based (smalltech.in). |

@@ -326,3 +326,7 @@ html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
 .home-sec .fcard h3 { font-size: 20px; line-height: 1.22; letter-spacing: -0.022em; }
 @media (min-width: 768px) { .home-sec .fcard h3 { font-size: 21px; } }
 .home-sec .fcard p { font-size: 16px; line-height: 1.68; }
+
+/* Links inside the About texts (home About, /about, the Admin → Site preview): like article links. */
+.abt a.inline, .about-stand a.inline, .aboutbody a.inline { color: var(--accent-ink); border-bottom: 1px solid var(--accent-soft); }
+.abt a.inline:hover, .about-stand a.inline:hover, .aboutbody a.inline:hover { border-bottom-color: var(--accent-ink); }

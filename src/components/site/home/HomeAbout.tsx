@@ -26,11 +26,11 @@ export function HomeAbout({ wordmark, strap, stand, bodyParagraphs }: HomeAboutP
       <div className="abt">
         <div className="abt__lead">
           <Typewriter tag="p" className="abt__strap" text={strap} />
-          <Typewriter tag="p" className="abt__stand" text={stand} />
+          <Typewriter tag="p" className="abt__stand" text={stand} links />
         </div>
         <div className="abt__body">
           {bodyParagraphs.map((t, i) => (
-            <Typewriter key={i} tag="p" text={t} />
+            <Typewriter key={i} tag="p" text={t} links />
           ))}
         </div>
       </div>

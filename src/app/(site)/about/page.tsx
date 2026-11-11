@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import { AboutView } from '@/components/site/about/AboutView';
 import { aboutParagraphs } from '@/components/site/about/about-text';
+import { plainInline } from '@/lib/inline-links';
 import { pageTitle, sitePageRouteMetadata } from '@/server/public/metadata';
 import { getCurrentSite } from '@/server/site/current';
 
@@ -11,7 +12,7 @@ import { getCurrentSite } from '@/server/site/current';
 export const dynamic = 'force-dynamic';
 
 export function generateMetadata(): Promise<Metadata> {
-  return sitePageRouteMetadata('/about', (site) => ({ title: pageTitle('About', site.wordmark), description: site.aboutStand }));
+  return sitePageRouteMetadata('/about', (site) => ({ title: pageTitle('About', site.wordmark), description: plainInline(site.aboutStand) }));
 }
 
 export default async function AboutPage() {
