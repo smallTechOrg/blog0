@@ -49,14 +49,14 @@ describe('site defaults', () => {
       brandName: 'blog0',
       wordmark: 'blog0',
       publisherName: 'smallTech',
-      tagline: 'the meaning of life, universe and everything',
+      tagline: "smallTech's official publication",
       contactEmail: 'contact@smalltech.in',
-      aboutStrap: 'Fresh Hand-Typed Content.',
+      aboutStrap: 'Fresh Hand-Typed Content Available Here.',
       timezone: 'Asia/Kolkata',
       socialXUrl: null,
       socialLinkedinUrl: 'https://www.linkedin.com/company/smalltechorg/',
     });
-    expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toHaveLength(1);
+    expect(SITE_DEFAULTS.aboutBodyMd.split('\n\n')).toHaveLength(2);
     expect(SITE_DEFAULTS.aboutBodyMd).not.toMatch(/Placeholder/);
   });
 
@@ -67,15 +67,16 @@ describe('site defaults', () => {
     expect(SITE_DEFAULTS.wordmark.slice(-1)).toBe('0'); // the nought that spins
   });
 
-  it('seed the About copy from Linear SMA-6 (replaces the design ABOUT_* texts)', () => {
-    // left column: the stand; right column: the mission, then what the publication covers
+  it('seed the About copy (owner wording, 2026-11-11)', () => {
+    // left column: the stand (smallTech links to smalltech.in); right column: the mission, then what the publication covers
     expect(SITE_DEFAULTS.aboutStand).toBe(
-      'Welcome to blog0, the official publication of smallTech, a software company based in Bengaluru, India.',
+      'Welcome to blog0, the official publication of [smallTech](https://smalltech.in), a software company based in Bengaluru, India.',
     );
     const body = SITE_DEFAULTS.aboutBodyMd.split('\n\n');
     expect(body).toEqual([...ABOUT_BODY_FULL]);
     expect(body).toEqual([
-      "smallTech's mission is to ensure tech enables the democratisation of power not the concentration of it. On this publication, you will find articles that delve into philosophy, politics, culture and how these intersect with tech.",
+      'We are a collective of engineers, designers and thinkers with a mission to ensure tech enables the democratisation of power, not the concentration of it.',
+      'On this publication, you will find articles on how individuals and businesses can use AI to compete with enterprises. You will also find articles that delve into philosophy, politics, culture and how these intersect with tech.',
     ]);
   });
 });

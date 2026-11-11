@@ -173,8 +173,8 @@ export function SiteSettingsForm({
         {field('tagline', { hint: 'The line under the wordmark.' })}
         {field('contactEmail', { type: 'email', autoComplete: 'email', hint: 'Shown in the footer for tips, corrections and pitches.' })}
         {field('aboutStrap', { hint: 'The short line in the About block (home and /about).' })}
-        {field('aboutStand', { rows: 2, hint: 'The standfirst under “About ' + wordmark + '”.' })}
-        {field('aboutBodyMd', { rows: 8, hint: 'Plain paragraphs; a blank line starts a new one.' })}
+        {field('aboutStand', { rows: 2, hint: 'The standfirst under “About ' + wordmark + '”. Link a word with [word](https://…).' })}
+        {field('aboutBodyMd', { rows: 8, hint: 'Plain paragraphs; a blank line starts a new one. Link a word with [word](https://…).' })}
         {field('socialXUrl', { type: 'url', hint: 'Leave blank to hide the X icon in the footer.' })}
         {field('socialLinkedinUrl', { type: 'url', hint: 'Leave blank to hide the LinkedIn icon in the footer.' })}
         {field('privacyText', {

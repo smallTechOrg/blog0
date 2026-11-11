@@ -3,12 +3,16 @@
    plain paragraphs, no typewriter. The texts come from the site record
    (Admin → Site), never constants.
    ============================================================ */
+import { InlineText } from '@/components/design/InlineText';
+
 export function AboutBody({ paragraphs }: { paragraphs: string[] }) {
   return (
     <div className="aboutbody">
       <div className="abt__body">
         {paragraphs.map((t, i) => (
-          <p key={i}>{t}</p>
+          <p key={i}>
+            <InlineText text={t} />
+          </p>
         ))}
       </div>
     </div>

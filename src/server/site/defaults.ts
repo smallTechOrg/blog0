@@ -14,9 +14,10 @@ export const SEED_CONSENT_VERSION = 'v2';
 /** The design's wordmark, replaced by `blog0` (divergence 25); only used to upgrade old rows. */
 export const LEGACY_WORDMARK = 'log0';
 
-/** The About body (Linear SMA-6; was the design `ABOUT_BODY_FULL`, divergence #14). */
+/** The About body (Linear SMA-6; was the design `ABOUT_BODY_FULL`, divergence #14; reworded by the owner 2026-11-11). */
 export const ABOUT_BODY_FULL = [
-  "smallTech's mission is to ensure tech enables the democratisation of power not the concentration of it. On this publication, you will find articles that delve into philosophy, politics, culture and how these intersect with tech.",
+  'We are a collective of engineers, designers and thinkers with a mission to ensure tech enables the democratisation of power, not the concentration of it.',
+  'On this publication, you will find articles on how individuals and businesses can use AI to compete with enterprises. You will also find articles that delve into philosophy, politics, culture and how these intersect with tech.',
 ] as const;
 
 export const SITE_DEFAULTS = {
@@ -24,11 +25,12 @@ export const SITE_DEFAULTS = {
   brandName: 'blog0',
   wordmark: 'blog0',
   publisherName: 'smallTech',
-  tagline: 'the meaning of life, universe and everything',
+  tagline: "smallTech's official publication",
   contactEmail: 'contact@smalltech.in',
-  aboutStrap: 'Fresh Hand-Typed Content.',
+  aboutStrap: 'Fresh Hand-Typed Content Available Here.',
   // Home About is two columns: strap + stand on the left, the body on the right (Linear SMA-6 layout).
-  aboutStand: 'Welcome to blog0, the official publication of smallTech, a software company based in Bengaluru, India.',
+  aboutStand:
+    'Welcome to blog0, the official publication of [smallTech](https://smalltech.in), a software company based in Bengaluru, India.',
   aboutBodyMd: ABOUT_BODY_FULL.join('\n\n'),
   socialXUrl: null,
   socialLinkedinUrl: 'https://www.linkedin.com/company/smalltechorg/', // owner, 2026-11-09

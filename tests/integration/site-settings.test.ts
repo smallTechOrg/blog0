@@ -62,7 +62,7 @@ describe('GET /api/admin/site', () => {
     const expected: SiteSettingsDto = {
       tagline: SITE_DEFAULTS.tagline,
       contactEmail: 'contact@smalltech.in',
-      aboutStrap: 'Fresh Hand-Typed Content.',
+      aboutStrap: SITE_DEFAULTS.aboutStrap,
       aboutStand: SITE_DEFAULTS.aboutStand,
       aboutBodyMd: SITE_DEFAULTS.aboutBodyMd,
       socialXUrl: null,
