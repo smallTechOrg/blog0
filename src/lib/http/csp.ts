@@ -11,10 +11,18 @@ export interface CspOptions {
 }
 
 /**
+ * Where the shared smallTech analytics script (public/st-analytics.js, loaded by the public site
+ * layout only) sends Google Analytics hits. gtag.js itself needs no script-src entry: the nonce'd
+ * st-analytics.js injects it, which 'strict-dynamic' permits.
+ */
+const GA_CONNECT_SOURCES =
+  'https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com';
+
+/**
  * The page Content-Security-Policy. Scripts run only with the request's nonce ('strict-dynamic'
  * lets Next's nonce'd loader pull its chunks); styles allow inline (React style attributes cannot
  * carry nonces); images from self, data:, blob: and any https host (Markdown may embed remote
- * images); audio only from self (+ blob: for local previews); no framing, plugins or foreign forms.
+ * images); audio only from self (+ blob: for local previews); fetches to self and Google Analytics; no framing, plugins or foreign forms.
  */
 export function buildContentSecurityPolicy({ nonce, https }: CspOptions): string {
   const directives = [
@@ -24,7 +32,7 @@ export function buildContentSecurityPolicy({ nonce, https }: CspOptions): string
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
     "media-src 'self' blob:",
-    "connect-src 'self'",
+    `connect-src 'self' ${GA_CONNECT_SOURCES}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

@@ -423,7 +423,7 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `getConfig().publicBaseUrl` is https. The policy is built by the pure
   `buildContentSecurityPolicy({ nonce, https })` in `src/lib/http/csp.ts`; for
   `{ nonce: 'abc', https: false }` it is exactly:
-  `default-src 'self'; script-src 'self' 'nonce-abc' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; worker-src 'self' blob:; manifest-src 'self'`
+  `default-src 'self'; script-src 'self' 'nonce-abc' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; media-src 'self' blob:; connect-src 'self' https://www.google-analytics.com https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; worker-src 'self' blob:; manifest-src 'self'`
   and `https: true` appends `; upgrade-insecure-requests`. The same file exports
   `runtimeSecurityHeaders({ nonce, https }): Record<string, string>` (`content-security-policy`,
   plus `strict-transport-security` when `https`) — the proxy only adds the production gate and
@@ -440,6 +440,17 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   `serializeJsonLd(obj)` (`src/server/public/seo.ts`, pure): `JSON.stringify` then replace `<` →
   `<`, `>` → `>`, `&` → `&`, U+2028 → ` `, U+2029 → ` `, so author text can
   never close the element; the CSP is unchanged.
+- **Analytics (smallTech GA4, public pages only).** `public/st-analytics.js` is smallTech's shared
+  analytics script, copied unchanged from the shared source (never edited here). Only the public
+  site layout (`src/app/(site)/layout.tsx`) loads it, as `<script async src="/st-analytics.js"
+  nonce={nonce}>` with the request's `x-nonce` (under `'strict-dynamic'` the browser ignores
+  `'self'`, so the tag needs the nonce); the root layout and `/admin` never load it. The script
+  runs only on the production hostname (`blog0.smalltech.in`), skips `/admin` paths, injects
+  `https://www.googletagmanager.com/gtag/js` (allowed by `'strict-dynamic'`), and sends page views
+  plus click events (`.ga-cta` elements, `mailto:` links, `data-ga-event`) to Google Analytics —
+  the only third-party hosts in `connect-src`. `NewsletterForm` calls
+  `window.stTrack?.('newsletter_subscribe', { location: 'footer' })` after a successful signup. No
+  email address, name or other personal data is sent to Google Analytics.
 - Raw HTML in Markdown is never rendered. Uploaded files are validated by content (§9.3), stored
   under unguessable uuid keys, and served with their stored MIME type,
   `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`; the `/media/` route never

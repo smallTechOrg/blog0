@@ -60,7 +60,8 @@ scripts, framing, MIME sniffing and needless powerful features.
   designer mode send none of the CSP/HSTS headers):** every HTML page carries a strict
   Content-Security-Policy whose scripts are allowed only by a fresh per-request nonce
   (`'strict-dynamic'`), no framing (`frame-ancestors 'none'`), `object-src 'none'`, same-origin
-  `base-uri`/`form-action`/`connect-src`; images from self, `data:`, `blob:` and any `https:`
+  `base-uri`/`form-action`; `connect-src` is same-origin plus the Google Analytics hosts used by
+  the public pages' analytics script (`spec/architecture.md` §6); images from self, `data:`, `blob:` and any `https:`
   host (Markdown may embed remote images); audio from self (and `blob:` for local previews). HSTS (1 year, subdomains) and
   `upgrade-insecure-requests` are added only when `BLOG0_PUBLIC_BASE_URL` is https. Every response
   (pages, API, `/media`, static assets) carries `X-Content-Type-Options: nosniff`,

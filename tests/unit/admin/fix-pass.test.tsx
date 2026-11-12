@@ -102,6 +102,7 @@ describe('PrivacyView', () => {
     const html = renderToStaticMarkup(<PrivacyView paragraphs={['One <b>x</b>.', 'Two.']} contactEmail="hi@x.test" />);
     expect(html).toContain('<h1>Privacy</h1>');
     expect(html).toContain('One &lt;b&gt;x&lt;/b&gt;.');
+    expect(html).toContain('use Google Analytics, operated by smallTech');
     expect(html).toContain('Questions or an erasure request: <a href="mailto:hi@x.test">hi@x.test</a>');
   });
 });

@@ -111,8 +111,13 @@ export function NewsletterForm({ consentText }: NewsletterFormProps) {
       }),
     );
     setBusy(false);
-    if (outcome.kind === 'done' && outcome.delivery !== 'failed') setDone(outcome.delivery);
-    else if (outcome.kind === 'done') setErr(NL_DELIVERY_COPY.failed);
+    if (outcome.kind === 'done' && outcome.delivery !== 'failed') {
+      setDone(outcome.delivery);
+      // Conversion event for smallTech analytics (public/st-analytics.js). No personal data is sent.
+      (window as Window & { stTrack?: (name: string, params?: Record<string, string>) => void }).stTrack?.('newsletter_subscribe', {
+        location: 'footer',
+      });
+    } else if (outcome.kind === 'done') setErr(NL_DELIVERY_COPY.failed);
     else setErr(outcome.kind === 'invalid' ? NL_INVALID : NL_FAILED);
   }
 
@@ -167,7 +172,7 @@ export function NewsletterForm({ consentText }: NewsletterFormProps) {
                 if (err) setErr('');
               }}
             />
-            <button className="ft-go" type="submit" aria-label="Subscribe" disabled={busy}>
+            <button className="ft-go ga-cta" type="submit" aria-label="Subscribe" disabled={busy}>
               {busy ? '…' : '→'}
             </button>
           </div>

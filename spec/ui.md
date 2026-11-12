@@ -223,7 +223,9 @@ recording — div. 9).
 ### Privacy `/privacy` (fix pass)
 > **Assumed (fix pass):** a static server page in the site chrome (`src/app/(site)/privacy/page.tsx`),
 > laid out like About: h1 "Privacy", body = `site.privacyText` paragraphs (blank-line separated,
-> rendered as text — no raw HTML), plus a line "Questions or an erasure request: <contact_email>".
+> rendered as text — no raw HTML), then a fixed paragraph saying the public pages use Google
+> Analytics operated by smallTech (page views and clicks, cookies; no name or email is sent —
+> `PRIVACY_ANALYTICS_NOTE` in `PrivacyView.tsx`), plus a line "Questions or an erasure request: <contact_email>".
 > Linked from the newsletter form's consent line ("Privacy" link appended to
 > `.ft-micro`, the stored consent text itself is unchanged) and the footer. The seeded text is a
 > **draft: the site owner must review the wording — it is not legal advice.**
