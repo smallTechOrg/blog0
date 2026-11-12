@@ -70,13 +70,13 @@ describe('site defaults', () => {
   it('seed the About copy (owner wording, 2026-11-11)', () => {
     // left column: the stand (smallTech links to smalltech.in); right column: the mission, then what the publication covers
     expect(SITE_DEFAULTS.aboutStand).toBe(
-      'Welcome to blog0, the official publication of [smallTech](https://smalltech.in), a software company based in Bengaluru, India.',
+      'Welcome to blog0, the official publication of [smallTech](https://smalltech.in), an AI startup based in Bengaluru, India.',
     );
     const body = SITE_DEFAULTS.aboutBodyMd.split('\n\n');
     expect(body).toEqual([...ABOUT_BODY_FULL]);
     expect(body).toEqual([
-      'We are a collective of engineers, designers and thinkers whose mission is to ensure tech enables the democratisation of power, not the concentration of it.',
-      'On this publication, you will find articles on how to run an AI-native business in 2026, while also delving into the impact of AI on economics, politics and culture.',
+      'We are a collective of engineers, designers and thinkers on a mission to ensure tech enables the democratisation of power, not the concentration of it.',
+      'On this blog you will find articles not just about our mission, but also learning material on how to build and run Agentic AI for your own work as we do.',
     ]);
   });
 });

@@ -133,7 +133,10 @@ test('bot check: a submit inside 2 s, or with the honeypot filled, shows the sam
     if (r.url().endsWith('/api/newsletter') && r.method() === 'POST') bodies.push(r.postDataJSON() as Record<string, unknown>);
   });
 
-  // Too fast: straight after the page loads.
+  // Too fast: straight after the page loads. The page clock is frozen from the start, so the
+  // elapsed time the form reports is a fact of the test, not of how slow the CI machine is.
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(1_000);
   await page.goto('/');
   let form = page.locator('#newsletter');
   await form.getByLabel('Email').fill(fast);
@@ -141,6 +144,7 @@ test('bot check: a submit inside 2 s, or with the honeypot filled, shows the sam
   await expect(form.getByRole('status')).toHaveText(NL_RECORDED);
   expect(bodies.at(-1)).toMatchObject({ email: fast, website: '' });
   expect(bodies.at(-1)!.fillMs as number).toBeLessThan(2_000);
+  await page.clock.resume();
 
   // The honeypot is off-screen, out of the tab order and hidden from assistive tech.
   await page.goto('/');
