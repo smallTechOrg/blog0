@@ -16,8 +16,8 @@ export const LEGACY_WORDMARK = 'log0';
 
 /** The About body (Linear SMA-6; was the design `ABOUT_BODY_FULL`, divergence #14; reworded by the owner 2026-11-11 and 2026-11-12). */
 export const ABOUT_BODY_FULL = [
-  'We are a collective of engineers, designers and thinkers whose mission is to ensure tech enables the democratisation of power, not the concentration of it.',
-  'On this publication, you will find articles on how to run an AI-native business in 2026, while also delving into the impact of AI on economics, politics and culture.',
+  'We are a collective of engineers, designers and thinkers on a mission to ensure tech enables the democratisation of power, not the concentration of it.',
+  'On this blog you will find articles not just about our mission, but also learning material on how to build and run Agentic AI for your own work as we do.',
 ] as const;
 
 export const SITE_DEFAULTS = {
@@ -30,7 +30,7 @@ export const SITE_DEFAULTS = {
   aboutStrap: 'Fresh Hand-Typed Content Available Here.',
   // Home About is two columns: strap + stand on the left, the body on the right (Linear SMA-6 layout).
   aboutStand:
-    'Welcome to blog0, the official publication of [smallTech](https://smalltech.in), a software company based in Bengaluru, India.',
+    'Welcome to blog0, the official publication of [smallTech](https://smalltech.in), an AI startup based in Bengaluru, India.',
   aboutBodyMd: ABOUT_BODY_FULL.join('\n\n'),
   socialXUrl: null,
   socialLinkedinUrl: 'https://www.linkedin.com/company/smalltechorg/', // owner, 2026-11-09
