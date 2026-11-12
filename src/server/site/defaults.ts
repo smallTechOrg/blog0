@@ -14,10 +14,10 @@ export const SEED_CONSENT_VERSION = 'v2';
 /** The design's wordmark, replaced by `blog0` (divergence 25); only used to upgrade old rows. */
 export const LEGACY_WORDMARK = 'log0';
 
-/** The About body (Linear SMA-6; was the design `ABOUT_BODY_FULL`, divergence #14; reworded by the owner 2026-11-11). */
+/** The About body (Linear SMA-6; was the design `ABOUT_BODY_FULL`, divergence #14; reworded by the owner 2026-11-11 and 2026-11-12). */
 export const ABOUT_BODY_FULL = [
-  'We are a collective of engineers, designers and thinkers with a mission to ensure tech enables the democratisation of power, not the concentration of it.',
-  'On this publication, you will find articles on how individuals and businesses can use AI to compete with enterprises. You will also find articles that delve into philosophy, politics, culture and how these intersect with tech.',
+  'We are a collective of engineers, designers and thinkers whose mission is to ensure tech enables the democratisation of power, not the concentration of it.',
+  'On this publication, you will find articles on how to run an AI-native business in 2026, while also delving into the impact of AI on economics, politics and culture.',
 ] as const;
 
 export const SITE_DEFAULTS = {
