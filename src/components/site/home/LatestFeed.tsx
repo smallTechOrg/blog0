@@ -59,7 +59,7 @@ export function LatestFeed({ posts }: LatestFeedProps) {
             That’s everything in the feed.
           </p>
         )}
-        <Link className="btn-outline" href="/archive">
+        <Link className="btn-outline ga-cta" href="/archive">
           View all articles
         </Link>
       </div>

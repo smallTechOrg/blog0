@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
 
 import { Footer } from '@/components/site/Footer';
@@ -23,6 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function SiteLayout({ children }: { children: ReactNode }) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   const site = await getCurrentSite();
   const topics = await publishedTopics(site.id);
   const vm = siteViewModelFrom(site, { topics, year: yearInZone(new Date(), site.timezone) });
@@ -33,6 +35,9 @@ export default async function SiteLayout({ children }: { children: ReactNode }) 
       {children}
       <Footer site={vm} />
       <PageTyper />
+      {/* smallTech analytics (GA4): public pages only, never /admin. Carries the request nonce —
+          under 'strict-dynamic' the CSP ignores 'self' (spec/architecture.md §6). */}
+      <script async src="/st-analytics.js" nonce={nonce} />
     </div>
   );
 }
