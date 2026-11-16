@@ -26,6 +26,7 @@ link previews — pre-filled with the five smallTech articles.
 | Link previews | title, description, canonical URL, `og:*` with the default image, `twitter:card=summary_large_image` (Stage A) | crawlers |
 | Structured data, icons (Stage A) | JSON-LD (`Organization`+`WebSite` on home, `Article` on articles); favicon SVG/PNG/ICO | crawlers, browsers |
 | Sitemap/robots | published article URLs | crawlers |
+| RSS feed (`/feed.xml`) | RSS 2.0 of the 50 newest published articles; `<link rel="alternate" type="application/rss+xml">` in every public page's head | feed readers, crawlers |
 | Seeded articles | 5 published posts | database |
 | Seeded decks | 5 published TLDR decks (4–8 verbatim lines each) | database |
 | Boot strip | **dropped** (owner, UI review 2026-10-20) — no strip, no footer `> end of blog0` | — |
@@ -53,7 +54,8 @@ link previews — pre-filled with the five smallTech articles.
   matching real page.
 - The brand everywhere is **blog0** (wordmark with the spinning nought, footer lines,
   titles, copyright); contact mail is `contact@smalltech.in` and the About text is the
-  Linear SMA-6 copy; no RSS link or feed.
+  Linear SMA-6 copy. No visible RSS link or icon anywhere (footer included); the feed is
+  discoverable only through the head `<link rel="alternate">` (SEO follow-up to SMA-26).
 - **No boot strip and no footer `> end of blog0` line** (owner decision, UI review 2026-10-20).
   **Page typewriter (owner, 2026-10-20):** every arrival at `/`, `/archive` or `/about` (load or
   client navigation) prints the whole page — every character and placeholder, every line, box,
@@ -71,6 +73,30 @@ link previews — pre-filled with the five smallTech articles.
   (every line matched by exact text to a sentence of the article; a line that no longer matches is
   dropped with a warning). Re-running makes 0 calls and changes nothing. `--write-fixture`
   refreshes the committed fixture from real Jev output so the repo's decks reflect real output.
+- **RSS feed (SEO follow-up to Linear SMA-26).** `GET /feed.xml` (route handler
+  `src/app/feed.xml/route.ts`, `dynamic = 'force-dynamic'`, read per request like the sitemap so a
+  publish or unpublish shows immediately) answers `200`, `Content-Type: application/rss+xml;
+  charset=utf-8`, an RSS 2.0 document (`<rss version="2.0">` with the `atom` and `dc` namespaces).
+  Channel: `title` = site wordmark, `link` = `BLOG0_PUBLIC_BASE_URL` + `/`, `description` = the
+  site tagline (the wordmark when the tagline is empty), `language` `en`,
+  `<atom:link href="<base>/feed.xml" rel="self" type="application/rss+xml"/>`, `lastBuildDate` =
+  the newest `last_published_at` / `content_updated_at` / `first_published_at` among the items
+  (omitted when there are none). Items: published articles only (the shared `publishedWhere`
+  filter: never drafts, submitted/approved pieces or unpublished articles; current site only),
+  newest first by first publication then slug, at most 50 (`RSS_ITEM_LIMIT`); each has `title`
+  (published revision), `link` and `guid isPermaLink="true"` = the canonical Read address
+  `<base>/p/<slug>`, `pubDate` = first publication (RFC 822, `Date#toUTCString()`), `description`
+  = the dek (omitted when empty), `dc:creator` = the byline name (RSS `<author>` needs an email
+  address, so it is not used), `category` = the topic when non-empty. Every text value is
+  XML-escaped (`& < > " '`) and characters not allowed in XML 1.0 are dropped; no CDATA. The pure
+  builder is `buildRssFeed` in `src/server/public/rss.ts`; the query + assembly is `rssFeed()` in
+  `src/server/public/metadata.ts`.
+- **Feed discovery:** every public page's metadata carries `alternates.types =
+  { 'application/rss+xml': [{ url: '/feed.xml', title: <wordmark> }] }` beside its canonical —
+  set inside the metadata helpers (`articleMetadata`, `sitePageMetadata`, `siteDefaultMetadata`)
+  because Next merges `alternates` shallowly (a page's `alternates.canonical` would drop a
+  layout-only `types`). robots allows `/feed.xml` (only `/admin` and `/api/` are disallowed); the
+  proxy matcher skips it like `sitemap.xml` (no CSP nonce on a feed).
 - No reader page triggers an AI call; seeding is never triggered by a request.
 - Designer mode (`spec/capabilities/designer-mode.md`) serves this same site from the embedded
   database with the same seeds.
@@ -91,6 +117,8 @@ link previews — pre-filled with the five smallTech articles.
 - [ ] Toggling dark mode then reloading keeps `data-theme="dark"`.
 - [ ] `/p/humans-are-software` HTML contains `og:title`, `og:description` (= dek), `og:url` (absolute), `og:type=article`, `twitter:card` (Stage A value above).
 - [ ] `/sitemap.xml` lists exactly the published article URLs plus `/`, `/archive`, `/about`, `/privacy`.
+- [ ] `/feed.xml` → 200 `application/rss+xml; charset=utf-8`; RSS 2.0 with the wordmark title, `atom:link rel="self"`, and one item per published article newest first (≤ 50) whose `link` and `guid` are `<base>/p/<slug>`; drafts and unpublished articles never appear; `& < > " '` in titles/deks are escaped (integration + unit tests).
+- [ ] `/` and `/p/humans-are-software` HTML contain exactly one `<link rel="alternate" type="application/rss+xml" href="<base>/feed.xml">` and still their own `<link rel="canonical">`; no visible RSS link (E2E).
 - [ ] Visiting `/#tech-company-first/tldr` ends on `/p/tech-company-first/tldr` with the deck open (when a deck is published).
 - [ ] With 7 published non-featured articles, Latest shows 5, See More shows 7 and "That’s everything in the feed."
 - [ ] Clicking a card's TLDR opens the deck over the home page without leaving it; Escape returns to the same scroll position.
