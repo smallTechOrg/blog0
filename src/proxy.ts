@@ -31,7 +31,7 @@ export const config = {
     '/p/:slug/tldr',
     '/p/:slug/listen',
     {
-      source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml).*)',
+      source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml|feed.xml).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },

@@ -429,7 +429,7 @@ work until Phase 6). `isPublished` = article published and a published Listen pa
   plus `strict-transport-security` when `https`) — the proxy only adds the production gate and
   the nonce. Proxy matcher: the three article
   paths (always, as before — §8) plus
-  `{ source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml).*)', missing: [{ type: 'header', key: 'next-router-prefetch' }, { type: 'header', key: 'purpose', value: 'prefetch' }] }`;
+  `{ source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml|feed.xml).*)', missing: [{ type: 'header', key: 'next-router-prefetch' }, { type: 'header', key: 'purpose', value: 'prefetch' }] }`;
   the article 404 rewrite passes the same request headers (`NextResponse.rewrite(url, { request: { headers } })`)
   and sets the same response headers. The root layout becomes `async`, reads
   `(await headers()).get('x-nonce') ?? undefined` and renders the theme script as
@@ -1809,7 +1809,7 @@ blog0/
 │   ├── app/
 │   │   ├── layout.tsx           # <html data-theme> + theme init script + fonts + global CSS
 │   │   ├── not-found.tsx        # root 404 with site chrome (target of the proxy rewrite)
-│   │   ├── sitemap.ts  robots.ts
+│   │   ├── sitemap.ts  robots.ts  feed.xml/route.ts   # /feed.xml RSS 2.0 (reader-site.md)
 │   │   ├── (site)/              # public, wrapped by Boot/Masthead/Footer chrome
 │   │   │   ├── layout.tsx  page.tsx  not-found.tsx  error.tsx  archive/page.tsx  about/page.tsx
 │   │   │   ├── newsletter/{confirm,unsubscribe}/page.tsx   # Phase 7 link pages (site chrome, force-dynamic)
@@ -2022,7 +2022,7 @@ timings, copy). Numbers are stable (other files cite them).
 6. **Boot strip on** (user): `SHOW_BOOT_STRIP = true`, `--booth: 28px`, design `bootCommand` lines and timings verbatim (`spec/capabilities/reader-site.md`).
 7. **TLDR selection** (user): Jev picks 4–8 lines server-side; writers may hand-edit and reorder; the design heuristic is not ported. **Phase 8 (user):** Jev is the OpenRouter decisions model `typesafe/jev-1.13`; it scores every eligible sentence and the top k (k = 4–8 by length) form the deck in document order; per-line reasons are removed — the editor shows each line's relevance score instead and sorts the sentence picker by it. The reader-facing disclosure copy (divergence 8) is unchanged: "Lines selected by Jev (AI), verbatim from the article."
 9. **Listen without a recording**: the capsule's Listen (and the deck's mode-switcher Listen) stays visible but **disabled** with `title="No recording yet"` / `aria-label="Listen — no recording yet"` (same treatment as TLDR without a deck); card Listen buttons are hidden.
-12. **Footer links**: X/LinkedIn only when the site has their URLs; no RSS (user).
+12. **Footer links**: X/LinkedIn only when the site has their URLs; no RSS link (user). The post-freeze `/feed.xml` (SMA-26 follow-up) is discoverable only via the head `<link rel="alternate">`.
 13. **Contact mail**: `contact@smalltech.in` (Linear SMA-6) (seeded, editable in Admin → Site).
 14. **About copy**: the Linear SMA-6 copy is seeded (it replaced the design `ABOUT_*` texts).
 15. **Newsletter success copy**: Phase 2 used the design's "You’re in. First issue lands Thursday."; **Phase 7 amends it** to "Almost there — check your inbox and confirm." (double opt-in makes the old line false), and the line under the form becomes the site's editable consent text (default "One issue a week at most. Unsubscribe in one click; we never share the list.").

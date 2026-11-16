@@ -152,8 +152,8 @@ test.describe('reader site (blog0)', () => {
     // The footer's "> end of blog0" line is gone with the strip.
     await expect(page.locator('.ft-eof, .ft-us')).toHaveCount(0);
     expect(html).not.toContain('end of blog0');
-    // No RSS anywhere (div. 12).
-    await expect(page.locator('a[href*="rss"], a[href*="feed.xml"], link[type="application/rss+xml"]')).toHaveCount(0);
+    // No visible RSS link anywhere (div. 12); the feed is discoverable only through the head link.
+    await expect(page.locator('a[href*="rss"], a[href*="feed.xml"]')).toHaveCount(0);
   });
 
   test('the page typewriter types the whole of Home, Archive and About on every arrival, nothing else', async ({ browser }) => {
@@ -777,6 +777,34 @@ test.describe('reader site (blog0)', () => {
     expect(locs).toEqual(expect.arrayContaining([`${base}/archive`, `${base}/about`, `${base}/privacy`]));
     expect(locs.some((l) => l === base || l === `${base}/`)).toBe(true);
     expect(locs).toHaveLength(published.length + 4);
+  });
+
+  test('/feed.xml is RSS 2.0 of the published articles, and every public page links it beside its canonical', async ({ page, request }, testInfo) => {
+    const base = originOf(testInfo);
+    const res = await request.get('/feed.xml');
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toBe('application/rss+xml; charset=utf-8');
+    const xml = await res.text();
+    expect(xml).toContain('<rss version="2.0"');
+    expect(xml).toContain(`<atom:link href="${base}/feed.xml" rel="self" type="application/rss+xml"/>`);
+    const links = [...xml.matchAll(/<item>[\s\S]*?<link>([^<]*)<\/link>/g)].map((m) => m[1]);
+    const published = await publishedArticles();
+    expect(links.sort()).toEqual(published.slice(0, 50).map((p) => `${base}/p/${p.slug}`).sort());
+    for (const slug of SEEDED_SLUGS) expect(xml).toContain(`<guid isPermaLink="true">${base}/p/${slug}</guid>`);
+
+    const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const [path, canonical] of [
+      ['/', new RegExp(`^${escaped}/?$`)],
+      [`/p/${SEEDED.humans.slug}`, `${base}/p/${SEEDED.humans.slug}`],
+      ['/archive', `${base}/archive`],
+    ] as const) {
+      await page.goto(path);
+      const feedLink = page.locator('head link[rel="alternate"][type="application/rss+xml"]');
+      await expect(feedLink, path).toHaveCount(1);
+      await expect(feedLink, path).toHaveAttribute('href', `${base}/feed.xml`);
+      await expect(feedLink, path).toHaveAttribute('title', 'blog0');
+      await expect(page.locator('head link[rel="canonical"]'), path).toHaveAttribute('href', canonical);
+    }
   });
 
   // A seeded article has no recording: Listen is disabled with its reason (in the capsule and in the

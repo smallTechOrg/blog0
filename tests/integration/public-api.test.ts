@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { GET as listenRoute } from '@/app/api/public/articles/[slug]/listen/route';
 import { GET as tldrRoute } from '@/app/api/public/articles/[slug]/tldr/route';
+import { GET as feedRoute } from '@/app/feed.xml/route';
 import robots from '@/app/robots';
 import sitemap from '@/app/sitemap';
 import type { PublicListenDto, PublicTldrDto } from '@/lib/api/dto';
@@ -185,6 +186,71 @@ describe('sitemap and robots', () => {
   });
 });
 
+describe('GET /feed.xml', () => {
+  async function getFeed() {
+    const res = await feedRoute();
+    return { status: res.status, type: res.headers.get('content-type'), xml: await res.text() };
+  }
+  const itemLinks = (xml: string) => [...xml.matchAll(/<item>[\s\S]*?<link>([^<]*)<\/link>/g)].map((m) => m[1]);
+
+  it('is RSS 2.0 of the published articles only, newest first, with escaped fields from the published revision', async () => {
+    await seedArticle({ slug: 'older', title: 'Older', dek: 'Old dek.', topic: 'Op-Ed', bodyMd: BODY_B, firstPublishedAt: day(2) });
+    await seedArticle({
+      slug: 'newer',
+      title: 'Cats & <dogs>',
+      dek: 'A "quoted" dek & more.',
+      topic: '',
+      bylineName: 'Ada <Lovelace>',
+      bodyMd: BODY_A,
+      firstPublishedAt: day(5),
+      lastPublishedAt: day(9),
+      laterEdit: { title: 'UNPUBLISHED EDIT', bodyMd: BODY_B },
+    });
+    await seedArticle({ slug: 'a-draft', title: 'Draft', bodyMd: BODY_B, status: 'draft', withPublishedRevision: false });
+    await seedArticle({ slug: 'was-live', title: 'Was live', bodyMd: BODY_B, status: 'draft', firstPublishedAt: day(1) });
+    await seedArticle({ slug: 'in-review', title: 'In review', bodyMd: BODY_B, status: 'submitted', firstPublishedAt: day(3) });
+    const [other] = await getDb().insert(site).values(siteSeedFor('other-site')).returning();
+    await seedArticle({ slug: 'elsewhere', title: 'Elsewhere', bodyMd: BODY_B, siteId: other.id });
+
+    const { status, type, xml } = await getFeed();
+
+    expect(status).toBe(200);
+    expect(type).toBe('application/rss+xml; charset=utf-8');
+    expect(xml).toContain('<rss version="2.0"');
+    expect(xml).toContain(`<title>${siteRow.wordmark}</title>`);
+    expect(xml).toContain(`<link>${BASE}/</link>`);
+    expect(xml).toContain(`<atom:link href="${BASE}/feed.xml" rel="self" type="application/rss+xml"/>`);
+    expect(xml).toContain(`<lastBuildDate>${day(9).toUTCString()}</lastBuildDate>`);
+    expect(itemLinks(xml)).toEqual([`${BASE}/p/newer`, `${BASE}/p/older`]);
+    for (const hidden of ['a-draft', 'was-live', 'in-review', 'elsewhere', 'UNPUBLISHED EDIT']) expect(xml).not.toContain(hidden);
+    expect(xml).toContain(`<guid isPermaLink="true">${BASE}/p/newer</guid>`);
+    expect(xml).toContain('<title>Cats &amp; &lt;dogs&gt;</title>');
+    expect(xml).toContain('<description>A &quot;quoted&quot; dek &amp; more.</description>');
+    expect(xml).toContain('<dc:creator>Ada &lt;Lovelace&gt;</dc:creator>');
+    expect(xml).toContain(`<pubDate>${day(5).toUTCString()}</pubDate>`);
+    expect(xml).toContain('<category>Op-Ed</category>');
+    expect(xml.match(/<category>/g)).toHaveLength(1);
+  });
+
+  it('lists at most the 50 newest articles', async () => {
+    for (let i = 0; i < 52; i++) {
+      await seedArticle({ slug: `post-${String(i).padStart(2, '0')}`, title: `Post ${i}`, bodyMd: BODY_B, firstPublishedAt: new Date(day(1).getTime() + i * 3_600_000) });
+    }
+    const links = itemLinks((await getFeed()).xml);
+    expect(links).toHaveLength(50);
+    expect(links[0]).toBe(`${BASE}/p/post-51`);
+    expect(links.at(-1)).toBe(`${BASE}/p/post-02`);
+  });
+
+  it('is a valid empty channel when nothing is published', async () => {
+    const { status, xml } = await getFeed();
+    expect(status).toBe(200);
+    expect(xml).not.toContain('<item>');
+    expect(xml).not.toContain('<lastBuildDate>');
+    expect(xml.trimEnd().endsWith('</channel>\n</rss>')).toBe(true);
+  });
+});
+
 describe('article route metadata', () => {
   it('carries title "— blog0", dek, canonical and OG published/modified times from the DB', async () => {
     const pre = await renderArticle({ title: 'OG test', dek: 'The dek.', bodyMd: BODY_A });
@@ -197,6 +263,8 @@ describe('article route metadata', () => {
     expect(read.title).toBe('OG test — blog0');
     expect(read.description).toBe('The dek.');
     expect(read.alternates?.canonical).toBe(`${BASE}/p/og-test`);
+    // The RSS discovery link survives beside the canonical (Next merges alternates shallowly).
+    expect(read.alternates?.types).toEqual({ 'application/rss+xml': [{ url: '/feed.xml', title: 'blog0' }] });
     const og = read.openGraph as Record<string, unknown>;
     expect(og).toMatchObject({
       type: 'article',

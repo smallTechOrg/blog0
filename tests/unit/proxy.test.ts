@@ -72,7 +72,7 @@ describe('proxy config', () => {
   it('matches the article, TLDR and Listen share routes, plus every page that is not a prefetch', () => {
     expect(config.matcher.slice(0, 3)).toEqual(['/p/:slug', '/p/:slug/tldr', '/p/:slug/listen']);
     expect(config.matcher[3]).toEqual({
-      source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml).*)',
+      source: '/((?!api/|_next/|media/|favicon.ico|robots.txt|sitemap.xml|feed.xml).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },
@@ -84,7 +84,7 @@ describe('proxy config', () => {
     const { source } = config.matcher[3] as { source: string };
     const re = new RegExp(`^${source}$`);
     for (const path of ['/', '/archive', '/admin/login', '/admin', '/p/x/listen', '/about']) expect(re.test(path)).toBe(true);
-    for (const path of ['/api/health', '/_next/static/chunks/a.js', '/media/abc', '/favicon.ico', '/robots.txt', '/sitemap.xml']) {
+    for (const path of ['/api/health', '/_next/static/chunks/a.js', '/media/abc', '/favicon.ico', '/robots.txt', '/sitemap.xml', '/feed.xml']) {
       expect(re.test(path)).toBe(false);
     }
   });

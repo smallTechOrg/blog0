@@ -105,7 +105,7 @@ Behaviour rules live in the capability files; this file owns screens, markup and
 `<div id="blog0-root">` → `Masthead` (wordmark **blog0** types in on the page clock, last char
 spins forever unless reduced motion; tagline types after 960 ms;
 compacts after 56 px scroll with hysteresis) → page → `Footer` (ASCII canvas, newsletter, topics,
-contact mail, X/LinkedIn icons only when the site has URLs, no RSS, `© <year> blog0 | smallTech`;
+contact mail, X/LinkedIn icons only when the site has URLs, no RSS link (the feed is head-discovery only), `© <year> blog0 | smallTech`;
 no `> end of blog0` line and no boot strip — owner decision, UI review 2026-10-20). `PageTyper` runs on every pathname change. The theme toggle
 flips `data-theme` and persists it.
 
@@ -121,7 +121,7 @@ BLOG0_PUBLIC_BASE_URL`): icons `/favicon.svg` (`image/svg+xml`), `/favicon-32.pn
 `/favicon.ico` (16+32); on every public page `openGraph.images = [{ url: '/og-default.png', width:
 1200, height: 630, alt: '<brand>' }]` and `twitter = { card: 'summary_large_image', title,
 description, images: ['/og-default.png'] }` (articles use the default image — no per-article
-images). Assets in `public/`: `favicon.svg`, `favicon-32.png`, `favicon.ico`, `og-default.png`
+images). Every public page's head also carries `<link rel="alternate" type="application/rss+xml" title="<brand>" href="<base>/feed.xml">` beside its canonical (post-freeze RSS feed, `spec/capabilities/reader-site.md`). Assets in `public/`: `favicon.svg`, `favicon-32.png`, `favicon.ico`, `og-default.png`
 (1200×630 PNG < 60 KB: a plain wordmark card — `--bg` field, **blog0** in Space Grotesk 700 `--ink`,
 tagline in `--muted`, a 6 px `--accent` rule; made once with any tool, the binary is committed) and
 `logo.png` (512×512 wordmark mark, the JSON-LD publisher logo). **Designer-replaceable:** a

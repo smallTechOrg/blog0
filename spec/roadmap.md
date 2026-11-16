@@ -69,9 +69,15 @@ GitHub login (later), Markdown file upload and posts-repo sync (later — the co
 source-agnostic so they plug in without schema change), newsletter A/B tests, scheduled sends,
 in-app open/click tracking and admin-editable email templates (Phase 7 ships owned list +
 issues via Listmonk; see `spec/capabilities/newsletter-issues.md` → Out of scope),
-RSS feed, image thumbnails on cards (design has them switched off), the design's retired
+image thumbnails on cards (design has them switched off), the design's retired
 component library (word cloud, tiers, pull quote, go-deeper aside, expand cards, featured
 rotator, sentence builder, in-deck poll).
+
+---
+
+**Post-freeze addition (SEO follow-up to Linear SMA-26, owner-requested):** an RSS 2.0 feed at
+`/feed.xml` with head discovery links (no visible RSS link) — rules in
+`spec/capabilities/reader-site.md` (Business Rules "RSS feed"); no migration.
 
 ---
 
@@ -305,7 +311,7 @@ with the 5 articles + decks; admin at `/admin` (credentials printed once, kept i
    persists across reloads. Subscribe in the footer → "You're in. First issue lands Thursday.";
    the address appears in **Admin → Subscribers** (Export CSV). Edit About in **Admin → Site** →
    home and `/about` change. View source → `<title>… — blog0</title>` and OG tags. `/#<id>/tldr`
-   lands on `/p/<id>/tldr`. Footer: no RSS; X/LinkedIn only once their URLs are set.
+   lands on `/p/<id>/tldr`. Footer: no RSS link (the post-freeze `/feed.xml` is head-discovery only); X/LinkedIn only once their URLs are set.
 
 ---
 

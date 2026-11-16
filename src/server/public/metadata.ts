@@ -1,15 +1,16 @@
 import 'server-only';
 
-import { desc } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { Metadata, MetadataRoute } from 'next';
 
 import type { ArticleViewModel } from '@/lib/view-models';
 
 import { getConfig } from '../config';
 import { getDb } from '../db/client';
-import { article, type SiteRow } from '../db/schema';
+import { article, articleRevision, type SiteRow } from '../db/schema';
 import { getCurrentSite } from '../site/current';
 import { publishedWhere, type PublishedArticlePage } from './articles';
+import { buildRssFeed, RSS_ITEM_LIMIT } from './rss';
 import { articleJsonLd, homeJsonLd, ogImageMetadata, twitterMetadata } from './seo';
 
 // Page metadata for the reader site (design `titleFor`: "<Title> — blog0", home = "blog0";
@@ -30,6 +31,15 @@ export function metadataBaseUrl(): URL | null {
 
 export const TITLE_SEPARATOR = ' — ';
 
+/** The feed address in every public page's head (spec/capabilities/reader-site.md "Feed discovery"). */
+export const FEED_PATH = '/feed.xml';
+
+/** `alternates.types` for the RSS discovery link. It is set by each helper below beside the page's
+ *  canonical, because Next merges `alternates` shallowly (a page's canonical would drop a layout-only `types`). */
+export function feedAlternateTypes(wordmark: string): NonNullable<NonNullable<Metadata['alternates']>['types']> {
+  return { 'application/rss+xml': [{ url: FEED_PATH, title: wordmark }] };
+}
+
 /** "<name> — <wordmark>" (design BRAND_SUFFIX). */
 export function pageTitle(name: string, wordmark: string): string {
   return name + TITLE_SEPARATOR + wordmark;
@@ -45,7 +55,7 @@ export function articleMetadata(
     title: pageTitle(a.title, opts.wordmark),
     description,
     // Both addresses show the same article; search engines index the Read address.
-    alternates: { canonical: a.articleUrl },
+    alternates: { canonical: a.articleUrl, types: feedAlternateTypes(opts.wordmark) },
     authors: [{ name: a.bylineName }],
     openGraph: {
       type: 'article',
@@ -68,7 +78,7 @@ export function sitePageMetadata(opts: { title: string; description?: string; ur
   return {
     title: opts.title,
     description: opts.description,
-    ...(opts.url ? { alternates: { canonical: opts.url } } : {}),
+    alternates: { ...(opts.url ? { canonical: opts.url } : {}), types: feedAlternateTypes(opts.siteName) },
     openGraph: {
       type: 'website',
       title: opts.title,
@@ -87,6 +97,7 @@ export function siteDefaultMetadata(wordmark: string): Metadata {
   const base = metadataBaseUrl();
   return {
     ...(base ? { metadataBase: base } : {}),
+    alternates: { types: feedAlternateTypes(wordmark) },
     openGraph: { siteName: wordmark, images: ogImageMetadata(wordmark) },
     twitter: twitterMetadata({ title: wordmark }),
   };
@@ -164,6 +175,46 @@ export async function sitemapEntries(): Promise<MetadataRoute.Sitemap> {
     { url: base + '/privacy', changeFrequency: 'yearly', priority: 0.3 },
     ...articles,
   ];
+}
+
+/** `/feed.xml`: RSS 2.0 of the newest RSS_ITEM_LIMIT published articles (published revision's
+ *  title + dek, canonical Read address), current site only. */
+export async function rssFeed(): Promise<string> {
+  const base = getConfig().publicBaseUrl;
+  const site = await getCurrentSite();
+  const rows = await getDb()
+    .select({
+      slug: article.slug,
+      topic: article.topic,
+      bylineName: article.bylineName,
+      firstPublishedAt: article.firstPublishedAt,
+      lastPublishedAt: article.lastPublishedAt,
+      contentUpdatedAt: article.contentUpdatedAt,
+      title: articleRevision.title,
+      dek: articleRevision.dek,
+    })
+    .from(article)
+    .innerJoin(articleRevision, eq(articleRevision.id, article.publishedRevisionId))
+    .where(publishedWhere(site.id))
+    .orderBy(desc(article.firstPublishedAt), article.slug)
+    .limit(RSS_ITEM_LIMIT);
+
+  return buildRssFeed(
+    { title: site.wordmark, baseUrl: base, description: site.tagline },
+    rows.map((r) => {
+      const updated = [r.lastPublishedAt, r.contentUpdatedAt].filter((d): d is Date => d instanceof Date);
+      return {
+        slug: r.slug,
+        title: r.title,
+        dek: r.dek,
+        topic: r.topic,
+        bylineName: r.bylineName,
+        articleUrl: base + '/p/' + r.slug,
+        firstPublishedAt: r.firstPublishedAt as Date,
+        updatedAt: updated.length ? new Date(Math.max(...updated.map((d) => d.getTime()))) : null,
+      };
+    }),
+  );
 }
 
 /** `/robots.txt`: everything public is crawlable; the desk and the API are not. */
