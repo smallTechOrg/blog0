@@ -48,7 +48,7 @@ export const revisionBody = z.object({ revisionId: id });
 
 export const saveDeckBody = z.object({
   revisionId: id,
-  // Count rules (1–12) are a deck rule → 422 DECK_INVALID; the 100 cap only bounds the payload.
+  // The count rule (at least 1 line; no upper limit) is a deck rule → 422 DECK_INVALID.
   // Phase 8: a legacy `reason` key (or any other extra key, e.g. a client-sent relevance) is
   // stripped by zod, not refused — relevance is never accepted from the client.
   slides: z
@@ -57,8 +57,7 @@ export const saveDeckBody = z.object({
         sid: z.string().trim().min(1).max(64),
         source: z.enum(['jev', 'writer']),
       }),
-    )
-    .max(100),
+    ),
 });
 
 export type CreateArticleBody = z.infer<typeof createArticleBody>;

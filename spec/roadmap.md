@@ -92,7 +92,7 @@ rotator, sentence builder, in-deck poll).
 > **Decided (user):** seeded posts get their decks from the explicit `pnpm seed:tldr` (Jev once per post with a real key; the committed fixture `src/server/seed/decks/*.json` without one); the design's paraphrased TLDR arrays are never seeded.
 > **Assumed:** `pnpm seed:tldr -- --write-fixture` (real key) keeps the committed fixture equal to real Jev output; a unit test validates the fixture against the seed articles.
 > **Assumed:** Login and newsletter throttling are in-memory per process (single instance) before Phase 5; Phase 5 counts them in Postgres (`spec/capabilities/abuse-protection.md`; in-memory remains for designer mode and tests).
-> **Assumed:** Hand-edited decks allow 1–12 lines and reordering (Jev itself picks 4–8 in document order).
+> **Assumed:** Hand-edited decks allow any number of lines (at least 1; the 12-line cap was removed in SMA-35) and reordering (Jev itself picks 4–8 in document order).
 > **Assumed:** A published deck whose lines vanished from the text blocks publishing of new changes until fixed (the old deck keeps serving meanwhile); publishing without any deck is allowed.
 > **Assumed:** Admins are all equal (no roles); approve-your-own-article is allowed in v0.1.
 > **Decided (user, 2026-10-13):** manual tap-along sync is removed; Listen timing is estimated at read time; accurate alignment is deferred to Phase 6 (local, no paid tokens); Listen never blocks publishing. Phase 4 is **on hold**; revision history is removed from Phase 4 and deferred. (Superseded by the freeze: Phase 4, Phase 6 and revision history are Frozen — not scheduled.)

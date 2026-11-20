@@ -8,7 +8,7 @@ import type { RenderedArticle } from '@/lib/content/types';
 import { getConfig } from '../config';
 import { getDb, type Executor } from '../db/client';
 import { aiGeneration, articleFormat, type AiGenerationRow, type ArticleRow } from '../db/schema';
-import { readTldrPayload, TLDR_MAX_SLIDES, TLDR_MIN_SLIDES, type TldrPayload } from '../formats/payload';
+import { readTldrPayload, TLDR_MIN_SLIDES, type TldrPayload } from '../formats/payload';
 import { missingSlides, tldrAdapter } from '../formats/tldr';
 import { GENERATION_STALE_MS, isGenerationActive } from '../formats/types';
 import { ApiError } from '../http/api';
@@ -254,13 +254,11 @@ export async function saveDeck(ctx: ActorContext, id: string, body: SaveDeckBody
     const revision = await requireCurrentRevision(ctx.siteId, row, tx);
     const rendered = await renderRevision(revision);
 
-    if (body.slides.length < TLDR_MIN_SLIDES || body.slides.length > TLDR_MAX_SLIDES) {
+    if (body.slides.length < TLDR_MIN_SLIDES) {
       throw new ApiError(
         'DECK_INVALID',
         422,
-        body.slides.length === 0
-          ? 'A deck needs at least one line — use “Clear deck” to remove it.'
-          : `A deck can have at most ${TLDR_MAX_SLIDES} lines (got ${body.slides.length}).`,
+        'A deck needs at least one line — use “Clear deck” to remove it.',
         { sids: [] } satisfies DeckInvalidDetails,
       );
     }

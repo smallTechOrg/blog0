@@ -150,7 +150,7 @@ export interface GenerateTldrResponse { tldr: TldrStateDto; generation: Generati
 export interface GenerateTldrErrorDetails { generation: GenerationDto }
 
 /**
- * PUT /api/admin/articles/:id/tldr (1–12 slides; text resolved server-side from sid).
+ * PUT /api/admin/articles/:id/tldr (at least 1 slide, no upper limit; text resolved server-side from sid).
  * A legacy `reason` key is stripped, not refused; relevance is never accepted from the client.
  */
 export interface SaveDeckRequest {

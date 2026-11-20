@@ -7,7 +7,6 @@ import { z } from 'zod';
 
 import type { Sentence } from '@/lib/content/types';
 
-import { TLDR_MAX_SLIDES } from '../../formats/payload';
 
 // Committed TLDR deck fixtures (spec/data.md → Seed data, `pnpm seed:tldr`): one
 // `<slug>.json` per seed post, captured from real Jev output with `pnpm seed:tldr -- --write-fixture`.
@@ -28,8 +27,7 @@ export const deckFixtureSchema = z.object({
   capturedAt: z.iso.datetime(),
   lines: z
     .array(z.object({ text: z.string().min(1), relevance: z.number().min(0).max(1).optional() }))
-    .min(1)
-    .max(TLDR_MAX_SLIDES),
+    .min(1),
 });
 
 export type DeckFixture = z.infer<typeof deckFixtureSchema>;

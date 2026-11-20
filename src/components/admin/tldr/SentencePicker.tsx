@@ -4,7 +4,7 @@ import { useState, type KeyboardEvent } from 'react';
 
 import type { SentenceDto } from '@/lib/api/dto';
 
-import { hasScores, MAX_DECK_LINES, sectionOf, sortByRelevance, type PickerOrder } from './deck-edit';
+import { hasScores, sectionOf, sortByRelevance, type PickerOrder } from './deck-edit';
 import { RelevanceTag } from './DeckList';
 
 // "Article lines" (spec/ui.md §4 SentencePicker): every eligible sentence of the saved revision,
@@ -17,7 +17,6 @@ import { RelevanceTag } from './DeckList';
 export interface SentencePickerProps {
   sentences: readonly SentenceDto[];
   chosen: ReadonlySet<string>;
-  deckSize: number;
   onToggle: (sentence: SentenceDto, checked: boolean) => void;
   disabled?: boolean;
   /** Initial sort choice (tests); otherwise By relevance when scores exist. */
@@ -48,12 +47,11 @@ const ORDERS: ReadonlyArray<{ value: PickerOrder; label: string }> = [
   { value: 'article', label: 'In article order' },
 ];
 
-export function SentencePicker({ sentences, chosen, deckSize, onToggle, disabled, initialOrder }: SentencePickerProps) {
+export function SentencePicker({ sentences, chosen, onToggle, disabled, initialOrder }: SentencePickerProps) {
   // null = the writer hasn't chosen: follow the default (so a fresh Generate flips to By relevance).
   const [choice, setChoice] = useState<PickerOrder | null>(initialOrder ?? null);
   const scored = hasScores(sentences);
   const order: PickerOrder = scored ? (choice ?? 'relevance') : 'article';
-  const full = deckSize >= MAX_DECK_LINES;
 
   if (sentences.length === 0) {
     return <p className="admin-muted">No eligible sentences in the saved article yet (Jev only uses sentences of 5+ words).</p>;
@@ -73,7 +71,7 @@ export function SentencePicker({ sentences, chosen, deckSize, onToggle, disabled
     const on = chosen.has(s.sid);
     return (
       <label key={s.sid} className={on ? 'picker__line is-on' : 'picker__line'} data-sid={s.sid}>
-        <input type="checkbox" checked={on} disabled={disabled || (!on && full)} onChange={(e) => onToggle(s, e.target.checked)} />
+        <input type="checkbox" checked={on} disabled={disabled} onChange={(e) => onToggle(s, e.target.checked)} />
         <span className="picker__body">
           <RelevanceTag relevance={s.relevance} />
           <span className="picker__text">{s.text}</span>
@@ -112,7 +110,6 @@ export function SentencePicker({ sentences, chosen, deckSize, onToggle, disabled
           );
         })}
       </div>
-      {full ? <p className="admin-hint">The deck holds at most {MAX_DECK_LINES} lines — remove one to add another.</p> : null}
       {order === 'relevance' ? (
         <div className="picker__flat" data-order="relevance">
           {sortByRelevance(sentences).map((s) => row(s, true))}

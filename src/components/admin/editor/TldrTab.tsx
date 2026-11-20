@@ -372,7 +372,6 @@ export function TldrTab(props: TldrTabProps) {
           <SentencePicker
             sentences={sentences}
             chosen={chosen}
-            deckSize={deck.lines.length}
             onToggle={toggle}
             disabled={inFlight || busy !== null}
           />

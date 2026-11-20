@@ -460,7 +460,7 @@ describe('hand-picked deck lifecycle', () => {
     expect(state.latestGeneration).toMatchObject({ status: 'failed', picks: null, errorCode: 'LLM_INVALID_OUTPUT' });
   });
 
-  it('rejects unknown, duplicate, empty and 13-slide decks with 422 DECK_INVALID listing the bad sids', async () => {
+  it('rejects unknown, duplicate and empty decks with 422 DECK_INVALID listing the bad sids, and accepts a deck of any length (SMA-35)', async () => {
     const created = await createArticle({ title: 'Invalid decks', bodyMd: `${BODY}\n\n${Array.from({ length: 10 }, (_, i) => `Extra sentence number ${i} has enough words.`).join('\n\n')}` });
     const revisionId = created.currentRevision.id;
     const { sentences } = await tldr(created.id);
@@ -468,8 +468,7 @@ describe('hand-picked deck lifecycle', () => {
     const unknown = await putDeck(created.id, { revisionId, slides: [{ sid: sentences[0].sid, source: 'writer' }, { sid: 'p-deadbeef-s0', source: 'writer' }] });
     const duplicate = await putDeck(created.id, { revisionId, slides: [{ sid: sentences[1].sid, source: 'writer' }, { sid: sentences[1].sid, source: 'jev' }] });
     const empty = await putDeck(created.id, { revisionId, slides: [] });
-    const thirteen = await putDeck(created.id, { revisionId, slides: sentences.slice(0, 13).map((s) => ({ sid: s.sid, source: 'writer' })) });
-    const twelve = await putDeck(created.id, { revisionId, slides: sentences.slice(0, 12).map((s) => ({ sid: s.sid, source: 'writer' })) });
+    const all = await putDeck(created.id, { revisionId, slides: sentences.map((s) => ({ sid: s.sid, source: 'writer' })) });
 
     expect(sentences.length).toBeGreaterThanOrEqual(13);
     expect(unknown.status).toBe(422);
@@ -478,9 +477,8 @@ describe('hand-picked deck lifecycle', () => {
     expect((err(duplicate.env).details as DeckInvalidDetails).sids).toEqual([sentences[1].sid]);
     expect(empty.status).toBe(422);
     expect(err(empty.env).code).toBe('DECK_INVALID');
-    expect(thirteen.status).toBe(422);
-    expect(twelve.status).toBe(200);
-    expect((await tldr(created.id)).draft!.slides).toHaveLength(12);
+    expect(all.status).toBe(200);
+    expect((await tldr(created.id)).draft!.slides).toHaveLength(sentences.length);
   });
 
   it('refuses a deck save against a non-current revision with 409 CONFLICT', async () => {

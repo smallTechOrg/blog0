@@ -5,7 +5,6 @@ import { z } from 'zod';
 // Format payload shapes (spec/data.md → article_format), validated with zod on write and read.
 
 export const TLDR_MIN_SLIDES = 1;
-export const TLDR_MAX_SLIDES = 12;
 
 // Phase 8: slides carry no `reason` (Jev ranks; relevance lives only in ai_generation.output.scores).
 // Legacy payloads whose slides have `reason: string | null` parse unchanged — zod strips the
@@ -17,7 +16,7 @@ const tldrSlideSchema = z.object({
 });
 
 const tldrPayloadSchema = z.object({
-  slides: z.array(tldrSlideSchema).min(TLDR_MIN_SLIDES).max(TLDR_MAX_SLIDES),
+  slides: z.array(tldrSlideSchema).min(TLDR_MIN_SLIDES),
   generationId: z.string().uuid().nullable(),
 });
 

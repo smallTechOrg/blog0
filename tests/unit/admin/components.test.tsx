@@ -289,7 +289,7 @@ describe('SentencePicker', () => {
 
   function render(sentences: SentenceDto[], extra: Partial<Parameters<typeof SentencePicker>[0]> = {}): string {
     return renderToStaticMarkup(
-      <SentencePicker sentences={sentences} chosen={new Set(['s1'])} deckSize={1} onToggle={() => {}} {...extra} />,
+      <SentencePicker sentences={sentences} chosen={new Set(['s1'])} onToggle={() => {}} {...extra} />,
     );
   }
 
