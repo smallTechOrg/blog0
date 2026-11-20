@@ -475,6 +475,36 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('.hlmenu')).toHaveCount(0);
   });
 
+  test('paragraph share on a bullet point lights and shares the whole list with its lead-in paragraph (SMA-37)', async ({ page, context }, testInfo) => {
+    const base = originOf(testInfo);
+    await grantClipboard(context, base);
+    await page.goto(`/p/${SEEDED.destroy.slug}`);
+    await clearClipboard(page);
+    const list = page.locator('.readbody ul').first();
+    const items = list.locator('.para[id]');
+    await expect(items).toHaveCount(3);
+    const lead = page.locator('.readbody ul').first().locator('xpath=preceding-sibling::*[1]');
+    const leadId = (await lead.getAttribute('id'))!;
+    expect(leadId).toMatch(/^p-/);
+
+    await items.nth(1).click();
+    await expect(page.locator('.readbody .para.is-hl')).toHaveCount(4);
+    await expect(lead).toHaveClass(/\bis-hl\b/);
+    for (let i = 0; i < 3; i++) await expect(items.nth(i)).toHaveClass(/\bis-hl\b/);
+    await expect(page.locator('.hlmenu')).toBeVisible();
+    await expect.poll(() => readClipboard(page)).toContain('We are rushing into it too fast.');
+    const clip = await readClipboard(page);
+    expect(clip).toContain('AI will destroy the world because:');
+    expect(clip).toContain('And lastly we are rushing it with the wrong attitude.');
+    expect(clip.endsWith(`${base}/p/${SEEDED.destroy.slug}#${leadId}`)).toBe(true);
+    expect(new URL(page.url()).hash).toBe(`#${leadId}`);
+
+    // Another item of the same list is the same unit: it clears.
+    await page.keyboard.press('Escape');
+    await items.nth(2).click();
+    await expect(page.locator('.readbody .para.is-hl')).toHaveCount(0);
+  });
+
   test('a link inside a paragraph is not a share: no highlight, no menu', async ({ page }) => {
     await page.goto(`/p/${SEEDED.humans.slug}`);
     const anchor = page.locator('.readbody .para a[href]:not([data-footnote-ref])').first();

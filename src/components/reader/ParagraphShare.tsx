@@ -19,6 +19,10 @@ import { placeAgainst, type ShareController } from './ShareMenu';
    3+ characters shares the selected words with the link of the
    paragraph it starts in; #p-… in the address scrolls to and lights
    that paragraph on arrival.
+   SMA-37: a bullet point is not a paragraph on its own — a tap on a
+   list item lights and shares the whole list together with the
+   paragraph that leads into it (the share unit, `shareUnit`); the link
+   points at the unit's first paragraph.
    ============================================================ */
 
 export interface ParagraphShareProps {
@@ -31,11 +35,29 @@ export interface ParagraphShareProps {
   controller: ShareController;
 }
 
-/** Paragraph text without footnote reference markers. */
+/** Paragraph text without footnote reference markers (and, for a list item, without the nested
+ *  paragraphs it holds — they are quoted on their own in a unit). */
 function paragraphText(el: Element): string {
   const clone = el.cloneNode(true) as Element;
   clone.querySelectorAll('a[data-footnote-ref]').forEach((a) => (a.closest('sup') ?? a).remove());
+  clone.querySelectorAll('.para').forEach((nested) => nested.remove());
   return clone.textContent ?? '';
+}
+
+/**
+ * SMA-37: the paragraphs that share together with `p`. A paragraph outside a list is its own unit.
+ * A list item brings its outermost list (inside `root`) — every paragraph in it — and the paragraph
+ * just before that list, which usually leads into it ("Three reasons:").
+ */
+export function shareUnit(p: HTMLElement, root: HTMLElement): HTMLElement[] {
+  let list = p.closest('ul, ol');
+  if (!list || !root.contains(list)) return [p];
+  for (let up = list.parentElement?.closest('ul, ol'); up && root.contains(up); up = up.parentElement?.closest('ul, ol')) list = up;
+  const unit: HTMLElement[] = [];
+  const lead = list.previousElementSibling;
+  if (lead instanceof HTMLElement && lead.matches('p.para[id]')) unit.push(lead);
+  list.querySelectorAll<HTMLElement>('.para[id]').forEach((el) => unit.push(el));
+  return unit.length > 0 ? unit : [p];
 }
 
 function setHash(hash: string) {
@@ -70,30 +92,38 @@ export function ParagraphShare({ scopeRef, articleUrl, brand, controller }: Para
       return el && root && root.contains(el) ? el : null;
     }
 
-    function setActive(pid: string | null) {
-      const prev = activeRef.current;
-      if (prev && prev !== pid) {
-        const pe = byId(prev) ?? document.getElementById(prev);
-        pe?.classList.remove('is-hl');
-      }
+    /** The unit a paragraph shares with (SMA-37); the paragraph alone outside the reading column. */
+    function unitOf(p: HTMLElement): HTMLElement[] {
+      const root = scope();
+      return root ? shareUnit(p, root) : [p];
+    }
+
+    /** Lights `unit` (default: the unit of the paragraph `pid`), remembered under `pid`, its head. */
+    function setActive(pid: string | null, unit?: HTMLElement[]) {
+      const root = scope();
+      root?.querySelectorAll('.para.is-hl').forEach((el) => el.classList.remove('is-hl'));
+      if (activeRef.current) document.getElementById(activeRef.current)?.classList.remove('is-hl');
       activeRef.current = pid;
-      byId(pid)?.classList.add('is-hl');
+      const el = byId(pid);
+      (unit ?? (el ? unitOf(el) : [])).forEach((u) => u.classList.add('is-hl'));
     }
 
     const ignore = (t: Element) => paraOf(t) != null;
 
-    function pick(p: HTMLElement, keyboard: boolean) {
+    function pick(target: HTMLElement, keyboard: boolean) {
       const { controller: c, articleUrl: url, brand: b } = live.current;
-      // the lit paragraph again: clear it and close the menu
+      const unit = unitOf(target);
+      const p = unit[0];
+      // the lit paragraph (or list) again: clear it and close the menu
       if (activeRef.current === p.id) {
         setActive(null);
         c.close();
         setHash('');
         return;
       }
-      setActive(p.id);
-      const subject = quoteSubject('paragraph', paragraphText(p), paragraphLink(url, p.id), b);
-      c.share(subject, { place: () => placeAgainst(p), ignore, returnFocus: keyboard ? p : null });
+      setActive(p.id, unit);
+      const subject = quoteSubject('paragraph', unit.map(paragraphText).join(' '), paragraphLink(url, p.id), b);
+      c.share(subject, { place: () => placeAgainst(target), ignore, returnFocus: keyboard ? target : null });
       setHash(p.id);
     }
 
@@ -137,8 +167,10 @@ export function ParagraphShare({ scopeRef, articleUrl, brand, controller }: Para
         const rect = range.getBoundingClientRect();
         if (!rect || !rect.width) return;
         const { controller: c, articleUrl: url, brand: b } = live.current;
-        setActive(p.id);
-        const subject = quoteSubject('selection', text, paragraphLink(url, p.id), b);
+        const unit = unitOf(p);
+        const head = unit[0];
+        setActive(head.id, unit);
+        const subject = quoteSubject('selection', text, paragraphLink(url, head.id), b);
         c.share(subject, { place: () => placeAgainst(range), ignore });
         setHash(p.id);
       }, 0);
@@ -150,7 +182,8 @@ export function ParagraphShare({ scopeRef, articleUrl, brand, controller }: Para
       const el = byId(pid);
       if (!pid || !el) return;
       el.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
-      setActive(pid);
+      const unit = unitOf(el);
+      setActive(unit[0].id, unit);
     }
 
     /* every paragraph is reachable by keyboard (Enter/Space opens it) */
