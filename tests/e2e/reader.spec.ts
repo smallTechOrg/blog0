@@ -188,10 +188,11 @@ test.describe('reader site (blog0)', () => {
       expect(await typingNow(page), 'About types in').toBe(true);
       await typesIn(page);
 
-      // An article never types.
+      // An article's Read page types in too (SMA-25); its TLDR route does not.
       await page.goto(`/p/${SEEDED.humans.slug}`);
-      expect(await page.evaluate(() => document.documentElement.dataset.typing ?? null)).toBeNull();
-      expect(await typingNow(page)).toBe(false);
+      await expect(page.locator('html')).toHaveAttribute('data-typing', '1');
+      expect(await typingNow(page), 'Article types in').toBe(true);
+      await typesIn(page);
     } finally {
       await ctx.close();
     }
@@ -326,8 +327,7 @@ test.describe('reader site (blog0)', () => {
 
     await page.locator('.archive-row__link', { hasText: SEEDED.humans.title }).click();
     await expect(page).toHaveURL(new RegExp(`/p/${SEEDED.humans.slug}$`));
-    await expect(page.locator('html')).not.toHaveAttribute('data-typing', '1');
-    expect(await typingNow(page)).toBe(false);
+    await expect(page.locator('html')).toHaveAttribute('data-typing', '1'); // SMA-25: articles type in too
     await expect(page.locator('.readhead h1')).toHaveAttribute('aria-label', SEEDED.humans.title);
   });
 

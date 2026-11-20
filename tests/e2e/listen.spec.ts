@@ -284,6 +284,8 @@ test.describe('Listen walk: upload → ready → image → publish → follow al
     // ▶ plays: the position passes 1 s within 3 s.
     await view.getByRole('button', { name: 'Play' }).click();
     await expect.poll(() => view.locator('audio').evaluate((a: HTMLAudioElement) => a.currentTime), { timeout: 10_000 }).toBeGreaterThan(1);
+    // SMA-36: while it plays, the not-yet-read tail of the live paragraph is the faint highlight.
+    await expect.poll(() => page.evaluate(() => CSS.highlights.get('blog0-listen-ahead')?.size ?? 0)).toBe(1);
     await view.getByRole('button', { name: 'Pause' }).click();
 
     // The highlight is SOFT: --listen-live-bg (= --accent-softer), not the share highlight's --accent-soft.

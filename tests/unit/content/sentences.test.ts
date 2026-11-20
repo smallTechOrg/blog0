@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Paragraph } from '@/lib/content/types';
-import { ABBREVIATIONS, buildSentences, MIN_ELIGIBLE_WORDS, splitSentences } from '@/server/content';
+import { ABBREVIATIONS, buildLines, buildSentences, eligibleSentences, MIN_ELIGIBLE_WORDS, splitSentences } from '@/server/content';
 
 function para(pid: string, text: string): Paragraph {
   return { pid, index: 0, text, kind: 'p', headingPath: [] };
@@ -98,5 +98,19 @@ describe('buildSentences', () => {
   it('yields nothing for paragraphs without eligible sentences', () => {
     expect(buildSentences([para('p-dddddddd', 'Only three words.')])).toEqual([]);
     expect(buildSentences([])).toEqual([]);
+  });
+});
+
+describe('buildLines (SMA-35: every sentence for the hand-picker)', () => {
+  it('keeps short sentences, with the same sids as the eligible ones, indexed among all lines', () => {
+    const paras = [para('p-eeeeeeee', 'Short one. This sentence has more than five words in it. Yes.')];
+    const lines = buildLines(paras);
+    expect(lines.map((l) => [l.sid, l.index, l.text])).toEqual([
+      ['p-eeeeeeee-s0', 0, 'Short one.'],
+      ['p-eeeeeeee-s1', 1, 'This sentence has more than five words in it.'],
+      ['p-eeeeeeee-s2', 2, 'Yes.'],
+    ]);
+    expect(eligibleSentences(lines)).toEqual(buildSentences(paras));
+    expect(buildSentences(paras)).toEqual([{ sid: 'p-eeeeeeee-s1', index: 0, pid: 'p-eeeeeeee', text: 'This sentence has more than five words in it.', words: 9 }]);
   });
 });

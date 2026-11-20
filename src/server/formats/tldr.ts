@@ -41,7 +41,7 @@ export const tldrAdapter: FormatAdapter = {
   validateForPublish({ row, rendered }) {
     const draft = readTldrPayload(row?.draftPayload);
     if (!draft) return { ok: true };
-    const sids = missingSlides(draft.slides, rendered.sentences);
+    const sids = missingSlides(draft.slides, rendered.lines);
     if (sids.length === 0) return { ok: true };
     return {
       ok: false,

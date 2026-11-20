@@ -15,15 +15,18 @@ export function prefersReducedMotion(): boolean {
   }
 }
 
-/* Typing scope (owner decision, UI review 2026-10-20): Home, /archive and /about type the whole
-   page in (components/design/page-typer.ts) on every arrival — a document load (the pre-paint
+/* Typing scope (owner decision, UI review 2026-10-20; the article page joined in SMA-25): Home,
+   /archive, /about and an article's Read page (/p/<slug>) type the whole page in (components/design/page-typer.ts) on every arrival — a document load (the pre-paint
    script marks `<html data-typing="1">`) or a client navigation (`setTypingRoute`). Everywhere
    else the page is complete at first paint. */
 export const TYPE_ROUTES = ['/', '/archive', '/about'] as const;
 
+/** An article's Read page (not its /listen or /tldr routes). */
+export const ARTICLE_TYPE_ROUTE = /^\/p\/[^/]+$/;
+
 export function isTypeRoute(pathname: string): boolean {
   const p = String(pathname || '').replace(/\/+$/, '') || '/';
-  return (TYPE_ROUTES as readonly string[]).includes(p);
+  return (TYPE_ROUTES as readonly string[]).includes(p) || ARTICLE_TYPE_ROUTE.test(p);
 }
 
 /** `<html data-typing="1">`: this page types in. */

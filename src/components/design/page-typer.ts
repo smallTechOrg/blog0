@@ -1,4 +1,5 @@
-// The page typewriter (owner decision, UI review 2026-10-20): on Home, Archive and About the whole
+// The page typewriter (owner decision, UI review 2026-10-20; articles from SMA-25): on Home, Archive,
+// About and an article's Read page the whole
 // page — every visible character, field placeholder, line, box, image and icon — prints in one
 // sequence, left to right and top to bottom, at one constant speed. Everything is in the DOM from
 // the first frame and nothing reflows. Text: the not-yet-typed tail is painted transparent through
@@ -172,6 +173,10 @@ export interface TypePageOptions {
   /** A pinned block (the sticky masthead): always in view, so it is never skipped as read — it
    *  types first, and any skip ahead happens once the typing has left it. */
   pinned?: Element | null;
+  /** SMA-25 (article pages): type only what is on screen — once the cursor reaches something below
+   *  the window's bottom edge, everything left lands at once, so a long article never keeps its
+   *  reader waiting for text further down. */
+  untilFold?: boolean;
 }
 
 /** Types `root` in from the first character. Returns a stop function that leaves it complete.
@@ -277,6 +282,13 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     typed += ((now - last) / TYPE_CHAR_MS) * rate;
     last = now;
     const at = cursorAt(texts, typed);
+    if (at && opts.untilFold && !isPinned(at.index)) {
+      const r = ranges[at.index]?.getBoundingClientRect() ?? rectOf(items[at.index]);
+      if (r.top >= window.innerHeight) {
+        stop();
+        return;
+      }
+    }
     if (!at) {
       for (; done < items.length; done++) reach(done);
       /* let the last ink finish drawing; the timers take the attributes off */

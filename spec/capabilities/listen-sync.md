@@ -31,7 +31,7 @@ highlights the current paragraph, pauses following when the reader scrolls, and 
 |---|---|---|
 | Resolved marks | `{ marks: [{ pid, tMs }], timing: 'synced' \| 'estimated' }` over the published paragraphs | `ArticleViewModel.listen`, `PublicListenDto` |
 | Reader highlight | the current paragraph carries `.para.is-live` (soft — subtler than the share highlight) | reader Listen view |
-| Auto-follow | the live paragraph is scrolled to centre while following; a **Follow audio** button while paused | reader Listen view |
+| Auto-follow | while playing (motion allowed), the page glides with the estimated reading position inside the live paragraph and the unread tail of that paragraph is faint (SMA-36, `listen-follow.ts`); paused / reduced motion: the live paragraph is scrolled to centre; a **Follow audio** button while following is paused | reader Listen view |
 | Stored marks (aligner-facing) | `marks` + `syncFingerprint` + `syncedAt/By` in the Listen draft | database (via `PUT …/listen`) |
 
 ## External Calls

@@ -35,8 +35,8 @@ function run(opts: { path: string; reduced?: boolean; dark?: boolean; stored?: s
 }
 
 describe('pre-paint theme + typing script', () => {
-  it('every load of /, /archive or /about → data-typing, and a timeout that sets data-typer', () => {
-    for (const path of ['/', '/archive', '/about', '/archive/']) {
+  it('every load of /, /archive, /about or an article → data-typing, and a timeout that sets data-typer', () => {
+    for (const path of ['/', '/archive', '/about', '/archive/', '/p/humans-are-software', '/p/humans-are-software/']) {
       const r = run({ path });
       expect(r.dataset.typing, path).toBe('1');
       expect(r.attrs, path).not.toHaveProperty('data-typer');
@@ -47,7 +47,8 @@ describe('pre-paint theme + typing script', () => {
   });
 
   it('other pages and reduced motion → no typing', () => {
-    expect(run({ path: '/p/humans-are-software' }).dataset.typing).toBeUndefined();
+    expect(run({ path: '/p/humans-are-software/tldr' }).dataset.typing).toBeUndefined();
+    expect(run({ path: '/p/humans-are-software/listen' }).dataset.typing).toBeUndefined();
     expect(run({ path: '/privacy' }).dataset.typing).toBeUndefined();
     for (const path of ['/', '/archive', '/about']) {
       const r = run({ path, reduced: true });

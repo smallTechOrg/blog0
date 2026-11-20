@@ -262,7 +262,7 @@ export async function saveDeck(ctx: ActorContext, id: string, body: SaveDeckBody
         { sids: [] } satisfies DeckInvalidDetails,
       );
     }
-    const bySid = new Map(rendered.sentences.map((s) => [s.sid, s]));
+    const bySid = new Map(rendered.lines.map((s) => [s.sid, s]));
     const seen = new Set<string>();
     const bad: string[] = [];
     for (const slide of body.slides) {
@@ -377,7 +377,7 @@ function toGenerationDto(gen: AiGenerationRow, names: Map<string, string>, now: 
 
 function toSentenceDtos(rendered: RenderedArticle, relevance: Map<string, number>): SentenceDto[] {
   const headingByPid = new Map(rendered.paragraphs.map((p) => [p.pid, p.headingPath]));
-  return rendered.sentences.map((s) => ({
+  return rendered.lines.map((s) => ({
     sid: s.sid,
     index: s.index,
     pid: s.pid,
@@ -403,7 +403,7 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
   const draftPayload = readTldrPayload(formatRow?.draftPayload);
   let draft: TldrStateDto['draft'] = null;
   if (formatRow && draftPayload) {
-    const missing = new Set(missingSlides(draftPayload.slides, rendered.sentences));
+    const missing = new Set(missingSlides(draftPayload.slides, rendered.lines));
     draft = {
       slides: draftPayload.slides.map(
         (s): DeckSlideDto => ({
@@ -430,6 +430,7 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
     status: tldrAdapter.computeStatus({ row: formatRow, currentRevision: revision, latestGeneration: gen, now }),
     bounds: rendered.sentences.length === 0 ? null : computeBounds(rendered.sentences),
     sentences: toSentenceDtos(rendered, relevance),
+    eligibleCount: rendered.sentences.length,
     draft,
     published,
     latestGeneration: gen ? toGenerationDto(gen, names, now) : null,

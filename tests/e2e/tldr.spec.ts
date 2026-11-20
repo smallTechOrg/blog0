@@ -186,16 +186,18 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     const sortSwitch = panel.getByRole('radiogroup', { name: 'Sort article lines' });
     await expect(sortSwitch.getByRole('radio', { name: 'By relevance' })).toHaveAttribute('aria-checked', 'true');
     await expect(sortSwitch.getByRole('radio', { name: 'In article order' })).toHaveAttribute('aria-checked', 'false');
-    const scores = await pickerScores(page);
-    expect(scores.length).toBe(articleLines.length);
-    for (const score of scores) expect(Number.isNaN(score), 'every eligible sentence is scored').toBe(false);
+    const allScores = await pickerScores(page);
+    expect(allScores.length).toBe(articleLines.length);
+    // SMA-35: every line is listed; short ones (< 5 words) Jev never sees come last, unscored.
+    const scores = allScores.filter((s) => !Number.isNaN(s));
+    expect(allScores.slice(0, scores.length), 'scored lines first').toEqual(scores);
     for (let i = 1; i < scores.length; i += 1) {
       expect(scores[i], `row ${i + 1} is not ranked above row ${i}`).toBeLessThanOrEqual(scores[i - 1]);
     }
     expect(scores[0]).toBe(Math.max(...scores));
     // Pure top-k: the deck's lowest score is ≥ every unpicked sentence's score (both as displayed).
     const deckScores = metas.map((m) => Number(m.replace(/^.*relevance /, '')));
-    const unpicked = scores.filter((_, i) => !lines.includes(articleLines[i]));
+    const unpicked = allScores.filter((s, i) => !Number.isNaN(s) && !lines.includes(articleLines[i]));
     expect(Math.min(...deckScores)).toBeGreaterThanOrEqual(Math.max(...unpicked));
     await expect(panel.locator('.picker__line.is-on')).toHaveCount(lines.length);
     await expect(panel.locator('.picker__sec').first()).toBeVisible();
