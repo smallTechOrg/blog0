@@ -156,7 +156,8 @@ test.describe('reader site (blog0)', () => {
     await expect(page.locator('a[href*="rss"], a[href*="feed.xml"]')).toHaveCount(0);
   });
 
-  test('the page typewriter types the whole of Home, Archive and About on every arrival, nothing else', async ({ browser }) => {
+  test('the page typewriter types Home, Archive, About and an article on every arrival, nothing else', async ({ browser }) => {
+    test.setTimeout(150_000); // four pages typed in full, one after another (SMA-25 added the article)
     const ctx = await browser.newContext();
     try {
       const page = await ctx.newPage();
