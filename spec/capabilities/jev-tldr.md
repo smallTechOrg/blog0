@@ -55,7 +55,7 @@ then reviews (sentences sorted by relevance), edits and publishes.
   order) by default when scores exist, with a switch back to article order.
 - One generation per article at a time; double clicks are refused while one is running.
 - Regenerating replaces the draft deck only after the writer confirms when a draft exists.
-- Hand-editing: add any eligible sentence, remove, reorder (1–12 lines); lines added by the
+- Hand-editing: add any eligible sentence, remove, reorder (any number of lines, at least 1); lines added by the
   writer are marked as such; a deck may be entirely hand-picked.
 - When the article text changes after a deck exists, the deck becomes **stale**; lines whose
   sentence vanished are flagged and must be removed or replaced before publishing.

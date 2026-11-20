@@ -6,7 +6,6 @@ import {
   deckFromPicks,
   deckIsDirty,
   hasScores,
-  MAX_DECK_LINES,
   moveLine,
   reconcileDeck,
   removeLine,
@@ -61,12 +60,12 @@ describe('addSentence', () => {
     expect(next.map((l) => l.sid)).toEqual(['s0', 'gone', 's4', 's5']);
   });
 
-  it('does not add a sentence twice or beyond the line limit', () => {
+  it('does not add a sentence twice, and has no line limit', () => {
     const deck = [line(0)];
     expect(addSentence(deck, SENTENCES[0], SENTENCES)).toBe(deck);
 
-    const full: DeckLine[] = Array.from({ length: MAX_DECK_LINES }, (_, i) => ({ ...line(0), sid: `x${i}` }));
-    expect(addSentence(full, SENTENCES[1], SENTENCES)).toBe(full);
+    const long: DeckLine[] = Array.from({ length: 40 }, (_, i) => ({ ...line(0), sid: `x${i}` }));
+    expect(addSentence(long, SENTENCES[1], SENTENCES)).toHaveLength(41);
   });
 });
 

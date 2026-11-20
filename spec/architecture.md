@@ -95,7 +95,7 @@ scores are never stored in the format payload (one fact, one place).
 
 **Deck edit.** `PUT /api/admin/articles/:id/tldr` `{revisionId, slides:[{sid, source}]}` (an extra
 legacy `reason` key is stripped, not refused) → server resolves each `sid` against the revision's
-sentences (text comes from the server), checks uniqueness and 1–12 slides → stores draft payload +
+sentences (text comes from the server), checks uniqueness and at least 1 slide → stores draft payload +
 fingerprint.
 
 **Publish.** `POST /api/admin/articles/:id/publish` `{revisionId}` (= current) → validates title,
@@ -653,7 +653,7 @@ helpers stay isomorphic for a later review UI.
 `src/server/formats/payload.ts` — `listenPayloadSchema` / `readListenPayload` / `listenBaseline`
 (shape in `spec/data.md`; `uploadFingerprint` is `nullable().optional().default(null)` so legacy
 payloads parse) beside the TLDR schema (`readTldrPayload`, `TLDR_MIN_SLIDES = 1`,
-`TLDR_MAX_SLIDES = 12`; Phase 8 drops the slide `reason` and `TLDR_REASON_MAX` — zod strips the key,
+no upper limit (SMA-35); Phase 8 drops the slide `reason` and `TLDR_REASON_MAX` — zod strips the key,
 so legacy payloads parse).
 
 ### 9.5 Listen service (`src/server/listen/*`) and media cleanup

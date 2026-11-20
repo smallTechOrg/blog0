@@ -5,9 +5,6 @@ import type { DeckSlideDto, GenerationDto, SaveDeckRequest, SentenceDto, TldrSta
 
 export type DeckLine = DeckSlideDto;
 
-/** Hand-edited decks allow 1–12 lines (roadmap assumption). */
-export const MAX_DECK_LINES = 12;
-
 export function deckFromDraft(state: TldrStateDto | null): DeckLine[] {
   return state?.draft ? state.draft.slides.map((s) => ({ ...s })) : [];
 }
@@ -47,10 +44,10 @@ export function reconcileDeck(deck: readonly DeckLine[], sentences: readonly Sen
 
 /**
  * Check a sentence into the deck: at its document-order position when the present (non-missing)
- * lines are still in document order, otherwise appended. No-op when already in or the deck is full.
+ * lines are still in document order, otherwise appended. No-op when already in. A deck has no upper length limit.
  */
 export function addSentence(deck: DeckLine[], sentence: SentenceDto, sentences: readonly SentenceDto[]): DeckLine[] {
-  if (deck.length >= MAX_DECK_LINES || deck.some((l) => l.sid === sentence.sid)) return deck;
+  if (deck.some((l) => l.sid === sentence.sid)) return deck;
   const indexOf = new Map(sentences.map((s) => [s.sid, s.index]));
   const fresh: DeckLine = { sid: sentence.sid, text: sentence.text, source: 'writer', relevance: sentence.relevance, missing: false };
 
