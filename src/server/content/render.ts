@@ -11,11 +11,11 @@ import { checkCodeLangs } from './plugins/code-langs';
 import { checkEmbeddedImages } from './plugins/embedded-images';
 import { headingShift } from './plugins/heading-shift';
 import { dropRawHtml } from './plugins/raw-html';
-import { buildSentences } from './sentences';
+import { buildLines, eligibleSentences } from './sentences';
 import { computeStats } from './stats';
 
 /** Bump on ANY change to the pipeline's output (keys the render cache). */
-export const RENDER_VERSION = 'r4';
+export const RENDER_VERSION = 'r5'; // r5: `lines` (every sentence, SMA-35)
 
 /** The top-level hast children as html blocks: one block, or none for an empty body. */
 function toBlocks(hast: HRoot): Block[] {
@@ -39,7 +39,8 @@ export async function renderArticle(input: RenderInput): Promise<RenderedArticle
   checkCodeLangs(mdast, warnings);
   headingShift(mdast);
   const paragraphs = assignParagraphIds(mdast);
-  const sentences = buildSentences(paragraphs);
+  const lines = buildLines(paragraphs);
+  const sentences = eligibleSentences(lines);
 
   const hast = await mdastToHast(mdast, { imageDims: input.imageDims });
   const blocks = toBlocks(hast);
@@ -54,6 +55,7 @@ export async function renderArticle(input: RenderInput): Promise<RenderedArticle
     blocks,
     paragraphs,
     sentences,
+    lines,
     stats: computeStats(paragraphs),
     fingerprints: computeFingerprints({ ...input, bodyMd }, paragraphs, sentences),
     warnings: ordered,

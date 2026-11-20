@@ -328,7 +328,7 @@ describe('SentencePicker', () => {
     expect(html).not.toContain('tldr-rel');
   });
 
-  it('shows the empty state when the saved article has no eligible sentences', () => {
-    expect(render([])).toContain('No eligible sentences in the saved article yet');
+  it('shows the empty state when the saved article has no sentences', () => {
+    expect(render([])).toContain('No sentences in the saved article yet');
   });
 });

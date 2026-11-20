@@ -70,6 +70,7 @@ function rendered(pids: readonly string[], paragraphsFingerprint: string): Rende
     blocks: [],
     paragraphs: pids.map((pid, index) => ({ pid, index, text: `Paragraph ${index}`, kind: 'p', headingPath: [] })),
     sentences: [],
+    lines: [],
     stats: { words: 10, readMinutes: 1 },
     fingerprints: { body: 'b', paragraphs: paragraphsFingerprint, sentences: 's' },
     warnings: [],

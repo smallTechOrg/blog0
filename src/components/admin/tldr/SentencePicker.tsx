@@ -7,7 +7,7 @@ import type { SentenceDto } from '@/lib/api/dto';
 import { hasScores, sectionOf, sortByRelevance, type PickerOrder } from './deck-edit';
 import { RelevanceTag } from './DeckList';
 
-// "Article lines" (spec/ui.md §4 SentencePicker): every eligible sentence of the saved revision,
+// "Article lines" (spec/ui.md §4 SentencePicker): every sentence of the saved revision (SMA-35: any length),
 // one checkbox each (checking adds the line to the deck; unchecking removes it). A segmented
 // switch sorts them **By relevance** (flat list, highest score first, unscored last, each row
 // with its section caption) or **In article order** (grouped under heading paths). By relevance
@@ -54,7 +54,7 @@ export function SentencePicker({ sentences, chosen, onToggle, disabled, initialO
   const order: PickerOrder = scored ? (choice ?? 'relevance') : 'article';
 
   if (sentences.length === 0) {
-    return <p className="admin-muted">No eligible sentences in the saved article yet (Jev only uses sentences of 5+ words).</p>;
+    return <p className="admin-muted">No sentences in the saved article yet.</p>;
   }
 
   function onSwitchKey(e: KeyboardEvent<HTMLDivElement>): void {

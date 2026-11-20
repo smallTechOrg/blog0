@@ -5,7 +5,7 @@ import 'server-only';
 
 export { renderArticle, RENDER_VERSION } from './render';
 export { clearRenderCache, getRenderedRevision, renderCacheKey, renderCacheSize, resetRenderCacheForTests, RENDER_CACHE_MAX } from './cache';
-export { splitSentences, buildSentences, ABBREVIATIONS, MIN_ELIGIBLE_WORDS } from './sentences';
+export { splitSentences, buildSentences, buildLines, eligibleSentences, ABBREVIATIONS, MIN_ELIGIBLE_WORDS } from './sentences';
 export { paragraphHash, plainText } from './paragraph-ids';
 export { computeFingerprints, normalizeText, sha256Hex } from './fingerprint';
 export { computeStats, countWords, WORDS_PER_MINUTE } from './stats';

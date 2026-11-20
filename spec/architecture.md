@@ -175,7 +175,8 @@ export interface Paragraph { pid: string; index: number; text: string; kind: 'p'
 export interface Sentence { sid: string; index: number; pid: string; text: string; words: number }
 export interface RenderWarning { code: 'RAW_HTML_DROPPED' | 'EMBEDDED_IMAGE_DROPPED' | 'EMPTY_BODY' | 'UNKNOWN_CODE_LANG'; message: string; line?: number }
 export interface RenderedArticle {
-  blocks: Block[]; paragraphs: Paragraph[]; sentences: Sentence[];   // sentences = eligible only, index 0..N-1
+  blocks: Block[]; paragraphs: Paragraph[]; sentences: Sentence[];   // sentences = eligible only (Jev), index 0..N-1
+  lines: Sentence[];   // every sentence, any length (SMA-35: hand-picker + deck validation), index 0..M-1
   stats: { words: number; readMinutes: number };
   fingerprints: { body: string; paragraphs: string; sentences: string };
   warnings: RenderWarning[];

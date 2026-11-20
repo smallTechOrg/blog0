@@ -6,7 +6,10 @@ export interface Paragraph { pid: string; index: number; text: string; kind: 'p'
 export interface Sentence { sid: string; index: number; pid: string; text: string; words: number }
 export interface RenderWarning { code: 'RAW_HTML_DROPPED' | 'EMBEDDED_IMAGE_DROPPED' | 'EMPTY_BODY' | 'UNKNOWN_CODE_LANG'; message: string; line?: number }
 export interface RenderedArticle {
-  blocks: Block[]; paragraphs: Paragraph[]; sentences: Sentence[];   // sentences = eligible only, index 0..N-1
+  blocks: Block[]; paragraphs: Paragraph[]; sentences: Sentence[];   // sentences = eligible only (Jev), index 0..N-1
+  /** Every sentence of the article, any length, index 0..M-1 (SMA-35: the deck hand-picker and deck
+   *  validation use these, so a writer can pick short lines Jev never sees). Same sids as `sentences`. */
+  lines: Sentence[];
   stats: { words: number; readMinutes: number };
   fingerprints: { body: string; paragraphs: string; sentences: string };
   warnings: RenderWarning[];

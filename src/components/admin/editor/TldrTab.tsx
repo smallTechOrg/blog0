@@ -120,7 +120,7 @@ export function TldrTab(props: TldrTabProps) {
   const latest = tldr?.latestGeneration ?? null;
   const isRunning = running !== null;
   const inFlight = isRunning || presaving;
-  const noSentences = !editorDirty && tldr !== null && sentences.length === 0;
+  const noEligible = !editorDirty && tldr !== null && tldr.eligibleCount === 0;
 
   function generate(): Promise<void> {
     return runExclusive(generating, runGenerate).then(() => undefined);
@@ -282,16 +282,16 @@ export function TldrTab(props: TldrTabProps) {
           <span className={`fchip fchip--${status}`} data-status={status}>
             TLDR {FORMAT_STATUS_LABEL[status] ?? status}
           </span>
-          <span className="admin-hint">{boundsHint(tldr?.bounds ?? null, tldr ? sentences.length : undefined)}</span>
+          <span className="admin-hint">{boundsHint(tldr?.bounds ?? null, tldr ? tldr.eligibleCount : undefined)}</span>
         </div>
         <button
           type="button"
           className="admin-btn admin-btn--primary"
           onClick={() => void generate()}
-          disabled={inFlight || busy !== null || noSentences || !jevAvailable}
+          disabled={inFlight || busy !== null || noEligible || !jevAvailable}
           aria-busy={inFlight}
           title={
-            !jevAvailable ? 'No OpenRouter key configured' : noSentences ? 'The saved article has no eligible sentences' : undefined
+            !jevAvailable ? 'No OpenRouter key configured' : noEligible ? 'The saved article has no sentences of 5+ words for Jev' : undefined
           }
         >
           {inFlight ? <span className="spinner" aria-hidden="true" /> : null}
@@ -330,7 +330,7 @@ export function TldrTab(props: TldrTabProps) {
               type="button"
               className="admin-btn admin-btn--small"
               onClick={() => void generate()}
-              disabled={inFlight || noSentences || !jevAvailable}
+              disabled={inFlight || noEligible || !jevAvailable}
             >
               Try again
             </button>{' '}

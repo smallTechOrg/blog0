@@ -111,7 +111,8 @@ interface GenerationDto {
 interface TldrStateDto {
   status: FormatStatus;
   bounds: { min: number; max: number; target: number } | null;   // null when 0 eligible sentences
-  sentences: SentenceDto[];                                       // current revision, eligible only, DOCUMENT order (the client sorts by relevance)
+  sentences: SentenceDto[];                                       // current revision, EVERY sentence (SMA-35; < 5 words → relevance null), DOCUMENT order (the client sorts by relevance)
+  eligibleCount: number;                                          // how many of them Jev ranks (≥ 5 words)
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;

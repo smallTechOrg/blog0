@@ -88,6 +88,9 @@ html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
   transition: background .3s ease, box-shadow .3s ease;
 }
 @media (prefers-reduced-motion: reduce) { .para.is-live { transition: none; } }
+/* SMA-36: the part of the live paragraph the audio has not read yet (estimated) — still readable,
+   one step fainter, so the ink follows the voice (components/reader/listen-follow.ts). */
+::highlight(blog0-listen-ahead) { color: var(--faint); }
 
 /* --- Markdown beyond the design (div. 11) ----------------------------- */
 .prose del { color: var(--muted); }
@@ -319,6 +322,13 @@ html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
 /* …and the regular text in Featured and Latest, one step lighter too (400 → 300): card deks,
    dates, the feed's end line and the pinned head's "↑ top" hint. */
 .home-sec :is(.fcard, .post) p, .home-sec .meta, .home-sec .feed__status, .home-sec .sechead__hint { font-weight: 300; }
+
+/* SMA-25: the article page (Read view, and the editor preview that mirrors it) follows the home
+   page's weights — everything heavier than regular drops one weight, and the regular text (dek,
+   dates, body) is Source Serif 4 Light like the About texts. */
+.readhead h1, .readhead .tag, .readhead__by b { font-weight: 500; }                 /* 600 → 500 */
+.readbody .prose :is(h2, h3, h4) { font-weight: 500; }  /* 600 → 500 (bold body text keeps 600: the serif has no 500) */
+.readhead .dek, .readhead__by span, .readbody .prose, .artfoot { font-weight: 300; } /* 400 → 300 */
 
 /* Owner review 2026-11-09: Featured cards use the same type as Latest rows (titles 20px → 21px from
    768px, descriptions 16px at the body's 1.68); the card itself is the differentiation. The design

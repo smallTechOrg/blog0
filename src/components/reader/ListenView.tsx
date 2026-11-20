@@ -9,6 +9,7 @@ import type { ListenViewModel } from '@/lib/view-models';
 
 import { ArticleBody } from './ArticleBody';
 import { AudioPlayer, type AudioPlayerHandle } from './AudioPlayer';
+import { AHEAD_HIGHLIGHT, glideStep, paragraphProgress, readCursor, scrollTargetFor } from './listen-follow';
 import { applyPlayerKey, createListenSync, pausesFollow, type ListenSync } from './listen-sync';
 
 /* ============================================================
@@ -22,6 +23,12 @@ import { applyPlayerKey, createListenSync, pausesFollow, type ListenSync } from 
    the audio to its start and resumes following; Space / ← / → drive the
    player from the window. The highlight is toggled straight on the DOM (the
    prose is memoised html), exactly like the share highlight.
+   SMA-36: while the audio plays (and motion is allowed) the text glides
+   with it instead of jumping a paragraph at a time: inside the live
+   paragraph the reading position is estimated from the time between its
+   mark and the next (listen-follow.ts), the part not yet read is painted
+   faint, and — while following — the page eases so that line stays on the
+   reading line.
    ============================================================ */
 export interface ListenViewProps {
   topic: string;
@@ -38,6 +45,7 @@ const LIVE = 'is-live';
 export function ListenView({ topic, title, bylineName, blocks, listen, onClose }: ListenViewProps) {
   const player = useRef<AudioPlayerHandle>(null);
   const textRef = useRef<HTMLDivElement>(null);
+  const leadRef = useRef<HTMLDivElement>(null);
   const syncRef = useRef<ListenSync | null>(null);
   const [following, setFollowing] = useState(true);
   const textId = useId();
@@ -56,7 +64,10 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
       return scope!.querySelector<HTMLElement>('.para[data-pid="' + CSS.escape(pid) + '"]');
     }
 
+    /* SMA-36: the glide (below) moves the page while the audio plays */
+    const glides = !prefersReducedMotion();
     function scrollToPara(pid: string) {
+      if (glides && !audio!.paused) return;
       const el = paragraph(pid);
       if (!el) return;
       try {
@@ -76,6 +87,7 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
     });
     syncRef.current = sync;
     const unbind = sync.bind(audio);
+    const stopGlide = glides ? startGlide(audio, scope, leadRef.current, listen, sync, paragraph) : () => {};
 
     /* paragraphs are reachable from the keyboard: Enter / Space seeks */
     const focusable = Array.from(scope.querySelectorAll<HTMLElement>('.para[data-pid]'));
@@ -134,6 +146,7 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
     window.addEventListener('touchmove', manual, { passive: true });
     window.addEventListener('keydown', onKey);
     return () => {
+      stopGlide();
       unbind();
       syncRef.current = null;
       setFollowing(true); // a fresh tracker starts out following
@@ -147,7 +160,7 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
 
   return (
     <section className="listenview listenview--synced" aria-label="Listen to this article">
-      <div className="listenview__lead">
+      <div className="listenview__lead" ref={leadRef}>
         {topic ? <span className="tag">{topic}</span> : null}
         <h1>{title}</h1>
         <AudioPlayer
@@ -175,4 +188,132 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
       </div>
     </section>
   );
+}
+
+/** Text nodes of a paragraph, in order. */
+function textNodesOf(el: HTMLElement): Text[] {
+  const out: Text[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n as Text);
+  return out;
+}
+
+/** The band of the viewport the text is read in: below the site header, the mode strip and — when
+ *  it sits above the text (one column) — the sticky lead. */
+function readingBand(lead: HTMLElement | null, scope: HTMLElement): { top: number; bottom: number } {
+  let top = 0;
+  for (const sel of ['.sitehead', '.modebar']) {
+    const r = document.querySelector(sel)?.getBoundingClientRect();
+    if (r && r.bottom > top && r.top < window.innerHeight / 2) top = r.bottom;
+  }
+  const l = lead?.getBoundingClientRect();
+  const t = scope.getBoundingClientRect();
+  if (l && l.left < t.right && l.right > t.left && l.bottom > top) top = l.bottom;
+  return { top, bottom: window.innerHeight };
+}
+
+/**
+ * SMA-36: the per-frame glide while the audio plays — the faint not-yet-read tail of the live
+ * paragraph and, while following, the slow scroll. Returns the stop function.
+ */
+function startGlide(
+  audio: HTMLAudioElement,
+  scope: HTMLElement,
+  lead: HTMLElement | null,
+  listen: ListenViewModel,
+  sync: ListenSync,
+  paragraph: (pid: string) => HTMLElement | null,
+): () => void {
+  const reg = typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined' ? CSS.highlights : null;
+  const ahead = reg ? new Highlight() : null;
+  if (reg && ahead) reg.set(AHEAD_HIGHLIGHT, ahead);
+  const nodes = new Map<string, Text[]>();
+  let raf = 0;
+  let last = 0;
+  let glideY: number | null = null; // fractional scroll position (the window rounds to whole px)
+
+  function frame(scroll: boolean, now: number) {
+    const dt = last ? Math.min(100, now - last) : 16;
+    last = now;
+    ahead?.clear();
+    const p = paragraphProgress(listen.marks, audio.currentTime * 1000, listen.durationMs);
+    const el = p ? paragraph(p.pid) : null;
+    if (!p || !el || !scope.contains(el)) {
+      glideY = null;
+      return;
+    }
+    let texts = nodes.get(p.pid);
+    if (!texts || texts.some((t) => !t.isConnected)) {
+      texts = textNodesOf(el);
+      nodes.set(p.pid, texts);
+    }
+    const at = readCursor(texts.map((t) => t.data), p.fraction);
+    let lineY: number;
+    if (at) {
+      const node = texts[at.index];
+      const tail = document.createRange();
+      tail.selectNodeContents(el);
+      tail.setStart(node, at.offset);
+      ahead?.add(tail);
+      const caret = document.createRange();
+      caret.setStart(node, at.offset);
+      caret.setEnd(node, Math.min(node.length, at.offset + 1));
+      const r = caret.getBoundingClientRect();
+      lineY = r.height > 0 ? r.top + r.height / 2 : el.getBoundingClientRect().bottom;
+    } else {
+      lineY = el.getBoundingClientRect().bottom;
+    }
+    if (!scroll || !sync.following()) {
+      glideY = null;
+      return;
+    }
+    const band = readingBand(lead, scope);
+    const target = Math.min(
+      scrollTargetFor(window.scrollY, lineY, band.top, band.bottom),
+      document.documentElement.scrollHeight - window.innerHeight,
+    );
+    // someone else moved the page (a seek's jump, a resize): glide on from where it is now
+    if (glideY === null || Math.abs(glideY - window.scrollY) > 2) glideY = window.scrollY;
+    glideY = glideStep(glideY, target, dt);
+    if (Math.abs(glideY - window.scrollY) >= 0.5) window.scrollTo(0, glideY);
+  }
+
+  function loop(now: number) {
+    frame(true, now);
+    raf = window.requestAnimationFrame(loop);
+  }
+  function start() {
+    if (raf) return;
+    last = 0;
+    raf = window.requestAnimationFrame(loop);
+  }
+  function halt() {
+    window.cancelAnimationFrame(raf);
+    raf = 0;
+    frame(false, performance.now()); // keep the faint tail where the audio stopped
+  }
+  /* paused: a seek still moves the faint tail (the paragraph scroll is the sync's, as before) */
+  const onSeeked = () => {
+    if (audio.paused) frame(false, performance.now());
+  };
+
+  audio.addEventListener('play', start);
+  audio.addEventListener('playing', start);
+  audio.addEventListener('pause', halt);
+  audio.addEventListener('ended', halt);
+  audio.addEventListener('seeked', onSeeked);
+  if (!audio.paused) start();
+  else frame(false, performance.now());
+
+  return () => {
+    window.cancelAnimationFrame(raf);
+    raf = 0;
+    audio.removeEventListener('play', start);
+    audio.removeEventListener('playing', start);
+    audio.removeEventListener('pause', halt);
+    audio.removeEventListener('ended', halt);
+    audio.removeEventListener('seeked', onSeeked);
+    ahead?.clear();
+    reg?.delete(AHEAD_HIGHLIGHT);
+  };
 }

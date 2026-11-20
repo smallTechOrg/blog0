@@ -109,7 +109,7 @@ contact mail, X/LinkedIn icons only when the site has URLs, no RSS link (the fee
 no `> end of blog0` line and no boot strip — owner decision, UI review 2026-10-20). `PageTyper` runs on every pathname change. The theme toggle
 flips `data-theme` and persists it.
 
-**Typing scope.** Home, Archive and About type the whole page in (§1 rule 4); everything else
+**Typing scope.** Home, Archive and About type the whole page in (§1 rule 4); an article's Read page (`/p/<slug>`, SMA-25) types what is on the first screen, then the rest lands at once; everything else
 renders complete. Unchanged everywhere: the nought spin, deck typing (interactive surfaces).
 
 **Stage A — accessible animated text.** Every typed or spun text (`Wordmark`, tagline,

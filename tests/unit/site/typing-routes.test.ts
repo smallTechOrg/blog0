@@ -61,13 +61,15 @@ describe('scrolling down', () => {
 });
 
 describe('isTypeRoute', () => {
-  it('names /, /archive and /about (trailing slash ignored) and nothing else', () => {
+  it('names /, /archive, /about and an article Read page (trailing slash ignored) and nothing else', () => {
     expect(isTypeRoute('/')).toBe(true);
     expect(isTypeRoute('')).toBe(true);
     expect(isTypeRoute('/archive')).toBe(true);
     expect(isTypeRoute('/about')).toBe(true);
     expect(isTypeRoute('/archive/')).toBe(true);
-    expect(isTypeRoute('/p/humans-are-software')).toBe(false);
+    expect(isTypeRoute('/p/humans-are-software')).toBe(true);
+    expect(isTypeRoute('/p/humans-are-software/listen')).toBe(false);
+    expect(isTypeRoute('/p/humans-are-software/tldr')).toBe(false);
     expect(isTypeRoute('/archive/extra')).toBe(false);
     expect(isTypeRoute('/privacy')).toBe(false);
   });
@@ -90,7 +92,7 @@ describe('setTypingRoute (client route change)', () => {
     expect(dataset.typing).toBe('1');
     expect(typingActive()).toBe(true);
     expect(shouldType()).toBe(true);
-    setTypingRoute('/p/humans-are-software');
+    setTypingRoute('/privacy');
     expect(dataset).not.toHaveProperty('typing');
     expect(shouldType()).toBe(false);
     setTypingRoute('/');

@@ -185,8 +185,12 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const n = state.sentences.length;
     expect(state.status).toBe('ready');
     expect(state.bounds).not.toBeNull();
-    // every eligible sentence carries Jev's score
+    // every eligible sentence (5+ words) carries Jev's score; shorter lines are listed unscored (SMA-35)
     for (const s of state.sentences) {
+      if (s.words < 5) {
+        expect(s.relevance).toBeNull();
+        continue;
+      }
       expect(s.relevance).toBeTypeOf('number');
       expect(s.relevance).toBeGreaterThanOrEqual(0);
       expect(s.relevance).toBeLessThanOrEqual(1);
@@ -206,7 +210,7 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     // the deck is the top k: its lowest score ≥ every other sentence's score
     const picked = new Set(slides.map((s) => s.sid));
     const minPicked = Math.min(...slides.map((s) => s.relevance!));
-    const others = state.sentences.filter((s) => !picked.has(s.sid)).map((s) => s.relevance!);
+    const others = state.sentences.filter((s) => !picked.has(s.sid) && s.relevance !== null).map((s) => s.relevance!);
     expect(minPicked).toBeGreaterThanOrEqual(Math.max(...others));
     expect(JSON.stringify(state)).not.toContain('"reason"');
     expect(generation).toMatchObject({
@@ -310,17 +314,18 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
 // =============================================================================================
 
 describe('hand-picked deck lifecycle', () => {
-  it('starts missing with eligible sentences and bounds, and no deck', async () => {
+  it('starts missing with every line (short ones too, SMA-35), eligible count and bounds, and no deck', async () => {
     const created = await createArticle({ title: 'Deck test', topic: 'Analysis', bodyMd: BODY });
 
     const state = await tldr(created.id);
 
     expect(state.status).toBe('missing');
-    expect(state.sentences).toHaveLength(8);
-    expect(state.sentences.map((s) => s.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    expect(state.sentences.every((s) => s.words >= 5)).toBe(true);
-    expect(state.sentences.some((s) => s.text === 'A short one.')).toBe(false);
-    expect(state.sentences[4].headingPath).toEqual(['How it works']);
+    expect(state.sentences).toHaveLength(9);
+    expect(state.sentences.map((s) => s.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(state.eligibleCount).toBe(8);
+    const short = state.sentences.filter((s) => s.words < 5);
+    expect(short.map((s) => [s.text, s.relevance])).toEqual([['A short one.', null]]);
+    expect(state.sentences.filter((s) => s.words >= 5)[4].headingPath).toEqual(['How it works']);
     expect(state.bounds).toEqual({ min: 4, max: 5, target: 4 });
     expect(state.draft).toBeNull();
     expect(state.published).toBeNull();
@@ -481,6 +486,22 @@ describe('hand-picked deck lifecycle', () => {
     expect((await tldr(created.id)).draft!.slides).toHaveLength(sentences.length);
   });
 
+  it('lists every line of the article, short ones too, and a deck can use them (SMA-35)', async () => {
+    const created = await createArticle({ title: 'Short lines', bodyMd: `${BODY}\n\nShort and sharp. Yes.` });
+    const state = await tldr(created.id);
+    const short = state.sentences.filter((s) => s.words < 5);
+    expect(short.map((s) => s.text)).toEqual(expect.arrayContaining(['Short and sharp.', 'Yes.']));
+    expect(state.eligibleCount).toBe(state.sentences.length - short.length);
+    expect(state.sentences.map((s) => s.index)).toEqual(state.sentences.map((_, i) => i));
+
+    const { status } = await putDeck(created.id, {
+      revisionId: created.currentRevision.id,
+      slides: short.map((s) => ({ sid: s.sid, source: 'writer' })),
+    });
+    expect(status).toBe(200);
+    expect((await tldr(created.id)).draft!.slides.map((s) => s.text)).toEqual(short.map((s) => s.text));
+  });
+
   it('refuses a deck save against a non-current revision with 409 CONFLICT', async () => {
     const created = await createArticle({ title: 'Conflict deck', bodyMd: BODY });
     const { sentences } = await tldr(created.id);
@@ -572,7 +593,8 @@ describe('hand-picked deck lifecycle', () => {
     expect(counter.calls).toBe(0);
     expect(await generationRows(created.id)).toBe(0);
     expect(state.bounds).toBeNull();
-    expect(state.sentences).toEqual([]);
+    expect(state.eligibleCount).toBe(0);
+    expect(state.sentences.every((s) => s.words < 5)).toBe(true); // short lines still listed for hand-picking
   });
 
   it('refuses Generate for a non-current revision with 409 CONFLICT and creates no row', async () => {

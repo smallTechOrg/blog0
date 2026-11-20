@@ -2,7 +2,8 @@
 // can run it against a fake window/document.
 //
 // Theme (divergence 16): a stored 'light'|'dark' choice wins, otherwise the OS preference.
-// Typing (UI review 2026-10-20): every load of /, /archive or /about without reduced motion marks
+// Typing (UI review 2026-10-20; SMA-25 adds /p/<slug>): every load of /, /archive, /about or an
+// article's Read page without reduced motion marks
 // `data-typing`, so additions.css keeps the page's text unpainted until PageTyper takes over
 // (`data-typer`); a 2.5 s timeout sets `data-typer` anyway if hydration never arrives.
 
@@ -11,5 +12,5 @@ if(t!=='light'&&t!=='dark'){t=w.matchMedia&&w.matchMedia('(prefers-color-scheme:
 d.setAttribute('data-theme',t);
 var reduce=!!(w.matchMedia&&w.matchMedia('(prefers-reduced-motion: reduce)').matches);
 var p=w.location.pathname.replace(/\\/+$/,'')||'/';
-if(!reduce&&(p==='/'||p==='/archive'||p==='/about')){d.dataset.typing='1';w.setTimeout(function(){d.setAttribute('data-typer','')},2500)}
+if(!reduce&&(p==='/'||p==='/archive'||p==='/about'||/^\\/p\\/[^/]+$/.test(p))){d.dataset.typing='1';w.setTimeout(function(){d.setAttribute('data-typer','')},2500)}
 }catch(e){}})();`;

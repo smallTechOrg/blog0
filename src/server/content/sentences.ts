@@ -13,7 +13,8 @@ export const ABBREVIATIONS = [
   'U.S.', 'U.K.', 'approx.', 'cf.', 'al.',
 ] as const;
 
-/** A sentence is eligible (Jev input, hand-picker, deck) when it has at least this many words. */
+/** A sentence is eligible (Jev input) when it has at least this many words. The hand-picker and
+ *  the deck take every sentence (`buildLines`, SMA-35). */
 export const MIN_ELIGIBLE_WORDS = 5;
 
 const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
@@ -59,17 +60,25 @@ export function splitSentences(text: string): string[] {
 }
 
 /**
- * Sentences of every paragraph, `sid = pid + '-s' + k` (k counts all sentences of the paragraph),
- * filtered to eligible ones; `index` is the position among eligible sentences (0..N-1).
+ * Every sentence of every paragraph, `sid = pid + '-s' + k` (k counts all sentences of the
+ * paragraph); `index` is the position among all of them (0..M-1).
  */
-export function buildSentences(paragraphs: readonly Paragraph[]): Sentence[] {
+export function buildLines(paragraphs: readonly Paragraph[]): Sentence[] {
   const out: Sentence[] = [];
   for (const paragraph of paragraphs) {
     splitSentences(paragraph.text).forEach((text, k) => {
-      const words = countWords(text);
-      if (words < MIN_ELIGIBLE_WORDS) return;
-      out.push({ sid: `${paragraph.pid}-s${k}`, index: out.length, pid: paragraph.pid, text, words });
+      out.push({ sid: `${paragraph.pid}-s${k}`, index: out.length, pid: paragraph.pid, text, words: countWords(text) });
     });
   }
   return out;
+}
+
+/** The eligible sentences (Jev input): `buildLines` filtered to ≥ MIN_ELIGIBLE_WORDS words, re-indexed 0..N-1. */
+export function eligibleSentences(lines: readonly Sentence[]): Sentence[] {
+  return lines.filter((s) => s.words >= MIN_ELIGIBLE_WORDS).map((s, index) => ({ ...s, index }));
+}
+
+/** Eligible sentences straight from paragraphs (`eligibleSentences(buildLines(paragraphs))`). */
+export function buildSentences(paragraphs: readonly Paragraph[]): Sentence[] {
+  return eligibleSentences(buildLines(paragraphs));
 }
