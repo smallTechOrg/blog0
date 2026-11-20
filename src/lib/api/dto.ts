@@ -1,6 +1,7 @@
 // Every API DTO (spec/api.md), one file grouped by domain section. Pure + isomorphic: imported by
 // route handlers, services and admin/reader client components.
 
+import type { Block } from '@/lib/content/types';
 import type { FormatKind, FormatStatus } from '@/lib/formats/registry';
 import type { ListenTiming } from '@/lib/listen/estimate';
 import type { MarkIssueCode } from '@/lib/listen/marks';
@@ -266,6 +267,9 @@ export interface PublicListenDto {
   times: { read: number; tldr: number | null; listen: number };
   /** Absolute …/p/<slug>/listen. */
   shareUrl: string;
+  /** The published body (the same `.prose` blocks as the article page), so Listen from a card shows
+   *  the same text view as Listen on the article page. */
+  blocks: Block[];
 }
 
 // ---------------------------------------------------------------------------------------------

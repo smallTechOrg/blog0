@@ -223,6 +223,7 @@ interface PublicListenDto {
   bylineName: string;
   times: { read: number; tldr: number | null; listen: number };
   shareUrl: string;                                                      // absolute …/p/<slug>/listen
+  blocks: Block[];                                                       // the published body — Listen from a card shows the same text view as the article page
 }
 ```
 

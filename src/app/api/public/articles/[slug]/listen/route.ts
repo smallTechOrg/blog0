@@ -38,6 +38,7 @@ export const GET = withApi(
       bylineName: a.bylineName,
       times: { read: a.times.read, tldr: a.times.tldr, listen: a.times.listen },
       shareUrl: a.listen.shareUrl,
+      blocks: a.blocks,
     };
   },
 );

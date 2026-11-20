@@ -16,7 +16,7 @@ import { AUDIO_FIXTURE, IMAGE_FIXTURE, audioFixtureMeta, expectRange206, pngFixt
 // page where it is; Follow audio scrolls back and resumes; PageDown with ▶ focused pauses again;
 // a paragraph click seeks and resumes → /media/<key> answers 206 → upload is locked while the
 // text is unsaved → edit a paragraph + Save → "text changed" warning, Publish changes still works
-// and the live Listen follows the new text → home card Listen opens the player-only overlay →
+// and the live Listen follows the new text → home card Listen opens the same Listen view (text included) in the overlay →
 // reverting the paragraph clears the warning → ← Desk confirms with unsaved text. Listen never
 // calls the LLM: zero new ai_generation rows.
 //
@@ -284,25 +284,15 @@ test.describe('Listen walk: upload → ready → image → publish → follow al
     // ▶ plays: the position passes 1 s within 3 s.
     await view.getByRole('button', { name: 'Play' }).click();
     await expect.poll(() => view.locator('audio').evaluate((a: HTMLAudioElement) => a.currentTime), { timeout: 10_000 }).toBeGreaterThan(1);
-    // SMA-36: while it plays, the not-yet-read tail of the live paragraph is the faint highlight.
-    await expect.poll(() => page.evaluate(() => CSS.highlights.get('blog0-listen-ahead')?.size ?? 0)).toBe(1);
     await view.getByRole('button', { name: 'Pause' }).click();
 
-    // The highlight is SOFT: --listen-live-bg (= --accent-softer), not the share highlight's --accent-soft.
-    const colors = await view.evaluate((section) => {
-      const probe = (v: string) => {
-        const el = document.createElement('div');
-        el.style.background = v;
-        section.appendChild(el);
-        const c = getComputedStyle(el).backgroundColor;
-        el.remove();
-        return c;
-      };
-      const liveEl = section.querySelector('.para.is-live');
-      return { live: liveEl ? getComputedStyle(liveEl).backgroundColor : null, softer: probe('var(--accent-softer)'), share: probe('var(--accent-soft)') };
+    // Nothing is painted on the paragraph being read (owner, after SMA-36: no highlight until there is
+    // true tracking); .is-live stays a hook only.
+    const livePaint = await view.locator('.para.is-live').evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { bg: cs.backgroundColor, shadow: cs.boxShadow };
     });
-    expect(colors.live).toBe(colors.softer);
-    expect(colors.live).not.toBe(colors.share);
+    expect(livePaint).toEqual({ bg: 'rgba(0, 0, 0, 0)', shadow: 'none' });
 
     // Spread the paragraphs out so following really has to scroll.
     await page.addStyleTag({ content: SPREAD_PARAS_CSS });
@@ -446,7 +436,7 @@ test.describe('Listen walk: upload → ready → image → publish → follow al
     await expect.poll(() => livePids(page)).toEqual([live.marks[1].pid]);
   });
 
-  test('home card: Listen opens the player-only overlay (no text, no highlight); the address is unchanged', async () => {
+  test('home card: Listen opens the same Listen view as the article page (player + text, typed in, no highlight); the address is unchanged', async () => {
     const { page, audio } = journey();
     await page.goto('/');
     const quick = page.getByRole('button', { name: `Listen to ${TITLE} — 1 min`, exact: true });
@@ -460,7 +450,12 @@ test.describe('Listen walk: upload → ready → image → publish → follow al
     await expect(overlay.locator('.modebar__title')).toHaveText(TITLE);
     await expect(overlay.locator('.listenview .audio')).toBeVisible();
     await expect(overlay.locator('.listenview audio source')).toHaveAttribute('src', audio.url);
-    await expect(overlay.locator('.listenview__text, .para, .listenview__follow')).toHaveCount(0);
+    // the same view as on the article page: the text beside the player, every paragraph present
+    await expect(overlay.locator('.listenview--synced .listenview__text .para[data-pid]').first()).toBeVisible();
+    expect(await overlay.locator('.listenview__text .para[data-pid]').count()).toBe(PARAS.length);
+    await expect(overlay.locator('.listenview__follow')).toBeHidden();
+    // it typed in, then finished (its own highlight, not the page typewriter's)
+    await expect.poll(() => page.evaluate(() => CSS.highlights.has('blog0-listen-untyped')), { timeout: 30_000 }).toBe(false);
     await expect(overlay.locator('.modedock').getByRole('tab', { name: 'Listen — 1 min' })).toHaveAttribute('aria-selected', 'true');
     expect(new URL(page.url()).pathname).toBe('/');
 

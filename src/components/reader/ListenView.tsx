@@ -3,32 +3,33 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 
 import { prefersReducedMotion } from '@/components/design/motion';
+import { typePage } from '@/components/design/page-typer';
 import type { Block } from '@/lib/content/types';
 import { clickTagPath, shareClickIgnored } from '@/lib/share-surface';
 import type { ListenViewModel } from '@/lib/view-models';
 
 import { ArticleBody } from './ArticleBody';
 import { AudioPlayer, type AudioPlayerHandle } from './AudioPlayer';
-import { AHEAD_HIGHLIGHT, glideStep, paragraphProgress, readCursor, scrollTargetFor } from './listen-follow';
+import { glideStep, paragraphProgress, scrollTargetFor } from './listen-follow';
 import { applyPlayerKey, createListenSync, pausesFollow, type ListenSync } from './listen-sync';
 
 /* ============================================================
    Listen (spec/ui.md §3 Listen; divergences 28–29): the design's listen
    frame — tag, title, player — with the article text beside it. The player
    is primary; the text follows it on the server-resolved (estimated or
-   stored) marks: the paragraph being read carries a soft .is-live and, while
-   following, scrolls to centre. A manual scroll pauses following and shows
+   stored) marks: the paragraph being read carries .is-live (a hook only —
+   nothing is painted from the estimate) and, while following, comes into view. A manual scroll pauses following and shows
    **Follow audio** in the sticky lead; clicking it scrolls back to the live
    paragraph, resumes following and hands focus to ▶. A paragraph click seeks
    the audio to its start and resumes following; Space / ← / → drive the
    player from the window. The highlight is toggled straight on the DOM (the
    prose is memoised html), exactly like the share highlight.
-   SMA-36: while the audio plays (and motion is allowed) the text glides
-   with it instead of jumping a paragraph at a time: inside the live
-   paragraph the reading position is estimated from the time between its
-   mark and the next (listen-follow.ts), the part not yet read is painted
-   faint, and — while following — the page eases so that line stays on the
-   reading line.
+   SMA-36: the view types in when it opens, and while the audio plays (and
+   motion is allowed) the text scrolls slowly with it instead of jumping a
+   paragraph at a time — the reading position inside the live paragraph is
+   estimated from the time between its mark and the next (listen-follow.ts).
+   The same view runs on the article page and in the overlay opened from a
+   home card; in the overlay the text scrolls inside the panel.
    ============================================================ */
 export interface ListenViewProps {
   topic: string;
@@ -41,6 +42,8 @@ export interface ListenViewProps {
 }
 
 const LIVE = 'is-live';
+/** additions.css paints it like `blog0-untyped`. */
+const LISTEN_TYPE_HIGHLIGHT = 'blog0-listen-untyped';
 
 export function ListenView({ topic, title, bylineName, blocks, listen, onClose }: ListenViewProps) {
   const player = useRef<AudioPlayerHandle>(null);
@@ -53,6 +56,16 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
   useLayoutEffect(() => {
     live.current = { onClose };
   });
+
+  /* SMA-36: the view types in when it opens — what is on screen, then the rest at once — the same
+     whether it was opened on the article page or from a home card. Its own highlight, so a page
+     typewriter still running underneath never clears it (or the other way round). */
+  const sectionRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const root = sectionRef.current;
+    if (!root || prefersReducedMotion()) return;
+    return typePage(root, { highlight: LISTEN_TYPE_HIGHLIGHT, untilFold: true });
+  }, []);
 
   /* highlight + auto-scroll, bound to the player's <audio> */
   useEffect(() => {
@@ -159,7 +172,7 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
   }, [listen]);
 
   return (
-    <section className="listenview listenview--synced" aria-label="Listen to this article">
+    <section ref={sectionRef} className="listenview listenview--synced" aria-label="Listen to this article">
       <div className="listenview__lead" ref={leadRef}>
         {topic ? <span className="tag">{topic}</span> : null}
         <h1>{title}</h1>
@@ -190,31 +203,63 @@ export function ListenView({ topic, title, bylineName, blocks, listen, onClose }
   );
 }
 
-/** Text nodes of a paragraph, in order. */
-function textNodesOf(el: HTMLElement): Text[] {
-  const out: Text[] = [];
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n as Text);
-  return out;
+/** What the text scrolls in: the nearest scrolling ancestor (the Listen overlay's panel), else the window. */
+interface Scroller {
+  y(): number;
+  set(y: number): void;
+  max(): number;
+  /** The scroller's visible band in viewport px. */
+  band(): { top: number; bottom: number };
 }
 
-/** The band of the viewport the text is read in: below the site header, the mode strip and — when
+function scrollerOf(el: HTMLElement): Scroller {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const oy = getComputedStyle(p).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && p.scrollHeight > p.clientHeight) {
+      const box = p;
+      return {
+        y: () => box.scrollTop,
+        set: (y) => box.scrollTo(0, y),
+        max: () => box.scrollHeight - box.clientHeight,
+        band: () => {
+          const r = box.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom };
+        },
+      };
+    }
+  }
+  return {
+    y: () => window.scrollY,
+    set: (y) => window.scrollTo(0, y),
+    max: () => document.documentElement.scrollHeight - window.innerHeight,
+    band: () => ({ top: 0, bottom: window.innerHeight }),
+  };
+}
+
+/** The band of the scroller the text is read in: below the site header, the mode strip and — when
  *  it sits above the text (one column) — the sticky lead. */
-function readingBand(lead: HTMLElement | null, scope: HTMLElement): { top: number; bottom: number } {
-  let top = 0;
+function readingBand(scroller: Scroller, lead: HTMLElement | null, scope: HTMLElement): { top: number; bottom: number } {
+  const view = scroller.band();
+  const bottom = view.bottom;
+  let top = view.top;
   for (const sel of ['.sitehead', '.modebar']) {
-    const r = document.querySelector(sel)?.getBoundingClientRect();
-    if (r && r.bottom > top && r.top < window.innerHeight / 2) top = r.bottom;
+    for (const el of Array.from(document.querySelectorAll(sel))) {
+      const r = el.getBoundingClientRect();
+      if (r.height > 0 && r.bottom > top && r.top < (top + bottom) / 2) top = r.bottom;
+    }
   }
   const l = lead?.getBoundingClientRect();
   const t = scope.getBoundingClientRect();
   if (l && l.left < t.right && l.right > t.left && l.bottom > top) top = l.bottom;
-  return { top, bottom: window.innerHeight };
+  return { top, bottom: Math.min(bottom, window.innerHeight) };
 }
 
 /**
- * SMA-36: the per-frame glide while the audio plays — the faint not-yet-read tail of the live
- * paragraph and, while following, the slow scroll. Returns the stop function.
+ * SMA-36: the slow scroll while the audio plays. The marks only say where each paragraph starts,
+ * so the reading position inside the live paragraph is estimated from the time between its mark
+ * and the next; while following, the text eases so that estimated line sits on the reading line.
+ * Nothing is highlighted from the estimate (owner: not until there is true word tracking).
+ * Returns the stop function.
  */
 function startGlide(
   audio: HTMLAudioElement,
@@ -224,62 +269,33 @@ function startGlide(
   sync: ListenSync,
   paragraph: (pid: string) => HTMLElement | null,
 ): () => void {
-  const reg = typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined' ? CSS.highlights : null;
-  const ahead = reg ? new Highlight() : null;
-  if (reg && ahead) reg.set(AHEAD_HIGHLIGHT, ahead);
-  const nodes = new Map<string, Text[]>();
+  const scroller = scrollerOf(scope);
   let raf = 0;
   let last = 0;
-  let glideY: number | null = null; // fractional scroll position (the window rounds to whole px)
+  let glideY: number | null = null; // fractional scroll position (scrolling rounds to whole px)
 
-  function frame(scroll: boolean, now: number) {
+  function frame(now: number) {
     const dt = last ? Math.min(100, now - last) : 16;
     last = now;
-    ahead?.clear();
     const p = paragraphProgress(listen.marks, audio.currentTime * 1000, listen.durationMs);
     const el = p ? paragraph(p.pid) : null;
-    if (!p || !el || !scope.contains(el)) {
+    if (!p || !el || !sync.following()) {
       glideY = null;
       return;
     }
-    let texts = nodes.get(p.pid);
-    if (!texts || texts.some((t) => !t.isConnected)) {
-      texts = textNodesOf(el);
-      nodes.set(p.pid, texts);
-    }
-    const at = readCursor(texts.map((t) => t.data), p.fraction);
-    let lineY: number;
-    if (at) {
-      const node = texts[at.index];
-      const tail = document.createRange();
-      tail.selectNodeContents(el);
-      tail.setStart(node, at.offset);
-      ahead?.add(tail);
-      const caret = document.createRange();
-      caret.setStart(node, at.offset);
-      caret.setEnd(node, Math.min(node.length, at.offset + 1));
-      const r = caret.getBoundingClientRect();
-      lineY = r.height > 0 ? r.top + r.height / 2 : el.getBoundingClientRect().bottom;
-    } else {
-      lineY = el.getBoundingClientRect().bottom;
-    }
-    if (!scroll || !sync.following()) {
-      glideY = null;
-      return;
-    }
-    const band = readingBand(lead, scope);
-    const target = Math.min(
-      scrollTargetFor(window.scrollY, lineY, band.top, band.bottom),
-      document.documentElement.scrollHeight - window.innerHeight,
-    );
-    // someone else moved the page (a seek's jump, a resize): glide on from where it is now
-    if (glideY === null || Math.abs(glideY - window.scrollY) > 2) glideY = window.scrollY;
+    const r = el.getBoundingClientRect();
+    const lineY = r.top + r.height * p.fraction;
+    const band = readingBand(scroller, lead, scope);
+    const y = scroller.y();
+    const target = Math.min(scrollTargetFor(y, lineY, band.top, band.bottom), Math.max(0, scroller.max()));
+    // someone else moved the text (a seek's jump, a resize): glide on from where it is now
+    if (glideY === null || Math.abs(glideY - y) > 2) glideY = y;
     glideY = glideStep(glideY, target, dt);
-    if (Math.abs(glideY - window.scrollY) >= 0.5) window.scrollTo(0, glideY);
+    if (Math.abs(glideY - y) >= 0.5) scroller.set(glideY);
   }
 
   function loop(now: number) {
-    frame(true, now);
+    frame(now);
     raf = window.requestAnimationFrame(loop);
   }
   function start() {
@@ -290,30 +306,20 @@ function startGlide(
   function halt() {
     window.cancelAnimationFrame(raf);
     raf = 0;
-    frame(false, performance.now()); // keep the faint tail where the audio stopped
+    glideY = null;
   }
-  /* paused: a seek still moves the faint tail (the paragraph scroll is the sync's, as before) */
-  const onSeeked = () => {
-    if (audio.paused) frame(false, performance.now());
-  };
 
   audio.addEventListener('play', start);
   audio.addEventListener('playing', start);
   audio.addEventListener('pause', halt);
   audio.addEventListener('ended', halt);
-  audio.addEventListener('seeked', onSeeked);
   if (!audio.paused) start();
-  else frame(false, performance.now());
 
   return () => {
-    window.cancelAnimationFrame(raf);
-    raf = 0;
+    halt();
     audio.removeEventListener('play', start);
     audio.removeEventListener('playing', start);
     audio.removeEventListener('pause', halt);
     audio.removeEventListener('ended', halt);
-    audio.removeEventListener('seeked', onSeeked);
-    ahead?.clear();
-    reg?.delete(AHEAD_HIGHLIGHT);
   };
 }

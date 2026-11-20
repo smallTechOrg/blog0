@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { glideStep, paragraphProgress, readCursor, READING_LINE, scrollTargetFor } from '@/components/reader/listen-follow';
+import { glideStep, paragraphProgress, READING_LINE, scrollTargetFor } from '@/components/reader/listen-follow';
 
 const marks = [
   { pid: 'a', tMs: 0 },
@@ -21,15 +21,6 @@ describe('paragraphProgress (SMA-36)', () => {
     expect(paragraphProgress([{ pid: 'a', tMs: 1_000 }], 500, 9_000)).toBeNull();
     expect(paragraphProgress([{ pid: 'a', tMs: 0 }, { pid: 'b', tMs: 0 }], 0, 9_000)).toMatchObject({ pid: 'b' });
     expect(paragraphProgress([{ pid: 'a', tMs: 5_000 }], 5_000, 5_000)!.fraction).toBe(1);
-  });
-});
-
-describe('readCursor', () => {
-  it('maps a fraction of the paragraph characters (whitespace free) to a text node and offset', () => {
-    expect(readCursor(['ab cd', 'ef'], 0)).toEqual({ index: 0, offset: 0 });
-    expect(readCursor(['ab cd', 'ef'], 0.5)).toEqual({ index: 0, offset: 4 }); // 3 of 6 glyphs read → "d"
-    expect(readCursor(['ab cd', 'ef'], 0.75)).toEqual({ index: 1, offset: 0 });
-    expect(readCursor(['ab cd', 'ef'], 1)).toBeNull();
   });
 });
 
