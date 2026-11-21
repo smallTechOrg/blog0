@@ -40,6 +40,7 @@ export default defineConfig({
     { name: 'media', testMatch: 'media.spec.ts', dependencies: ['listen'], use: { ...devices['Desktop Chrome'] } },
     { name: 'smoke', testMatch: 'smoke.spec.ts', dependencies: ['media'], use: { ...devices['Desktop Chrome'] } },
     { name: 'newsletter', testMatch: 'newsletter.spec.ts', dependencies: ['smoke'], use: { ...devices['Desktop Chrome'] } },
+    { name: 'assistant', testMatch: 'assistant.spec.ts', dependencies: ['newsletter'], use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: externalBaseUrl
     ? undefined

@@ -12,6 +12,7 @@ import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { apiRequest, signInHref } from '../api';
 
 import { AiProviderSettings } from './AiProviderSettings';
+import { AssistantPromptSettings } from './AssistantPromptSettings';
 import { NewsletterSettings } from './NewsletterSettings';
 
 import {
@@ -68,6 +69,8 @@ export function SiteSettingsView({ wordmark, timeZone }: { wordmark: string; tim
         <NewsletterSettings timeZone={timeZone} />
         {/* SMA-44: the AI provider every AI feature uses (#ai). */}
         <AiProviderSettings timeZone={timeZone} />
+        {/* SMA-43: the writing assistant's instructions (#assistant). */}
+        <AssistantPromptSettings />
       </div>
     </main>
   );

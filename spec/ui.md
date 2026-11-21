@@ -344,6 +344,17 @@ to the editor.
 - **Tabs**: Write · TLDR · Listen · History, with a `tabchip` showing the TLDR and Listen statuses.
   History = `StubNotice` labelled "Not built yet": "Every save is already kept (N revisions).
   Browsing and restoring arrives in a later version." (revision history deferred, no phase).
+- **Writing assistant (SMA-43)** — in the Write tab's side column (tabs **Preview** / **Assistant**
+  at ≥ 1100 px; a third **Assistant** view in the Write/Preview toggle below that; a count chip shows
+  the latest round's comments). `AssistantPanel` + `use-writing-assistant.ts`: **On** checkbox
+  (remembered per browser), a status line ("Watching — it reads again after a finished sentence (6+
+  words) or about 40 changed words." / "Reading your draft…" / "Off — …" / "Set up an AI provider to
+  use the assistant. Site → AI provider" / "Couldn’t read the draft: <message>"), **Review now**, and
+  the latest comments (kind label Accuracy / Add / Clarity / Question / Note, the quoted text, the
+  comment) with two earlier rounds under "Earlier (n)". It reads on its own after a 1.5 s pause in
+  typing when ≥ 40 words changed or a sentence of ≥ 6 changed words was finished
+  (`assistant-trigger.ts`), one read at a time, at most one per 15 s; opening the editor never reads.
+  Comments are for the session only and never change the text.
 - **Write tab**: fields Title, Dek, Topic; **Settings** disclosure: Slug (locked note after
   publish), Byline (read-only: the author's display name, not editable per article), Featured (toggle + rank), "Show ‘Draft — in progress’ badge". Split view ≥
   1100 px: `MarkdownEditor` (monospace textarea, Tab inserts 2 spaces, word count) left; **Live
@@ -447,6 +458,9 @@ design's `.audio` player. Loads `GET /api/admin/articles/:id/listen` via `useAdm
 - Every control is a `<button>`; no page-level shortcuts in this tab.
 
 ### Site `/admin/site`
+**SMA-43 — "Writing assistant" card** (`AssistantPromptSettings.tsx`, `#assistant`): the
+assistant's instructions in a textarea (≤ 4000; "(default)" when unchanged), **Save**, **Reset to
+default** (confirm). The JSON reply format is appended by the server, so edits can't break the panel.
 **SMA-44 — "AI provider" card** (`AiProviderSettings.tsx`, `#ai`, own load of `GET /api/admin/ai`):
 a status line ("Not set up — AI features are off." / "Set up — no calls yet. Use Test to check it." /
 "Working — last call <when>." / "Failing since <when>: <message>" / unreadable key → "enter it

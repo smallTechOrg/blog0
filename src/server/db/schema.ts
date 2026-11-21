@@ -28,7 +28,8 @@ import {
 // 0005_newsletter_erase_delete.sql (owner decision 2026-10-19: erasure DELETES the subscriber; the
 // hashed `newsletter_erasure_marker`, the PII-free `newsletter_erasure_log`, `newsletter_issue.erased_message_count`,
 // the replaced `newsletter_erase_subscriber`, the erased-address insert guard and the 0004 tombstone repair),
-// 0006_known_device, 0007_ai_provider (SMA-44: the site's OpenAI-compatible AI provider).
+// 0006_known_device, 0007_ai_provider (SMA-44: the site's OpenAI-compatible AI provider),
+// 0008_ai_assistant_prompt (SMA-43: the writing assistant's editable instructions).
 
 const id = () => uuid('id').primaryKey().defaultRandom();
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -126,6 +127,8 @@ export const site = pgTable('site', {
   privacyText: text('privacy_text').notNull().default(DEFAULT_PRIVACY_TEXT),
   newsletterPostalAddress: text('newsletter_postal_address').notNull().default(''),
   /** Random per site; never in a DTO. Keys the erasure tombstone hash (independent of every secret). */
+  /** SMA-43: the writing assistant's instructions (Admin → Site → AI provider); null = the built-in default. */
+  aiAssistantPrompt: text('ai_assistant_prompt'),
   newsletterEraseSalt: text('newsletter_erase_salt')
     .notNull()
     .default(sql`encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex')`),

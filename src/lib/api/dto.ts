@@ -341,6 +341,44 @@ export interface AiProviderResponse { ai: AiProviderDto }
 export interface SaveAiProviderRequest { baseUrl: string; model: string; apiKey?: string | null }
 /** POST /api/admin/ai/test — any field omitted falls back to the saved value. */
 export interface TestAiProviderRequest { baseUrl?: string; model?: string; apiKey?: string }
+// ---------------------------------------------------------------------------------------------
+// Writing assistant (SMA-43): comments on a draft while it is written. Never stored.
+// ---------------------------------------------------------------------------------------------
+
+export const ASSISTANT_COMMENT_KINDS = ['accuracy', 'missing', 'clarity', 'question', 'note'] as const;
+export type AssistantCommentKind = (typeof ASSISTANT_COMMENT_KINDS)[number];
+export const ASSISTANT_LIMITS = {
+  prompt: 4000,
+  title: 200,
+  dek: 400,
+  body: 200_000,
+  /** The draft sent to the model is cut here (the head of the article). */
+  sentBody: 48_000,
+  changed: 8000,
+  comments: 6,
+  comment: 600,
+  quote: 200,
+} as const;
+export interface AssistantComment {
+  kind: AssistantCommentKind;
+  /** A short quote of the draft the comment is about, or null. */
+  quote: string | null;
+  text: string;
+}
+/** POST /api/admin/assistant/review */
+export interface AssistantReviewRequest {
+  articleId?: string;
+  title: string;
+  dek: string;
+  bodyMd: string;
+  changed: string;
+  trigger: 'sentence' | 'words' | 'manual';
+}
+export interface AssistantReviewResponse { comments: AssistantComment[]; model: string | null; latencyMs: number }
+/** GET/PUT /api/admin/ai/assistant — the assistant's editable instructions. */
+export interface AssistantPromptDto { prompt: string; isDefault: boolean; defaultPrompt: string }
+export interface AssistantPromptResponse { assistant: AssistantPromptDto }
+
 export type AiProviderTestResult =
   | { ok: true; latencyMs: number; model: string; /** The model answered valid JSON as asked. */ jsonOk: boolean }
   | { ok: false; code: string; message: string };

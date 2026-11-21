@@ -5,15 +5,19 @@ import { useRef, useState } from 'react';
 import type { ArticleDetailDto } from '@/lib/api/dto';
 import { ARTICLE_LIMITS } from '@/lib/articles/limits';
 
+import { AssistantPanel } from './AssistantPanel';
 import type { EditorFields } from './fields';
 import { LivePreview } from './LivePreview';
 import { ImageUploadButton, type ImageUploadHandle } from './ImageUploadButton';
 import { MarkdownEditor, type MarkdownEditorHandle } from './MarkdownEditor';
 import { usePasteImages } from './use-paste-images';
+import { useWritingAssistant } from './use-writing-assistant';
 
 // Write tab (spec/ui.md §4): Title, Dek, Topic; Settings disclosure (slug, byline (read-only), featured,
-// in-progress badge); Markdown left + live preview right at ≥ 1100 px, a Write/Preview toggle
-// below that (admin.css switches on `data-pane`). The Image button sits in the editor's toolbar
+// in-progress badge); Markdown left + a side column right at ≥ 1100 px holding the live preview or the
+// writing assistant (SMA-43; tabs Preview / Assistant), a Write / Preview / Assistant toggle below
+// that (admin.css switches on `data-pane` and `data-side`). The assistant keeps watching the draft
+// whichever view is showing. The Image button sits in the editor's toolbar
 // slot; files dropped on the textarea go to the same queue. Field limits = the API's (ARTICLE_LIMITS).
 
 export interface WriteTabProps {
@@ -21,10 +25,21 @@ export interface WriteTabProps {
   fields: EditorFields;
   onField: <K extends keyof EditorFields>(key: K, value: EditorFields[K]) => void;
   dateLabel: string;
+  timeZone: string;
 }
 
-export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps) {
-  const [pane, setPane] = useState<'write' | 'preview'>('write');
+export function WriteTab({ article, fields, onField, dateLabel, timeZone }: WriteTabProps) {
+  const [pane, setPane] = useState<'write' | 'side'>('write');
+  const [side, setSide] = useState<'preview' | 'assistant'>('preview');
+  const assistant = useWritingAssistant({ articleId: article.id, title: fields.title, dek: fields.dek, bodyMd: fields.bodyMd });
+  const fresh = assistant.rounds[0]?.comments.length ?? 0;
+  function show(next: 'write' | 'preview' | 'assistant'): void {
+    if (next === 'write') setPane('write');
+    else {
+      setPane('side');
+      setSide(next);
+    }
+  }
   const id = article.id;
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const imageRef = useRef<ImageUploadHandle>(null);
@@ -143,23 +158,26 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
         </div>
       </details>
 
-      <div className="split" data-pane={pane}>
+      <div className="split" data-pane={pane} data-side={side}>
         <div className="split__toggle modes" role="group" aria-label="Show">
-          <button
-            type="button"
-            className={pane === 'write' ? 'mode is-on' : 'mode'}
-            aria-pressed={pane === 'write'}
-            onClick={() => setPane('write')}
-          >
+          <button type="button" className={pane === 'write' ? 'mode is-on' : 'mode'} aria-pressed={pane === 'write'} onClick={() => show('write')}>
             Write
           </button>
           <button
             type="button"
-            className={pane === 'preview' ? 'mode is-on' : 'mode'}
-            aria-pressed={pane === 'preview'}
-            onClick={() => setPane('preview')}
+            className={pane === 'side' && side === 'preview' ? 'mode is-on' : 'mode'}
+            aria-pressed={pane === 'side' && side === 'preview'}
+            onClick={() => show('preview')}
           >
             Preview
+          </button>
+          <button
+            type="button"
+            className={pane === 'side' && side === 'assistant' ? 'mode is-on' : 'mode'}
+            aria-pressed={pane === 'side' && side === 'assistant'}
+            onClick={() => show('assistant')}
+          >
+            Assistant{fresh > 0 ? <span className="tabchip">{fresh}</span> : null}
           </button>
         </div>
         <div className="split__write">
@@ -199,16 +217,34 @@ export function WriteTab({ article, fields, onField, dateLabel }: WriteTabProps)
             }
           />
         </div>
-        <div className="split__preview">
-          <LivePreview
-            title={fields.title}
-            dek={fields.dek}
-            bodyMd={fields.bodyMd}
-            topic={fields.topic}
-            bylineName={article.bylineName}
-            inProgress={fields.inProgress}
-            dateLabel={dateLabel}
-          />
+        <div className="split__side">
+          <div className="split__sidetabs modes" role="group" aria-label="Side panel">
+            <button type="button" className={side === 'preview' ? 'mode is-on' : 'mode'} aria-pressed={side === 'preview'} onClick={() => setSide('preview')}>
+              Preview
+            </button>
+            <button
+              type="button"
+              className={side === 'assistant' ? 'mode is-on' : 'mode'}
+              aria-pressed={side === 'assistant'}
+              onClick={() => setSide('assistant')}
+            >
+              Assistant{fresh > 0 ? <span className="tabchip">{fresh}</span> : null}
+            </button>
+          </div>
+          <div className="split__preview">
+            <LivePreview
+              title={fields.title}
+              dek={fields.dek}
+              bodyMd={fields.bodyMd}
+              topic={fields.topic}
+              bylineName={article.bylineName}
+              inProgress={fields.inProgress}
+              dateLabel={dateLabel}
+            />
+          </div>
+          <div className="split__assist">
+            <AssistantPanel assistant={assistant} timeZone={timeZone} />
+          </div>
         </div>
       </div>
     </div>

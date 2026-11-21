@@ -238,7 +238,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
         </div>
 
         <section id="panel-write" role="tabpanel" aria-labelledby="tab-write" hidden={tab !== 'write'}>
-          <WriteTab article={article} fields={fields} onField={onField} dateLabel={dateLabel} />
+          <WriteTab article={article} fields={fields} onField={onField} dateLabel={dateLabel} timeZone={timeZone} />
         </section>
         <section id="panel-tldr" role="tabpanel" aria-labelledby="tab-tldr" hidden={tab !== 'tldr'}>
           {visited.has('tldr') ? (
