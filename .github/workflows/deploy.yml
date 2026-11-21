@@ -161,8 +161,23 @@ jobs:
 
       - name: Deploy on the VM
         run: |
-          gcloud compute ssh "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --tunnel-through-iap --quiet \
-            --strict-host-key-checking=no --command "sudo bash ${STAGE}/deploy-remote.sh ${GITHUB_SHA}" | tee "${RUNNER_TEMP}/deploy-remote.log"
+          # pipefail: without it `| tee` hid a failed ssh (exit 255, "Permission denied (publickey)") and the
+          # step passed with nothing deployed — the old build kept serving and the smoke checks passed on it.
+          # 255 is ssh's own failure (the remote script did not finish); retry it once after a pause.
+          set -o pipefail
+          deploy() {
+            gcloud compute ssh "$GCP_INSTANCE" --zone "$GCP_ZONE" --project "$GCP_PROJECT" --tunnel-through-iap --quiet \
+              --strict-host-key-checking=no --command "sudo bash ${STAGE}/deploy-remote.sh ${GITHUB_SHA}" | tee "${RUNNER_TEMP}/deploy-remote.log"
+          }
+          rc=0
+          deploy || rc=$?
+          if [ "$rc" -eq 255 ]; then
+            echo "::warning::ssh to the VM failed (255) — retrying once in 15 s"
+            sleep 15
+            rc=0
+            deploy || rc=$?
+          fi
+          exit "$rc"
 
       - name: Remove the rendered env files from the runner
         if: always()
