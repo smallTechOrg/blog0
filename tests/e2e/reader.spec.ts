@@ -486,6 +486,7 @@ test.describe('reader site (blog0)', () => {
     const lead = page.locator('.readbody ul').first().locator('xpath=preceding-sibling::*[1]');
     const leadId = (await lead.getAttribute('id'))!;
     expect(leadId).toMatch(/^p-/);
+    await typesIn(page); // the article types in on arrival (SMA-25); tap once it has
 
     await items.nth(1).click();
     await expect(page.locator('.readbody .para.is-hl')).toHaveCount(4);

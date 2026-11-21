@@ -177,7 +177,8 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
       {/* The capsule floats at the base of the viewport in every mode. The deck
           carries its own copy, so this one steps aside while the deck is open. */}
       {deck ? null : (
-        <div className="modedock">
+        // types with the page head (data-type-early), not after the whole article
+        <div className="modedock" data-type-early="">
           <ModeCapsule active={listening ? 'listen' : 'read'} times={a.times} onPick={pickMode} />
         </div>
       )}

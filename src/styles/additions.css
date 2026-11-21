@@ -78,19 +78,11 @@ html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
 }
 /* same fill as the design's .sent.is-hl, without the underline */
 .para.is-hl { background: var(--accent-soft); border-radius: 2px; }
-/* Listen: the paragraph being read — a SOFT highlight, deliberately subtler than
-   the share highlight above (half its fill, a faint rule instead of the solid accent one). The
-   tokens are scoped to the Listen view so they resolve per theme. */
-.listenview { --listen-live-bg: var(--accent-softer); --listen-live-rule: var(--accent-soft); }
-.para.is-live {
-  background: var(--listen-live-bg); border-radius: 2px;
-  box-shadow: -2px 0 0 0 var(--listen-live-rule); /* the left rule, without moving the text */
-  transition: background .3s ease, box-shadow .3s ease;
-}
-@media (prefers-reduced-motion: reduce) { .para.is-live { transition: none; } }
-/* SMA-36: the part of the live paragraph the audio has not read yet (estimated) — still readable,
-   one step fainter, so the ink follows the voice (components/reader/listen-follow.ts). */
-::highlight(blog0-listen-ahead) { color: var(--faint); }
+/* Listen: nothing is painted on the paragraph being read (.is-live) — owner, after SMA-36: the
+   marks are estimates, so no highlight until there is true tracking; the text scrolls with the
+   voice instead (components/reader/listen-follow.ts). The Listen view types in on opening with its
+   own highlight, painted like the page typewriter's. */
+::highlight(blog0-listen-untyped) { color: transparent; text-decoration-color: transparent; text-shadow: none; }
 
 /* --- Markdown beyond the design (div. 11) ----------------------------- */
 .prose del { color: var(--muted); }
@@ -208,6 +200,10 @@ html[data-typing="1"] .split .sw, html[data-typing="1"] .dekin {
     font-size: clamp(26px, 2.6vw, 34px); margin: 0 0 24px; display: block; overflow: visible;
   }
 }
+/* The same Listen view in the overlay opened from a card: the panel is the scroller, so the lead
+   sticks under the panel's own mode strip (top: 0) instead of the site header. */
+.sheetfull__panel > .listenview--synced { margin-left: auto; margin-right: auto; }
+.sheetfull__panel .listenview--synced .listenview__lead { top: 46px; }
 .audio__play:disabled { opacity: .45; cursor: not-allowed; }
 /* "Follow audio": in the sticky lead, shown only while auto-follow is paused */
 .listenview__follow { margin-top: 12px; }

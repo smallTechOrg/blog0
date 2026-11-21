@@ -177,14 +177,25 @@ export interface TypePageOptions {
    *  the window's bottom edge, everything left lands at once, so a long article never keeps its
    *  reader waiting for text further down. */
   untilFold?: boolean;
+  /** The CSS highlight the untyped text goes in (default `blog0-untyped`). A second typer on the
+   *  same page (the Listen text) uses its own name so the two never clear each other. */
+  highlight?: string;
 }
+
+/** Elements marked `data-type-early` (the article's Read / TLDR / Listen capsule) type straight
+ *  after the pinned masthead, with the page head, wherever they sit in the document. */
+const EARLY_SELECTOR = '[data-type-early]';
 
 /** Types `root` in from the first character. Returns a stop function that leaves it complete.
  *  Scrolling never interrupts it; scrolling down speeds it up or skips it ahead (above). */
 export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => void {
   const api = registry();
   if (!api) return () => {};
-  const items = typedItems(root);
+  const name = opts.highlight ?? HIGHLIGHT_NAME;
+  const pinnedIn = (it: TypedItem) => !!opts.pinned && opts.pinned.contains(elOf(it));
+  const earlyIn = (it: TypedItem) => !pinnedIn(it) && !!elOf(it).closest(EARLY_SELECTOR);
+  const all = typedItems(root);
+  const items = [...all.filter(pinnedIn), ...all.filter(earlyIn), ...all.filter((it) => !pinnedIn(it) && !earlyIn(it))];
   const texts = items.map(costText);
   if (!cursorAt(texts, 0)) return () => {};
   const { reg } = api;
@@ -199,7 +210,7 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     return r;
   });
   const hl = new api.Highlight(...ranges.filter((r): r is Range => r !== null));
-  reg.set(HIGHLIGHT_NAME, hl);
+  reg.set(name, hl);
   items.forEach((it) => {
     if (it.kind === 'field') it.el.placeholder = '';
     else if (it.kind === 'ink') it.el.setAttribute('data-ink', '0');
@@ -251,7 +262,7 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
     window.cancelAnimationFrame(raf);
     window.removeEventListener('scroll', onScroll);
     timers.forEach((t) => window.clearTimeout(t));
-    reg.delete(HIGHLIGHT_NAME);
+    reg.delete(name);
     items.forEach((_, i) => finish(i));
   }
 
@@ -294,7 +305,7 @@ export function typePage(root: HTMLElement, opts: TypePageOptions = {}): () => v
       /* let the last ink finish drawing; the timers take the attributes off */
       window.cancelAnimationFrame(raf);
       window.removeEventListener('scroll', onScroll);
-      reg.delete(HIGHLIGHT_NAME);
+      reg.delete(name);
       return;
     }
     for (; done < at.index; done++) reach(done);
