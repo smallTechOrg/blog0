@@ -249,7 +249,6 @@ export interface ImageUploadResponse {
 export interface PublicTldrDto {
   slug: string; title: string; topic: string; dek: string; meta: string;
   slides: Array<{ text: string }>;
-  disclosure: string;
   times: { read: number; tldr: number; listen: number | null };
   shareUrl: string;
 }

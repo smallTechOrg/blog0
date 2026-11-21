@@ -1,6 +1,6 @@
 // Seed decks (`pnpm seed:tldr`) against real blog0_test Postgres:
 //   - fixture path (no AI): 5 published decks from src/server/seed/decks/*.json, every line verbatim
-//     in its article, editors' disclosure, 0 ai_generation rows; a mangled fixture line is dropped
+//     in its article, 0 ai_generation rows; a mangled fixture line is dropped
 //     with a logged warning and the deck still publishes; idempotent; never publishes a writer's
 //     unpublished edits.
 //   - real-key path: 5 real Jev calls once (normal Generate: ai_generation rows, cost, prompt
@@ -32,8 +32,6 @@ import { captureLogs, type CapturedLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
 
 const ALL_SLUGS = SEED_POSTS.map((p) => p.slug);
-const EDITORS = 'Lines selected by the editors, verbatim from the article.';
-const JEV_ONLY = 'Lines selected by Jev (AI), verbatim from the article.';
 
 const keyStatus = openRouterKeyStatus(process.env.BLOG0_OPENROUTER_API_KEY);
 const pendingKey = keyStatus !== 'real';
@@ -104,7 +102,7 @@ async function generationCount(): Promise<number> {
 }
 
 describe('seedTldr — fixture path (no AI call)', () => {
-  it('publishes 5 decks from the committed fixtures, verbatim, with the editors’ disclosure and 0 generations', async () => {
+  it('publishes 5 decks from the committed fixtures, verbatim, with 0 generations', async () => {
     const result = await seedTldr(getDb(), siteRow.id, admin.user.id, { source: 'fixture' });
     expect(result).toMatchObject({ source: 'fixture', seeded: ALL_SLUGS, skipped: [], failed: [], calls: 0, costUsd: null, warnings: [] });
     expect(formatSeedTldrSummary(result)).toBe('decks: 5 seeded (0 calls)');
@@ -124,11 +122,10 @@ describe('seedTldr — fixture path (no AI call)', () => {
       for (const slide of deck.published!.slides) expect(eligible.has(slide.text), slide.text).toBe(true);
     }
 
-    // The reader sees it, with the editors' disclosure.
+    // The reader sees it.
     resetCurrentSiteForTests();
     const page = await getPublishedArticle('humans-are-software');
     expect(page?.deck?.slides.map((s) => s.text)).toEqual(loadDeckFixture('humans-are-software')!.lines.map((l) => l.text));
-    expect(page?.deck?.disclosure).toBe(EDITORS);
   });
 
   it('drops a mangled fixture line with a logged warning and still publishes the deck', async () => {
@@ -266,7 +263,7 @@ describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real Jev — ${PENDING_KE
       for (const s of slides) expect(eligible.has(s.text), s.text).toBe(true);
     }
     resetCurrentSiteForTests();
-    expect((await getPublishedArticle('tech-company-first'))?.deck?.disclosure).toBe(JEV_ONLY);
+    expect((await getPublishedArticle('tech-company-first'))?.deck?.slides.length).toBeGreaterThan(0);
 
     // Second run (with --write-fixture into a temp dir): 0 calls, no new rows, fixtures = live decks.
     tmp = mkdtempSync(path.join(tmpdir(), 'blog0-seed-capture-'));

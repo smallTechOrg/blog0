@@ -126,7 +126,6 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
             title={a.title}
             tag={a.topic}
             meta={a.publishedLabel + ' · ' + a.times.read + ' min read'}
-            disclosure={a.deck.disclosure}
             shareLink={a.deck.shareUrl}
             brand={brand}
             times={{ read: a.times.read, tldr: a.times.tldr, listen: a.times.listen }}

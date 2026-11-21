@@ -15,7 +15,6 @@ import type { PublicListenDto, PublicTldrDto } from '@/lib/api/dto';
 import type { Envelope } from '@/lib/api/envelope';
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
 import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
-import { DECK_DISCLOSURE } from '@/lib/view-models';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
 import { site, type SiteRow } from '@/server/db/schema';
@@ -101,7 +100,6 @@ describe('GET /api/public/articles/:slug/tldr', () => {
       dek: 'Benchmarks are not the job.',
       meta: '8 Sep 2026 · 1 min read',
       slides: lines.map((text) => ({ text })),
-      disclosure: DECK_DISCLOSURE.jev,
       times: { read: 1, tldr: tldrMinutes(buildDeckSlides('Measure the work', 'Benchmarks are not the job.', lines)), listen: null },
       shareUrl: `${BASE}/p/measure-the-work/tldr`,
     });
@@ -127,7 +125,7 @@ describe('GET /api/public/articles/:slug/tldr', () => {
 
     if (!res.env.ok) throw new Error('expected ok');
     expect(res.env.data.slides.map((s) => s.text)).toEqual([pre.sentences[1].text, pre.sentences[3].text]);
-    expect(res.env.data.disclosure).toBe(DECK_DISCLOSURE.mixed);
+    expect(res.env.data).not.toHaveProperty('disclosure');
   });
 
   it('answers 404 NOT_FOUND (no-store) for unknown, malformed, unpublished, deck-less and other-site slugs', async () => {

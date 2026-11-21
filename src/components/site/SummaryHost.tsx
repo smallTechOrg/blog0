@@ -99,7 +99,6 @@ export function SummaryHost({ mode, slug, deck, listen, canSwitch, onSwitch, onC
       title={deck.title}
       tag={deck.topic}
       meta={deck.meta}
-      disclosure={deck.disclosure}
       shareLink={deck.shareUrl}
       brand={siteBrand}
       times={deck.times}

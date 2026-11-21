@@ -21,7 +21,6 @@ export interface SiteViewModel {
 
 export interface DeckViewModel {
   slides: Array<{ text: string }>;
-  disclosure: string;
   shareUrl: string; // absolute …/p/<slug>/tldr
 }
 
@@ -61,23 +60,6 @@ export interface PostCardViewModel {
   publishedLabel: string;
   inProgress: boolean;
   times: { tldr: number | null; listen: number | null };
-}
-
-// ---------------------------------------------------------------------------------------------
-// AI disclosure on the deck's intro slide (spec/architecture.md §3, divergence 8)
-// ---------------------------------------------------------------------------------------------
-
-export const DECK_DISCLOSURE = {
-  jev: 'Lines selected by Jev (AI), verbatim from the article.',
-  mixed: 'Lines selected by Jev (AI) and the editors, verbatim from the article.',
-  editors: 'Lines selected by the editors, verbatim from the article.',
-} as const;
-
-/** Disclosure for a deck given each slide's source. */
-export function deckDisclosure(sources: ReadonlyArray<'jev' | 'writer'>): string {
-  const jev = sources.filter((s) => s === 'jev').length;
-  if (jev === 0) return DECK_DISCLOSURE.editors;
-  return jev === sources.length ? DECK_DISCLOSURE.jev : DECK_DISCLOSURE.mixed;
 }
 
 // ---------------------------------------------------------------------------------------------

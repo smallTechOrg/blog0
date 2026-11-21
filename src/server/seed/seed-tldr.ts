@@ -24,8 +24,8 @@ import { SEED_POSTS } from './posts';
 //                        (publishArticle: validates the deck, publishes draft → published).
 //   - source 'fixture' → src/server/seed/decks/<slug>.json, lines matched by exact text to the
 //                        published revision's eligible sentences (unmatched → warning, dropped),
-//                        saved through saveDeck as `source: 'writer'` (disclosure "Lines selected
-//                        by the editors…"), then publishArticle. 0 AI calls.
+//                        saved through saveDeck as `source: 'writer'`, then publishArticle.
+//                        0 AI calls.
 //   - source 'auto'    → 'jev' when a real OpenRouter key is configured, else 'fixture'.
 // Idempotent: a post whose deck is already published is never touched. Never runs per view.
 //

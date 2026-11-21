@@ -285,7 +285,7 @@ test.describe('reader site (blog0)', () => {
     const deck = page.locator('.tdeck');
     await expect(deck).toBeVisible();
     await expect(deck.locator('.tdeck__big')).toHaveText(SEEDED.expensive.title);
-    await expect(deck.locator('.tdeck__note')).toContainText('Lines selected by the editors, verbatim from the article.');
+    await expect(deck.locator('.tdeck__note')).toHaveCount(0); // no 'Lines selected by …' credit (SMA-41)
     expect(await deck.locator('.tdeck__seg').count()).toBeGreaterThanOrEqual(5);
     expect(new URL(page.url()).pathname).toBe('/');
     await expect(page.locator('section[aria-labelledby="feed-h"]')).toBeAttached();
@@ -504,6 +504,12 @@ test.describe('reader site (blog0)', () => {
     await page.keyboard.press('Escape');
     await items.nth(2).click();
     await expect(page.locator('.readbody .para.is-hl')).toHaveCount(0);
+
+    // SMA-42: a tap on the lead-in paragraph lights the same unit, lead and every item.
+    await lead.click();
+    await expect(page.locator('.readbody .para.is-hl')).toHaveCount(4);
+    for (let i = 0; i < 3; i++) await expect(items.nth(i)).toHaveClass(/\bis-hl\b/);
+    await expect(page.locator('.hlmenu')).toBeVisible();
   });
 
   test('a link inside a paragraph is not a share: no highlight, no menu', async ({ page }) => {
@@ -839,18 +845,15 @@ test.describe('reader site (blog0)', () => {
     }
   });
 
-  // A seeded article has no recording: Listen is disabled with its reason (in the capsule and in the
-  // deck's switcher alike), and /listen falls back to Read. The Listen walk is listen.spec.ts.
-  test('without a recording the capsule’s Listen is disabled ("No recording yet") and /listen falls back to Read', async ({ page }) => {
+  // A seeded article has no recording: there is no Listen tab (in the capsule and in the deck's
+  // switcher alike, SMA-41), and /listen falls back to Read. The Listen walk is listen.spec.ts.
+  test('without a recording there is no Listen tab and /listen falls back to Read', async ({ page }) => {
     await page.goto(`/p/${SEEDED.humans.slug}`);
-    const listen = page.locator('.modedock').getByRole('tab', { name: 'Listen — no recording yet' });
-    await expect(listen).toBeVisible();
-    await expect(listen).toBeDisabled();
-    await expect(listen).toHaveAttribute('title', 'No recording yet');
+    await expect(page.locator('.modedock').getByRole('tab', { name: /^Read — \d+ min$/ })).toBeVisible();
+    await expect(page.locator('.modedock').getByRole('tab', { name: /^Listen/ })).toHaveCount(0);
     await page.locator('.modedock').getByRole('tab', { name: /^TLDR — \d+ min$/ }).click();
-    const deckListen = page.locator('.tdeck__foot').getByRole('tab', { name: 'Listen — no recording yet' });
-    await expect(deckListen).toBeDisabled();
-    await expect(deckListen).toHaveAttribute('title', 'No recording yet');
+    await expect(page.locator('.tdeck__foot').getByRole('tab', { name: /^TLDR/ })).toBeVisible();
+    await expect(page.locator('.tdeck__foot').getByRole('tab', { name: /^Listen/ })).toHaveCount(0);
 
     await page.goto(`/p/${SEEDED.humans.slug}/listen`);
 
