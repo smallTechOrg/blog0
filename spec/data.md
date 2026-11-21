@@ -250,6 +250,9 @@ published payload's baseline (`uploadFingerprint ?? syncFingerprint`). Phase 6 w
 paragraph marks into `marks` via the existing PUT and may add optional `sentenceMarks` beside
 them without a migration (jsonb payload; zod defaults).
 
+`site.ai_assistant_prompt` text null (SMA-43, `0008_ai_assistant_prompt`): the writing assistant's
+instructions edited in Admin → Site; null = the built-in default (`DEFAULT_ASSISTANT_PROMPT`).
+
 ### ai_provider (SMA-44, `0007_ai_provider`)
 One row per site, upserted from Admin → Site → AI provider; no row = AI off. `site_id` uuid PK →
 site · `base_url` text (OpenAI-compatible base URL) · `model` text · `api_key_sealed` text null

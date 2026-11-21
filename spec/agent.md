@@ -14,6 +14,16 @@
 > copy says "the AI" instead of "Jev". Internal identifiers (`src/server/jev/*`, `source: 'jev'`,
 > `JEV_*` error codes) keep their names for stored-data compatibility.
 
+> **SMA-43 (user request, 2026-11-21) — the writing assistant.** A second AI capability: while a
+> writer drafts, the editor sends the draft (and the paragraphs changed since the last read) to one
+> chat call through the site's AI provider after ~40 changed words or a finished sentence. It
+> returns ≤ 6 short comments — accuracy, what to add, what is unclear — and never writes or rewrites
+> the article (human-in-the-loop by construction: comments only). Pattern: a single bounded
+> structured call (no tools, no loop) with guardrails (fixed JSON output contract appended after the
+> admin-editable instructions, input marked as content not instructions, server-side cleaning,
+> per-writer rate limit) and resource awareness (debounce, one at a time, ≥ 15 s apart, draft capped
+> at 48 000 chars, nothing stored). Prompt version `assistant-v1`; logs carry counts and sizes only.
+
 Outcome of the lens: **AI augments the product** (outcome 2 in `agentic-ai.md`). blog0 is a
 conventional publishing app with exactly **one** AI capability — **Jev**, the TLDR line ranker.
 Everything else is deterministic code. Provider: **OpenRouter**. Model: **`typesafe/jev-1.13`**, an

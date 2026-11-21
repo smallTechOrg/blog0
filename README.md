@@ -185,7 +185,7 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 8 applied (latest 0007_ai_provider), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 9 applied (latest 0008_ai_assistant_prompt), 0 pending: OK
    ```
 
 6. **(Optional) prove the tests' AI key** with one tiny real chat call (prints only
