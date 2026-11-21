@@ -5,7 +5,7 @@ import { relevanceLabel } from '../labels';
 import type { DeckLine } from './deck-edit';
 
 // The ordered draft deck (spec/ui.md §4 TLDR tab → Deck): ordinal, verbatim line, meta line
-// ("Jev · relevance 0.82" / "Added by you · relevance 0.41"; the score is left out when null),
+// ("AI · relevance 0.82" / "Added by you · relevance 0.41"; the score is left out when null),
 // ↑ ↓ ✕; lines that vanished from the text are flagged. No reasons anywhere (Phase 8).
 
 /** "relevance 0.82" in its muted monospace span; nothing when the score is null. */
@@ -35,7 +35,7 @@ export function DeckList({ lines, onMove, onRemove, disabled }: DeckListProps) {
               <p className="deck__text">{l.text}</p>
               {l.missing ? <p className="deck__missing">No longer in the article</p> : null}
               <p className="deck__meta">
-                {l.source === 'jev' ? 'Jev' : 'Added by you'}
+                {l.source === 'jev' ? 'AI' : 'Added by you'}
                 {relevanceLabel(l.relevance) ? (
                   <>
                     {' · '}

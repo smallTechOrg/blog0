@@ -41,7 +41,7 @@ new DTO goes into the matching section.
 | LLM_AUTH / LLM_INSUFFICIENT_CREDITS / LLM_MODEL_NOT_FOUND | 502 | Provider config problems (message points at `.env`) |
 | LLM_INVALID_OUTPUT | 502 | Phase 8: Jev's answers were incomplete or out of range (a sentence missing or a score outside [0,1]); no retry. Legacy: model output invalid twice |
 | LLM_RATE_LIMITED / LLM_UNAVAILABLE / LLM_TIMEOUT | 503 | Transient provider failure |
-| LLM_NOT_CONFIGURED | 503 | Designer mode without an OpenRouter key; Generate refused before any row is written |
+| LLM_NOT_CONFIGURED | 503 | No AI provider set up in Admin → Site → AI provider (SMA-44; or its key can't be decrypted); Generate refused before any row is written |
 | RATE_LIMITED | 429 | Login/newsletter throttle; `Retry-After` header (Phase 5: counted in Postgres — `spec/capabilities/abuse-protection.md`; Phase 7 adds the confirm/unsubscribe link caps) |
 | TOKEN_INVALID | 404 | Phase 7: confirm/unsubscribe token malformed, unknown or tampered (never says which) |
 | TOKEN_EXPIRED | 410 | Phase 7: confirm token past 72 h or already used |
@@ -116,7 +116,7 @@ interface TldrStateDto {
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
-  jevAvailable: boolean;                                          // false only when no OpenRouter key is configured (designer mode)
+  aiAvailable: boolean;                                           // SMA-44: false when no AI provider is set up (Admin → Site → AI provider)
 }
 ```
 
@@ -155,6 +155,9 @@ level otherwise (`spec/architecture.md` §7); DTOs live in the health section of
 | DELETE `/api/admin/articles/:id/tldr` | admin | — | `{ tldr: TldrStateDto }` (draft deck cleared; published deck untouched) |
 | POST `/api/admin/articles/:id/publish` | admin | `{ revisionId: string }` | `{ article: ArticleDetailDto }`; `PUBLISH_BLOCKED` with reasons; `CONFLICT`. Copies each format's draft to its published copy (Listen: any status; no draft clears the published Listen — `spec/capabilities/listen-audio.md`). |
 | POST `/api/admin/articles/:id/unpublish` | admin | — | `{ article: ArticleDetailDto }` |
+| GET `/api/admin/ai` | admin | — | `{ ai: AiProviderDto }` (SMA-44) — `{ configured, baseUrl, model, keySet, keyHint (last 4), keyUnreadable, status: { failing, lastOkAt, lastErrorAt, lastErrorCode, lastErrorMessage } }`. Never the key. |
+| PUT `/api/admin/ai` | admin | `{ baseUrl: http(s) URL, model: string, apiKey?: string \| null }` | `{ ai: AiProviderDto }` — apiKey omitted keeps the saved key, null removes it (AI off). The key is AES-256-GCM sealed (key derived from `BLOG0_SESSION_SECRET`). A changed provider starts with a clean status. `VALIDATION_FAILED` (400). |
+| POST `/api/admin/ai/test` | admin | `{ baseUrl?, model?, apiKey? }` (each falls back to the saved value) | `AiProviderTestResult = { ok: true, latencyMs, model, jsonOk } \| { ok: false, code, message }` — one tiny JSON chat call to `{baseUrl}/chat/completions`; a provider failure is the result (200), not an API error. Recorded on the provider status only when it tested the saved provider. |
 
 ## Endpoints — public reads, site, newsletter
 

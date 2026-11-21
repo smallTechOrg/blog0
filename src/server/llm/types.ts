@@ -1,26 +1,29 @@
 import 'server-only';
 
-// LLM boundary contract (spec/agent.md §8). Jev talks only to `LlmClient`; the OpenRouter decisions
-// adapter implements it. Unit tests inject a stub client (responses tagged `provider: '<stub:jev>'`).
-// Phase 8: the chat-completions client (completeJson) is gone — Jev was its only user.
+// LLM boundary contract (spec/agent.md §8; SMA-44). Every AI feature talks only to `LlmClient`, one
+// OpenAI-compatible chat-completions call at a time; src/server/llm/chat.ts implements it against the
+// site's configured provider (Admin → Site → AI provider). Unit tests inject a stub client (responses
+// tagged `provider: '<stub:…>'`).
 
-/** One yes/no question; the model answers with a probability (`noul`) in [0,1]. Both criteria are required. */
-export interface DecisionQuestion {
-  type: 'noul';
-  instructions: string;
-  criteria: { true: string; false: string };
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 }
 
-export interface DecisionsRequest {
+export interface ChatRequest {
   model: string;
-  state: string | Record<string, unknown> | unknown[];
-  /** Question id → question. Jev uses the sentence sids as ids (verified live, spec/agent.md §3). */
-  questions: Record<string, DecisionQuestion>;
+  messages: ChatMessage[];
   requestId: string;
+  /** What the call is for, in logs (`tldr.rank`, `ai.test`, `assistant.review`). */
+  purpose: string;
+  /** Prompt version stamped on logs. */
   promptVersion: string;
   timeoutMs: number;
-  /** For logs: 1-based batch index of `count`. */
-  batch: { index: number; count: number };
+  /** Ask for a JSON object reply (`response_format: json_object`; dropped if the provider refuses it). */
+  json?: boolean;
+  maxTokens?: number;
+  /** For logs: 1-based batch index of `count` (one call = { index: 1, count: 1 }). */
+  batch?: { index: number; count: number };
 }
 
 export interface LlmUsage {
@@ -29,9 +32,9 @@ export interface LlmUsage {
   costUsd: number | null;
 }
 
-export interface DecisionsResponse {
-  /** Question id → answer, unvalidated (Jev validates every answer). */
-  answers: Record<string, unknown>;
+export interface ChatResponse {
+  /** The assistant message text, unvalidated. */
+  content: string;
   usage: LlmUsage;
   providerGenerationId: string | null;
   provider: string | null;
@@ -41,8 +44,8 @@ export interface DecisionsResponse {
 }
 
 export interface LlmClient {
-  /** Exactly one logical decisions request (transport retries are internal). Throws `LlmError`. */
-  decide(req: DecisionsRequest): Promise<DecisionsResponse>;
+  /** Exactly one logical chat request (transport retries are internal). Throws `LlmError`. */
+  chat(req: ChatRequest): Promise<ChatResponse>;
 }
 
 export type LlmErrorCode =

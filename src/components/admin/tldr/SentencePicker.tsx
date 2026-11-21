@@ -40,7 +40,7 @@ export function groupByHeading(sentences: readonly SentenceDto[]): Group[] {
   return groups;
 }
 
-export const NO_SCORES_TITLE = 'No scores yet — generate with Jev';
+export const NO_SCORES_TITLE = 'No scores yet — generate with AI';
 
 const ORDERS: ReadonlyArray<{ value: PickerOrder; label: string }> = [
   { value: 'relevance', label: 'By relevance' },

@@ -62,7 +62,7 @@ describe('guardInput', () => {
     expect(JSON.stringify(at).length).toBe(JEV_MAX_STATE_CHARS);
     expect(guardInput(input, at)).toBeNull();
     expect(guardInput(input, { ...at, article: `${at.article}x` })?.code).toBe('JEV_INPUT_TOO_LONG');
-    expect(JEV_TOO_LONG_MESSAGE).toBe('This article is too long for Jev (limit 400 sentences / about 5 000 words) — pick lines by hand.');
+    expect(JEV_TOO_LONG_MESSAGE).toBe('This article is too long for the AI (limit 400 sentences / about 5 000 words) — pick lines by hand.');
   });
 });
 

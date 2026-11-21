@@ -34,12 +34,12 @@ import { SentencePicker } from '../tldr/SentencePicker';
 
 import { generateButtonLabel, generatedNotice, runExclusive, type GeneratePhase } from './tldr-generate';
 
-// TLDR tab (spec/ui.md §4, capability jev-tldr). Generate with Jev (one ranking call per click —
-// Jev scores every sentence, the top k become the draft deck; "Save & generate" when the editor
+// TLDR tab (spec/ui.md §4, capability jev-tldr). Generate with AI (one ranking call per click —
+// the AI scores every sentence, the top k become the draft deck; "Save & generate" when the editor
 // is dirty), meta/cost line, failure card with hand-pick fallback, relevance scores on deck lines
 // and article lines (no reasons anywhere), hand-edit (remove / add from article lines sorted by
 // relevance or in article order / reorder), Preview deck (the real TldrDeck), Save deck, Reset to
-// Jev's picks, Clear deck.
+// the AI's picks, Clear deck.
 
 export interface TldrTabProps {
   article: ArticleDetailDto;
@@ -61,7 +61,7 @@ type Notice = { tone: 'ok' | 'error'; text: string } | null;
 
 const NO_DECK: DeckState = { saved: [], lines: [] };
 
-export const CONFIRM_REGENERATE = "Replace your current deck with Jev's new top lines?";
+export const CONFIRM_REGENERATE = "Replace your current deck with the AI's new top lines?";
 export const CONFIRM_CLEAR = 'Clear the draft deck? The published deck (if any) keeps serving until you publish again.';
 
 function trimStop(message: string): string {
@@ -105,7 +105,7 @@ export function TldrTab(props: TldrTabProps) {
     (state) => applyServer(state, false),
   );
 
-  // Elapsed seconds while Jev reads.
+  // Elapsed seconds while the AI reads.
   useEffect(() => {
     if (running === null) return;
     const t = window.setInterval(() => setElapsed(Math.round((Date.now() - running) / 1000)), 500);
@@ -141,7 +141,7 @@ export function TldrTab(props: TldrTabProps) {
         setPresaving(false);
       }
       if (!saved) {
-        setNotice({ tone: 'error', text: 'Couldn’t save the article, so Jev didn’t run. Fix the save error above and try again.' });
+        setNotice({ tone: 'error', text: 'Couldn’t save the article, so the AI didn’t run. Fix the save error above and try again.' });
         return;
       }
       revId = saved.currentRevision.id;
@@ -232,8 +232,8 @@ export function TldrTab(props: TldrTabProps) {
     setDeck((prev) => ({ ...prev, lines }));
     setNotice(
       dropped > 0
-        ? { tone: 'error', text: `${dropped} of Jev’s picks are no longer in the article and were left out.` }
-        : { tone: 'ok', text: 'Deck reset to Jev’s picks — Save deck to keep it.' },
+        ? { tone: 'error', text: `${dropped} of the AI’s picks are no longer in the article and were left out.` }
+        : { tone: 'ok', text: 'Deck reset to the AI’s picks — Save deck to keep it.' },
     );
   }
 
@@ -272,8 +272,8 @@ export function TldrTab(props: TldrTabProps) {
         ? 'Remove the lines that are no longer in the article before saving.'
         : null;
   const readMinutes = Math.max(1, Math.ceil(article.currentRevision.wordCount / 230));
-  // Designer mode with no OpenRouter key (spec/ui.md §4): Generate disabled + notice.
-  const jevAvailable = tldr?.jevAvailable !== false;
+  // No AI provider set up (SMA-44; spec/ui.md §4): Generate disabled + notice.
+  const aiAvailable = tldr?.aiAvailable !== false;
 
   return (
     <div className="tldrtab">
@@ -288,10 +288,10 @@ export function TldrTab(props: TldrTabProps) {
           type="button"
           className="admin-btn admin-btn--primary"
           onClick={() => void generate()}
-          disabled={inFlight || busy !== null || noEligible || !jevAvailable}
+          disabled={inFlight || busy !== null || noEligible || !aiAvailable}
           aria-busy={inFlight}
           title={
-            !jevAvailable ? 'No OpenRouter key configured' : noEligible ? 'The saved article has no sentences of 5+ words for Jev' : undefined
+            !aiAvailable ? 'No AI provider set up' : noEligible ? 'The saved article has no sentences of 5+ words for the AI' : undefined
           }
         >
           {inFlight ? <span className="spinner" aria-hidden="true" /> : null}
@@ -299,10 +299,11 @@ export function TldrTab(props: TldrTabProps) {
         </button>
       </div>
 
-      {!jevAvailable ? (
-        <p className="stub" role="note" data-testid="jev-no-key">
-          <span className="stub__label">No OpenRouter key configured</span> — add <code>BLOG0_OPENROUTER_API_KEY</code> to{' '}
-          <code>.env</code> to generate with Jev. You can still pick lines yourself from the article on the right.
+      {!aiAvailable ? (
+        <p className="stub" role="note" data-testid="ai-no-provider">
+          <span className="stub__label">No AI provider set up</span> — add an endpoint, model and API key in{' '}
+          <a href="/admin/site#ai">Site → AI provider</a> to generate with AI. You can still pick lines yourself from the article on the
+          right.
         </p>
       ) : null}
       {latest && latest.status === 'succeeded' && !failure ? (
@@ -323,14 +324,14 @@ export function TldrTab(props: TldrTabProps) {
       {failure || (latest?.status === 'failed' && !isRunning) ? (
         <div className="failcard" role="alert">
           <p>
-            Jev couldn’t make a deck: {trimStop(failure?.message ?? latest?.errorMessage ?? 'unknown error')}.
+            The AI couldn’t make a deck: {trimStop(failure?.message ?? latest?.errorMessage ?? 'unknown error')}.
           </p>
           <p>
             <button
               type="button"
               className="admin-btn admin-btn--small"
               onClick={() => void generate()}
-              disabled={inFlight || noEligible || !jevAvailable}
+              disabled={inFlight || noEligible || !aiAvailable}
             >
               Try again
             </button>{' '}
@@ -353,7 +354,7 @@ export function TldrTab(props: TldrTabProps) {
           </h2>
           {deck.lines.length === 0 ? (
             <p className="tldrtab__empty">
-              No deck yet. Jev scores every sentence of the saved article for relevance and puts the top 4–8 in the deck, word
+              No deck yet. The AI scores every sentence of the saved article for relevance and puts the top 4–8 in the deck, word
               for word. One call, usually well under a cent.
             </p>
           ) : (
@@ -393,7 +394,7 @@ export function TldrTab(props: TldrTabProps) {
         </button>
         {latest?.status === 'succeeded' && latest.picks && latest.picks.length > 0 ? (
           <button type="button" className="admin-btn admin-btn--ghost" onClick={resetToJev} disabled={inFlight || busy !== null}>
-            Reset to Jev’s picks
+            Reset to the AI’s picks
           </button>
         ) : null}
         {deck.lines.length > 0 || hasDraft ? (

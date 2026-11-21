@@ -27,7 +27,6 @@ import { DesignerSecretError, ensureDesignerSessionSecret } from '@/server/desig
 import { designerAdminFileFor, formatSampleListenSummary, SAMPLE_LISTEN_SLUG, seedSampleListen } from '@/server/designer/setup';
 import { readListenPayload } from '@/server/formats/payload';
 import { ApiError } from '@/server/http/api';
-import { resetLlmClientForTests } from '@/server/llm';
 import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import { resetLoggerForTests } from '@/server/log';
 import { seedPosts } from '@/server/seed/seed-posts';
@@ -35,6 +34,8 @@ import { seedSite } from '@/server/seed/site';
 import { getPublishedArticle } from '@/server/public/articles';
 import { resetCurrentSiteForTests } from '@/server/site/current';
 import { resetStorageForTests } from '@/server/storage';
+
+import { clearAiProvider, useEvalAiProvider } from '../helpers/ai';
 
 const ORIGIN = 'http://localhost:3410';
 const routeCtx = { params: Promise.resolve({}) };
@@ -62,7 +63,6 @@ const SAMPLE_META = JSON.parse(readFileSync(path.join(process.cwd(), 'tests', 'f
 
 function resetSingletons(): void {
   resetConfigForTests();
-  resetLlmClientForTests();
   resetCurrentSiteForTests();
   resetLoggerForTests();
   resetStorageForTests();
@@ -111,10 +111,10 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
     const applied = await runMigrations(getDbHandle());
     const status = await getMigrationStatus(getDbHandle());
 
-    expect(applied).toEqual(['0000_init', '0001_rate_limit_bucket', '0002_newsletter', '0003_newsletter_prune_fix', '0004_newsletter_erasure', '0005_newsletter_erase_delete', '0006_known_device']);
+    expect(applied).toEqual(['0000_init', '0001_rate_limit_bucket', '0002_newsletter', '0003_newsletter_prune_fix', '0004_newsletter_erasure', '0005_newsletter_erase_delete', '0006_known_device', '0007_ai_provider']);
     expect(status.engine).toBe('pglite');
     expect(status.pending).toEqual([]);
-    expect(status.latestApplied).toBe('0006_known_device');
+    expect(status.latestApplied).toBe('0007_ai_provider');
     expect(status.serverVersion).toMatch(/^17\./);
     expect(await runMigrations(getDbHandle())).toEqual([]); // idempotent
   });
@@ -245,17 +245,17 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
     expect(body.ok && body.data).toMatchObject({ status: 'ok', db: 'ok', dbEngine: 'pglite' });
   });
 
-  it('with no OpenRouter key: jevAvailable is false and Generate answers LLM_NOT_CONFIGURED before writing any row', async () => {
+  it('with no AI provider: aiAvailable is false and Generate answers LLM_NOT_CONFIGURED before writing any row', async () => {
     const [seeded] = await getDb().select().from(article).where(eq(article.slug, 'humans-are-software'));
     const state = await getTldrState(siteId, seeded.id);
-    expect(state.jevAvailable).toBe(false);
+    expect(state.aiAvailable).toBe(false);
 
     const attempt = generateTldr(ctx, seeded.id, seeded.currentRevisionId!, 'req-designer-no-key');
     await expect(attempt).rejects.toBeInstanceOf(ApiError);
     await expect(generateTldr(ctx, seeded.id, seeded.currentRevisionId!, 'req-designer-no-key')).rejects.toMatchObject({
       code: 'LLM_NOT_CONFIGURED',
       status: 503,
-      message: expect.stringMatching(/^No OpenRouter key configured — add BLOG0_OPENROUTER_API_KEY to \.env/),
+      message: expect.stringMatching(/^No AI provider is set up — add an endpoint, model and API key in Admin → Site → AI provider\./),
     });
     const [{ n }] = await getDb().select({ n: count() }).from(aiGeneration);
     expect(n).toBe(0);
@@ -265,9 +265,7 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
   it.skipIf(pendingKey)(
     pendingKey ? `${realTitle} — ${PENDING_KEY_REASON}` : realTitle,
     async () => {
-      process.env.BLOG0_OPENROUTER_API_KEY = realKey;
-      resetConfigForTests();
-      resetLlmClientForTests();
+      const { model } = await useEvalAiProvider(siteId, realKey);
       try {
         const created = await noDeadlock(
           'createArticle',
@@ -285,17 +283,17 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
           }),
         );
         const revisionId = created.currentRevision.id;
-        expect((await getTldrState(siteId, created.id)).jevAvailable).toBe(true);
+        expect((await getTldrState(siteId, created.id)).aiAvailable).toBe(true);
 
         const generated = await noDeadlock('generateTldr', generateTldr(ctx, created.id, revisionId, 'req-designer-real'));
         expect(generated.generation.status).toBe('succeeded');
         expect(generated.generation.totalTokens).toBeGreaterThan(0);
-        expect(generated.generation).toMatchObject({ model: 'typesafe/jev-1.13', promptVersion: 'jev-rank-v1', attempts: 1 });
+        expect(generated.generation).toMatchObject({ model, promptVersion: 'tldr-rank-v2', attempts: 1 });
         const slides = generated.tldr.draft!.slides;
         expect(slides).toHaveLength(generated.tldr.bounds!.target);
         expect(slides.every((s) => typeof s.relevance === 'number')).toBe(true);
         expect(generated.tldr.sentences.every((s) => typeof s.relevance === 'number')).toBe(true);
-        expect(generated.tldr.jevAvailable).toBe(true);
+        expect(generated.tldr.aiAvailable).toBe(true);
 
         const savedDeck = await noDeadlock(
           'saveDeck',
@@ -311,9 +309,7 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
         const rows = await getDb().select().from(aiGeneration).where(eq(aiGeneration.articleId, created.id));
         expect(rows.map((r) => r.status)).toEqual(['succeeded']);
       } finally {
-        process.env.BLOG0_OPENROUTER_API_KEY = '';
-        resetConfigForTests();
-        resetLlmClientForTests();
+        await clearAiProvider(siteId);
       }
     },
   );

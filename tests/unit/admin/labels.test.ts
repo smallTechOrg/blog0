@@ -18,7 +18,7 @@ function gen(over: Partial<GenerationDto> = {}): GenerationDto {
 describe('generationMeta', () => {
   it('prints model, prompt version, sentences ranked, tokens, cost to 4 dp, who and when', () => {
     expect(generationMeta(gen(), NOW, 'UTC')).toBe(
-      'Jev · typesafe/jev-1.13 · jev-rank-v1 · ranked 42 sentences · 1,234 tokens · $0.0012 · Sai · 5 min ago',
+      'AI · typesafe/jev-1.13 · jev-rank-v1 · ranked 42 sentences · 1,234 tokens · $0.0012 · Sai · 5 min ago',
     );
   });
 
@@ -31,7 +31,7 @@ describe('generationMeta', () => {
 
   it('leaves out the ranked part when no sentences were sent (a pre-Phase-8 generation)', () => {
     const meta = generationMeta(gen({ sentenceCount: 0, model: 'google/gemini-2.5-flash', promptVersion: 'jev-select-v1' }), NOW, 'UTC');
-    expect(meta).toBe('Jev · google/gemini-2.5-flash · jev-select-v1 · 1,234 tokens · $0.0012 · Sai · 5 min ago');
+    expect(meta).toBe('AI · google/gemini-2.5-flash · jev-select-v1 · 1,234 tokens · $0.0012 · Sai · 5 min ago');
   });
 
   it('never mentions a reason', () => {
@@ -58,12 +58,12 @@ describe('statusLabel / chipLabel / boundsHint', () => {
     );
   });
 
-  it('describes the top-k deck Jev will pick (k = bounds.target)', () => {
-    expect(boundsHint({ min: 5, max: 7, target: 6 }, 40)).toBe('Jev will pick the top 6 lines for this length');
-    expect(boundsHint({ min: 5, max: 7, target: 6 })).toBe('Jev will pick the top 6 lines for this length');
-    expect(boundsHint({ min: 3, max: 3, target: 3 }, 3)).toBe('Jev will pick all 3 lines for this length');
-    expect(boundsHint({ min: 1, max: 1, target: 1 }, 1)).toBe('Jev will pick the only line for this length');
-    expect(boundsHint(null, 0)).toBe('No eligible sentences yet — Jev needs sentences of at least 5 words.');
+  it('describes the top-k deck the AI will pick (k = bounds.target)', () => {
+    expect(boundsHint({ min: 5, max: 7, target: 6 }, 40)).toBe('The AI will pick the top 6 lines for this length');
+    expect(boundsHint({ min: 5, max: 7, target: 6 })).toBe('The AI will pick the top 6 lines for this length');
+    expect(boundsHint({ min: 3, max: 3, target: 3 }, 3)).toBe('The AI will pick all 3 lines for this length');
+    expect(boundsHint({ min: 1, max: 1, target: 1 }, 1)).toBe('The AI will pick the only line for this length');
+    expect(boundsHint(null, 0)).toBe('No eligible sentences yet — the AI needs sentences of at least 5 words.');
   });
 });
 

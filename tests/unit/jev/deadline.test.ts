@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildState } from '@/server/jev/build-input';
-import { planBatches } from '@/server/jev/batches';
+import { batchMessages, planBatches } from '@/server/jev/batches';
 import { loadRankPrompt } from '@/server/jev/prompt';
 import { JEV_DEADLINE_MS, JEV_MIN_ATTEMPT_MS, runJev } from '@/server/jev/run';
 import { JEV_REQUEST_CHAR_BUDGET } from '@/server/jev/state';
@@ -13,13 +13,17 @@ import { resetLoggerForTests } from '@/server/log';
 import { captureLogs, type CapturedLogs } from '../../helpers/logs';
 import { answerAll, makeInput, makeSentences, StubLlm } from './stub';
 
-const MODEL = 'typesafe/jev-1.13';
-const TIMEOUT_MESSAGE = "Jev couldn't reach the model — try again in a minute.";
+const MODEL = 'stub/model';
+const TIMEOUT_MESSAGE = 'The AI provider took too long to answer — try again in a minute.';
 
+/** A budget that splits n sentences into about `parts` batches (each repeats the whole article). */
 function budgetFor(n: number, parts: number): number {
   const input = makeInput(makeSentences(n));
-  const one = planBatches(input, buildState(input), loadRankPrompt(), MODEL, JEV_REQUEST_CHAR_BUDGET)[0].requestChars;
-  return Math.ceil(one / parts) + 600;
+  const state = buildState(input);
+  const prompt = loadRankPrompt();
+  const one = planBatches(input, state, prompt, JEV_REQUEST_CHAR_BUDGET)[0].requestChars;
+  const base = prompt.system.length + batchMessages({ questions: [], requestChars: 0 }, input, state, prompt)[1].content.length;
+  return base + Math.ceil((one - base) / parts) + 10;
 }
 
 describe('runJev deadline', () => {

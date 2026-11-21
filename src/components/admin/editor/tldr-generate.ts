@@ -1,7 +1,7 @@
 // Pure pieces of the TLDR tab's Generate flow (spec/ui.md §4 "TLDR tab"), kept out of the
 // component so they are unit-testable without a DOM.
 
-/** Where a Generate click is: idle, saving the editor first ("Save & generate"), or Jev reading. */
+/** Where a Generate click is: idle, saving the editor first ("Save & generate"), or the AI reading. */
 export type GeneratePhase = 'idle' | 'saving' | 'running';
 
 export interface GenerateLabelInput {
@@ -14,21 +14,21 @@ export interface GenerateLabelInput {
 
 /** The primary button's label for each phase (busy labels while a click is in flight). */
 export function generateButtonLabel(input: GenerateLabelInput): string {
-  if (input.phase === 'running') return `Jev is ranking… ${input.elapsed}s`;
+  if (input.phase === 'running') return `AI is ranking… ${input.elapsed}s`;
   if (input.phase === 'saving') return 'Saving…';
   if (input.editorDirty) return 'Save & generate';
   if (input.hasDraft || input.latestSucceeded) return 'Regenerate';
-  return 'Generate with Jev';
+  return 'Generate with AI';
 }
 
 /**
- * Success notice (spec/ui.md §4): the server already saved Jev's top lines as the draft deck (Save
- * deck is disabled). "Jev ranked <N> sentences and picked the top <k> — saved as your draft deck."
+ * Success notice (spec/ui.md §4): the server already saved the AI's top lines as the draft deck (Save
+ * deck is disabled). "The AI ranked <N> sentences and picked the top <k> — saved as your draft deck."
  */
 export function generatedNotice(sentenceCount: number, lineCount: number): string {
   const ranked = `${sentenceCount} ${sentenceCount === 1 ? 'sentence' : 'sentences'}`;
   const top = lineCount === 1 ? 'the top line' : `the top ${lineCount}`;
-  return `Jev ranked ${ranked} and picked ${top} — saved as your draft deck. Edit them or publish.`;
+  return `The AI ranked ${ranked} and picked ${top} — saved as your draft deck. Edit them or publish.`;
 }
 
 /**

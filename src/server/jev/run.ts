@@ -1,30 +1,31 @@
 import 'server-only';
 
-import { CONFIG_DEFAULTS } from '../config';
-import type { DecisionsResponse, LlmClient, LlmUsage } from '../llm/types';
+import type { ChatResponse, LlmClient, LlmUsage } from '../llm/types';
 import { LlmError } from '../llm/types';
-import { writerMessage } from '../llm/openrouter';
+import { writerMessage } from '../llm/chat';
 import { log } from '../log';
-import { batchQuestions, planBatches } from './batches';
+import { batchMessages, planBatches } from './batches';
 import { computeBounds } from './bounds';
 import { buildState, guardInput } from './build-input';
-import { JEV_PROMPT_VERSION, loadRankPrompt, type RankPrompt } from './prompt';
+import { RANK_PROMPT_VERSION, loadRankPrompt, type RankPrompt } from './prompt';
 import { rankScores, topK } from './rank';
 import {
   JEV_BATCH_CONCURRENCY,
   JEV_DEADLINE_MS,
   JEV_MIN_ATTEMPT_MS,
   JEV_REQUEST_CHAR_BUDGET,
+  JEV_TIMEOUT_MS,
   type JevError,
   type JevInput,
   type JevResult,
   type JevRunState,
   type JevUsage,
 } from './state';
-import { invalidOutputMessage, validateAnswers } from './validate';
+import { invalidOutputMessage, scoresOf, validateAnswers } from './validate';
 
-// Jev assembly (spec/agent.md §2): computeBounds → buildState → guardInput → planBatches →
-// callBatches → validateAnswers → rank → finalize. One decisions request per batch (normally one),
+// TLDR ranking (spec/agent.md §2; SMA-44: an OpenAI-compatible chat model, not the Jev decisions
+// model): computeBounds → buildState → guardInput → planBatches → callBatches → validateAnswers →
+// rank → finalize. One chat request per batch (normally one),
 // ≤ JEV_BATCH_CONCURRENCY in flight, all within deps.deadlineMs. No DB access here: the generation
 // row and the draft deck are written by src/server/articles/tldr.ts around this call.
 
@@ -32,11 +33,11 @@ export { JEV_DEADLINE_MS, JEV_MIN_ATTEMPT_MS } from './state';
 
 export interface JevDeps {
   llm: LlmClient;
-  /** Model slug (BLOG0_JEV_MODEL). */
+  /** Model id at the site's AI provider (Admin → Site → AI provider). */
   model: string;
   /** Monotonic-ish clock in ms (injected for deterministic tests). */
   now: () => number;
-  /** Per-request timeout (BLOG0_JEV_TIMEOUT_MS). Default 45 000; capped at the time remaining. */
+  /** Per-request timeout. Default JEV_TIMEOUT_MS (60 000); capped at the time remaining. */
   timeoutMs?: number;
   /**
    * Budget for the whole run (every batch, incl. the adapter's transport retries), measured on
@@ -77,7 +78,7 @@ export function initState(input: JevInput, model: string): JevRunState {
     input,
     bounds: { min: 0, max: 0, target: 0 },
     k: 0,
-    promptVersion: JEV_PROMPT_VERSION,
+    promptVersion: RANK_PROMPT_VERSION,
     model,
     state: { title: '', dek: '', article: '' },
     batches: [],
@@ -110,13 +111,13 @@ async function raceDeadline<T>(call: Promise<T>, ms: number): Promise<T | typeof
 type CallBatchesResult = { ok: true; answersByBatch: Array<Record<string, unknown>> } | { ok: false; error: JevError };
 
 /**
- * One decide() per planned batch, ≤ concurrency in flight, launched in batch order. The first failing
+ * One chat() per planned batch, ≤ concurrency in flight, launched in batch order. The first failing
  * batch (in batch order) decides the error; no new batch starts after a failure; batches already in
  * flight are awaited so their usage/cost is recorded.
  */
 async function callBatches(s: JevRunState, prompt: RankPrompt, deps: JevDeps, t0: number): Promise<CallBatchesResult> {
   const deadlineMs = deps.deadlineMs ?? JEV_DEADLINE_MS;
-  const timeoutMs = deps.timeoutMs ?? CONFIG_DEFAULTS.jevTimeoutMs;
+  const timeoutMs = deps.timeoutMs ?? JEV_TIMEOUT_MS;
   const count = s.batches.length;
   const answers: Array<Record<string, unknown> | undefined> = new Array(count);
   const raw: Array<string | undefined> = new Array(count);
@@ -151,12 +152,13 @@ async function callBatches(s: JevRunState, prompt: RankPrompt, deps: JevDeps, t0
         return;
       }
       s.requestsSent += 1;
-      let res: DecisionsResponse | typeof DEADLINE;
+      let res: ChatResponse | typeof DEADLINE;
       try {
-        const call = deps.llm.decide({
+        const call = deps.llm.chat({
           model: s.model,
-          state: { ...s.state },
-          questions: batchQuestions(s.batches[i], s.input, prompt),
+          messages: batchMessages(s.batches[i], s.input, s.state, prompt),
+          purpose: 'tldr.rank',
+          json: true,
           requestId: s.input.requestId,
           promptVersion: s.promptVersion,
           timeoutMs: Math.min(timeoutMs, remainingMs),
@@ -175,7 +177,7 @@ async function callBatches(s: JevRunState, prompt: RankPrompt, deps: JevDeps, t0
         return;
       }
       s.usage = addUsage(s.usage, res.usage, res.providerGenerationId);
-      answers[i] = res.answers;
+      answers[i] = scoresOf(res.content);
       raw[i] = res.rawBody;
     }
   };
@@ -248,7 +250,7 @@ export async function runJev(input: JevInput, deps: JevDeps): Promise<JevResult>
 
   try {
     const prompt = loadRankPrompt();
-    s.batches = planBatches(input, s.state, prompt, deps.model, deps.requestCharBudget ?? JEV_REQUEST_CHAR_BUDGET);
+    s.batches = planBatches(input, s.state, prompt, deps.requestCharBudget ?? JEV_REQUEST_CHAR_BUDGET);
     const res = await callBatches(s, prompt, deps, t0);
     if (!res.ok) return finalize(s, res.error, t0, deps);
     const v = validateAnswers(s.batches, res.answersByBatch);

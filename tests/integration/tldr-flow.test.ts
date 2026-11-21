@@ -5,7 +5,7 @@
 //    LLM_MODEL_NOT_FOUND. With no real key (and none required) it is SKIPPED as "PENDING KEY" — never
 //    stubbed into a pass.
 // 2. Hand-pick suite — every deck/publish/stale rule with writer-picked lines (no LLM at all).
-// 3. "(fake transport)" suites — error-path/structure tests only: an OpenRouterDecisionsClient whose
+// 3. "(fake transport)" suites — error-path/structure tests only: a ChatClient (SMA-44) whose
 //    fetch returns provider ERRORS (401 / incomplete answers) or blocks, to prove failure recording,
 //    the untouched draft, hand-pick after failure, and the double-click guard. No fake success.
 // Phase 8: Jev ranks every sentence; relevance is read from the latest succeeded generation by sid.
@@ -30,13 +30,14 @@ import { Secret } from '@/server/config';
 import { getDb } from '@/server/db/client';
 import { aiGeneration, appUser, articleFormat, articleRevision, site } from '@/server/db/schema';
 import { JEV_PROMPT_VERSION } from '@/server/jev/prompt';
-import { resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
-import { OpenRouterDecisionsClient } from '@/server/llm/openrouter';
+import { saveAiProvider } from '@/server/ai/provider';
+import { evalAiProvider, openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
+import { ChatClient } from '@/server/llm/chat';
 import { getPublishedArticle } from '@/server/public/articles';
 import { loadSeedPosts } from '@/server/seed/posts';
 import { siteSeedFor } from '@/server/site/defaults';
 
+import { useEvalAiProvider } from '../helpers/ai';
 import { actAs, call, createArticle, data, err, ORIGIN, publish } from '../helpers/api';
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
@@ -108,10 +109,10 @@ function editSentence(bodyMd: string, text: string): string {
 // Fake transports for error-path/structure tests ONLY (they never return a successful selection).
 // ---------------------------------------------------------------------------------------------
 
-function fakeOpenRouter(fetchImpl: typeof fetch): OpenRouterDecisionsClient {
-  return new OpenRouterDecisionsClient({
+function fakeOpenRouter(fetchImpl: typeof fetch): ChatClient {
+  return new ChatClient({
     apiKey: new Secret('fake-transport-key-not-real'),
-    decisionsUrl: 'https://openrouter.invalid/api/alpha/decisions',
+    baseUrl: 'https://provider.invalid/v1',
     referer: ORIGIN,
     fetch: fetchImpl,
     sleep: async () => {},
@@ -129,17 +130,25 @@ function http401Transport(counter: { calls: number }): typeof fetch {
   }) as typeof fetch;
 }
 
-/** A 200 decisions response that answers every question but the first, and one out of range (an ERROR path). */
+/** A 200 chat completion that scores every sentence but the first, and one out of range (an ERROR path). */
 function incompleteAnswersTransport(counter: { calls: number }): typeof fetch {
   return (async (_url: unknown, init?: RequestInit) => {
     counter.calls += 1;
-    const ids = Object.keys((JSON.parse(String(init?.body)) as { questions: Record<string, unknown> }).questions);
-    const answers: Record<string, unknown> = {};
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+    const user = body.messages.find((m) => m.role === 'user')!.content;
+    const block = /<sentences>\n([\s\S]*?)\n<\/sentences>/.exec(user)![1];
+    const ids = block.split('\n').map((line) => line.slice(0, line.indexOf(': ')));
+    const scores: Record<string, number> = {};
     ids.slice(1).forEach((id, i) => {
-      answers[id] = { type: 'noul', noul: i === 0 ? 1.5 : 0.5 };
+      scores[id] = i === 0 ? 1.5 : 0.5;
     });
     return new Response(
-      JSON.stringify({ model: 'fake/transport', answers, usage: { input_tokens: 50, output_tokens: 5, cost: 0.0001 }, id: `fake-transport-${counter.calls}`, provider: 'fake-transport' }),
+      JSON.stringify({
+        id: `fake-transport-${counter.calls}`,
+        provider: 'fake-transport',
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({ scores }) } }],
+        usage: { prompt_tokens: 50, completion_tokens: 5, cost: 0.0001 },
+      }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }) as typeof fetch;
@@ -148,7 +157,6 @@ function incompleteAnswersTransport(counter: { calls: number }): typeof fetch {
 beforeEach(async () => {
   await resetDb();
   resetJevDepsForTests();
-  resetLlmClientForTests();
   writer = actAs(await loginAs({ displayName: 'Asha Writer' }));
 });
 
@@ -157,12 +165,14 @@ afterEach(() => {
 });
 
 // =============================================================================================
-// 1. Real Jev (real OpenRouter key from .env)
+// 1. Real AI ranking (SMA-44: the eval provider — OpenRouter's chat endpoint — with the key from .env)
 // =============================================================================================
 
-describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_REASON}` : 'real Jev Generate', () => {
+describe.skipIf(pendingKey)(pendingKey ? `real AI Generate — ${PENDING_KEY_REASON}` : 'real AI Generate', () => {
   let logs: CapturedLogs;
-  beforeEach(() => {
+  let model = '';
+  beforeEach(async () => {
+    ({ model } = await useEvalAiProvider(writer.user.siteId));
     logs = captureLogs();
   });
   afterEach(() => {
@@ -215,8 +225,8 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     expect(JSON.stringify(state)).not.toContain('"reason"');
     expect(generation).toMatchObject({
       status: 'succeeded',
-      model: 'typesafe/jev-1.13',
-      promptVersion: 'jev-rank-v1',
+      model,
+      promptVersion: 'tldr-rank-v2',
       requestedBy: 'Asha Writer',
       attempts: 1,
       sentenceCount: n,
@@ -225,10 +235,9 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     expect(generation.totalTokens).toBe(generation.promptTokens! + (generation.completionTokens ?? 0));
     expect(generation.latencyMs).toBeGreaterThan(0);
     expect(generation.picks).toEqual(slides.map((s) => ({ index: sentences.get(s.sid)!.index, sid: s.sid, relevance: s.relevance })));
-    if (generation.costUsd === null) expect(logs.find('llm.cost_missing').length).toBeGreaterThan(0);
-    else expect(generation.costUsd).toBeGreaterThanOrEqual(0);
+    if (generation.costUsd !== null) expect(generation.costUsd).toBeGreaterThanOrEqual(0);
     const [row] = await getDb().select().from(aiGeneration).where(eq(aiGeneration.id, generation.id));
-    expect(row).toMatchObject({ status: 'succeeded', revisionId, requestedBy: writer.user.id, promptVersion: 'jev-rank-v1', model: 'typesafe/jev-1.13', task: 'tldr.rank', attempts: 1, sentenceCount: n });
+    expect(row).toMatchObject({ status: 'succeeded', revisionId, requestedBy: writer.user.id, promptVersion: 'tldr-rank-v2', model, task: 'tldr.rank', attempts: 1, sentenceCount: n });
     expect(row.providerGenerationIds).toHaveLength(1);
     const output = row.output as { scores: Array<{ index: number; sid: string; relevance: number }>; selected: string[]; k: number; batches: number };
     expect(output.scores).toHaveLength(n);
@@ -236,7 +245,7 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     for (const x of output.scores) expect(sentences.get(x.sid)!.relevance).toBe(x.relevance);
     expect(output.selected).toEqual(slides.map((x) => x.sid));
     expect(output).toMatchObject({ k, batches: 1 });
-    expect(logs.find('llm.call').some((l) => l.outcome === 'ok' && l.prompt_version === JEV_PROMPT_VERSION && l.model === 'typesafe/jev-1.13')).toBe(true);
+    expect(logs.find('llm.call').some((l) => l.outcome === 'ok' && l.prompt_version === JEV_PROMPT_VERSION && l.model === model)).toBe(true);
     expect(logs.find('jev.run')[0]).toMatchObject({ outcome: 'ok', k, batches: 1, sentence_count: n });
 
     // Edit: drop the first line, add the best-scored unpicked line as a writer line, move it up one.
@@ -293,14 +302,15 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const before = await tldr(created.id);
     const deck = [{ sid: before.sentences[0].sid, source: 'writer' as const }];
     await putDeck(created.id, { revisionId, slides: deck });
-    setJevDepsForTests({ model: 'typesafe/does-not-exist' });
+    const p = evalAiProvider(process.env);
+    await saveAiProvider(writer.user.siteId, { baseUrl: p.baseUrl, model: 'blog0-test/does-not-exist' }, null);
 
     const { status, env } = await generate(created.id, revisionId);
 
     expect(status).toBe(502);
     const e = err(env);
     expect(e.code).toBe('LLM_MODEL_NOT_FOUND');
-    expect(e.message).toBe("Model 'typesafe/does-not-exist' isn't available as a decisions model — set BLOG0_JEV_MODEL (default typesafe/jev-1.13).");
+    expect(e.message).toBe("The AI provider doesn't offer the model 'blog0-test/does-not-exist' — check the model in Admin → Site → AI provider.");
     expect((e.details as GenerateTldrErrorDetails).generation).toMatchObject({ status: 'failed', errorCode: 'LLM_MODEL_NOT_FOUND', picks: null, attempts: 1 });
     const after = await tldr(created.id);
     expect(after.draft!.slides.map((s) => s.sid)).toEqual([deck[0].sid]);
@@ -629,7 +639,7 @@ describe('Generate error paths (fake transport)', () => {
     expect(status).toBe(502);
     const e = err(env);
     expect(e.code).toBe('LLM_AUTH');
-    expect(e.message).toContain('BLOG0_OPENROUTER_API_KEY');
+    expect(e.message).toContain('Admin → Site → AI provider');
     const failed = (e.details as GenerateTldrErrorDetails).generation;
     expect(failed).toMatchObject({ status: 'failed', errorCode: 'LLM_AUTH', attempts: 1, requestedBy: 'Asha Writer', promptVersion: JEV_PROMPT_VERSION, picks: null });
     expect(failed.finishedAt).not.toBeNull();
@@ -672,7 +682,7 @@ describe('Generate error paths (fake transport)', () => {
     expect(status).toBe(502);
     expect(err(env)).toMatchObject({
       code: 'LLM_INVALID_OUTPUT',
-      message: "Jev didn't score every sentence (2 of 8 missing or invalid) — try again, or pick lines yourself.",
+      message: "The AI didn't score every sentence (2 of 8 missing or invalid) — try again, or pick lines yourself.",
     });
     expect(counter.calls).toBe(1);
     const [row] = await getDb().select().from(aiGeneration).where(eq(aiGeneration.articleId, created.id));

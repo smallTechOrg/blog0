@@ -92,9 +92,9 @@ describe('DeckList', () => {
     );
 
     expect(html).toContain('>01<');
-    expect(metaLines(html)).toEqual(['Jev · relevance 0.82', 'Added by you', 'Added by you · relevance 0.41', 'Jev']);
+    expect(metaLines(html)).toEqual(['AI · relevance 0.82', 'Added by you', 'Added by you · relevance 0.41', 'AI']);
     expect(html).toContain('<span class="tldr-rel mono">relevance 0.82</span>');
-    expect(html).not.toMatch(/reason|Jev:/i);
+    expect(html).not.toMatch(/reason|Jev/i);
     expect(html).toContain('No longer in the article');
     expect(html).toContain('aria-label="Move line 1 up"');
     expect(html).toContain('aria-label="Remove line 2"');
@@ -318,7 +318,7 @@ describe('SentencePicker', () => {
     expect(html).not.toContain('picker__sec');
   });
 
-  it('with no scores: article order, the switch disabled with "No scores yet — generate with Jev", no relevance labels', () => {
+  it('with no scores: article order, the switch disabled with "No scores yet — generate with AI", no relevance labels', () => {
     const html = render(SCORED.map((x) => ({ ...x, relevance: null })), { initialOrder: 'relevance' });
 
     expect(rowSids(html)).toEqual(['s0', 's1', 's2', 's3']);

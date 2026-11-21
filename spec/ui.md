@@ -366,14 +366,14 @@ to the editor.
     `.admin-error` (`role=alert`) "… Nothing was pasted — try again." An image-only clipboard
     (a screenshot) opens the Image dialog.
 - **TLDR tab (`TldrTab`)** (Phase 8: relevance ranking replaces reasons):
-  - Header: status chip, bounds hint "Jev will pick the top <k> lines for this length"
-    (`bounds.target`; "all <k> lines" when k = sentence count), primary **Generate with Jev** (or
-    **Regenerate**; confirm "Replace your current deck with Jev's new top lines?" when a draft
+  - Header: status chip, bounds hint "The AI will pick the top <k> lines for this length"
+    (`bounds.target`; "all <k> lines" when k = sentence count), primary **Generate with AI** (or
+    **Regenerate**; confirm "Replace your current deck with the AI's new top lines?" when a draft
     exists). Unsaved changes → "Save & generate". Disabled with reason when 0 eligible sentences.
-    When `TldrStateDto.jevAvailable` is false the button is disabled and a `.stub`-styled notice
-    reads "No OpenRouter key configured — add `BLOG0_OPENROUTER_API_KEY` to `.env` to generate
-    with Jev. You can still pick lines yourself from the article on the right."
-  - Saving first: button disabled, "Saving…"; then Running: spinner "Jev is ranking… Ns", prior
+    SMA-44: when `TldrStateDto.aiAvailable` is false the button is disabled and a `.stub`-styled
+    notice reads "No AI provider set up — add an endpoint, model and API key in Site → AI provider
+    to generate with AI. You can still pick lines yourself from the article on the right."
+  - Saving first: button disabled, "Saving…"; then Running: spinner "AI is ranking… Ns", prior
     deck visible but dimmed.
   - Stale notice (built): when the TLDR status is `stale`, a text-only `p.tldrtab__stale` (no
     button of its own — the header **Regenerate** is the action) reads "The text changed since
@@ -447,6 +447,17 @@ design's `.audio` player. Loads `GET /api/admin/articles/:id/listen` via `useAdm
 - Every control is a `<button>`; no page-level shortcuts in this tab.
 
 ### Site `/admin/site`
+**SMA-44 — "AI provider" card** (`AiProviderSettings.tsx`, `#ai`, own load of `GET /api/admin/ai`):
+a status line ("Not set up — AI features are off." / "Set up — no calls yet. Use Test to check it." /
+"Working — last call <when>." / "Failing since <when>: <message>" / unreadable key → "enter it
+again"), **Endpoint** (OpenAI-compatible base URL; blog0 calls `/chat/completions` on it),
+**Model**, **API key** (password field, write-only: placeholder "Saved (…abcd) — type to replace";
+"Remove key" link with a confirm), **Save** and **Test** (one tiny JSON chat call with the form's
+values → "Works — <model> answered in N s." or the provider's error in plain words). Nothing is set
+by default. **Failure banner:** while the saved provider is failing (its latest call failed and
+nothing succeeded since) or its key can't be read, every desk page shows `p.aibanner` (role=alert)
+"The AI provider is failing: <message> **Check the AI provider**" under the header.
+
 Form for tagline, contact email, About strap/stand/body, social URLs with a live preview of the
 About block (unchanged). **Phase 7 adds a second card, "Newsletter"** (`NewsletterSettings.tsx`,
 own `useAdminLoad` of `GET /api/admin/newsletter/settings`, own **Save** → `PATCH …/settings`;

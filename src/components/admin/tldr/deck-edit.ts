@@ -9,7 +9,7 @@ export function deckFromDraft(state: TldrStateDto | null): DeckLine[] {
   return state?.draft ? state.draft.slides.map((s) => ({ ...s })) : [];
 }
 
-/** Jev's latest picks rebuilt from the current sentences; picks whose sentence vanished are dropped. */
+/** The AI's latest picks rebuilt from the current sentences; picks whose sentence vanished are dropped. */
 export function deckFromPicks(
   picks: NonNullable<GenerationDto['picks']>,
   sentences: readonly SentenceDto[],

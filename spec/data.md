@@ -250,6 +250,15 @@ published payload's baseline (`uploadFingerprint ?? syncFingerprint`). Phase 6 w
 paragraph marks into `marks` via the existing PUT and may add optional `sentenceMarks` beside
 them without a migration (jsonb payload; zod defaults).
 
+### ai_provider (SMA-44, `0007_ai_provider`)
+One row per site, upserted from Admin → Site → AI provider; no row = AI off. `site_id` uuid PK →
+site · `base_url` text (OpenAI-compatible base URL) · `model` text · `api_key_sealed` text null
+(`v1.<iv>.<tag>.<ciphertext>`, AES-256-GCM, key = HKDF-SHA256(`BLOG0_SESSION_SECRET`); never in a
+DTO or a log) · `api_key_hint` text null (last 4 characters) · `last_ok_at`, `last_error_at`
+timestamptz null · `last_error_code`, `last_error_message` text null (the latest call outcome —
+the admin's failure banner) · `updated_by` uuid null → app_user · `created_at`, `updated_at`.
+A saved change of endpoint, model or key clears the `last_*` columns.
+
 ### ai_generation
 The AI cost ledger and audit trail (one row per explicit Generate click that reaches the model
 step; guard failures that make no call create no row).

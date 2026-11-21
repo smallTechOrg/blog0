@@ -18,7 +18,6 @@ import { closeDb, getDb } from '@/server/db/client';
 import { aiGeneration, article, articleFormat, type SiteRow } from '@/server/db/schema';
 import { readTldrPayload, type TldrPayload } from '@/server/formats/payload';
 import { JEV_PROMPT_VERSION } from '@/server/jev/prompt';
-import { resetLlmClientForTests } from '@/server/llm';
 import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import { getPublishedArticle } from '@/server/public/articles';
 import { DECKS_DIR, loadDeckFixture } from '@/server/seed/decks';
@@ -27,6 +26,7 @@ import { seedPosts } from '@/server/seed/seed-posts';
 import { formatSeedTldrSummary, SeedTldrError, seedTldr } from '@/server/seed/seed-tldr';
 import { resetCurrentSiteForTests } from '@/server/site/current';
 
+import { useEvalAiProvider } from '../helpers/ai';
 import { resetDb } from '../helpers/db';
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
 import { loginAs, type TestLogin } from '../helpers/session';
@@ -52,7 +52,6 @@ let tmp: string | null = null;
 beforeEach(async () => {
   siteRow = await resetDb();
   resetCurrentSiteForTests();
-  resetLlmClientForTests();
   admin = await loginAs({ displayName: 'Seed Admin' });
   await seedPosts(getDb(), siteRow.id, admin.user.id);
   logs = captureLogs();
@@ -227,7 +226,12 @@ describe('seedTldr — fixture path (no AI call)', () => {
   });
 });
 
-describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real Jev — ${PENDING_KEY_REASON}` : 'seedTldr — real Jev', () => {
+describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real AI — ${PENDING_KEY_REASON}` : 'seedTldr — real AI', () => {
+  let model = '';
+  beforeEach(async () => {
+    ({ model } = await useEvalAiProvider(siteRow.id));
+  });
+
   it('5 real calls once (normal Generate rows + cost), 5 published Jev decks, then 0 calls; --write-fixture captures them', async () => {
     const first = await seedTldr(getDb(), siteRow.id, admin.user.id, { source: 'auto' });
     expect(first.source).toBe('jev');
@@ -279,7 +283,7 @@ describe.skipIf(pendingKey)(pendingKey ? `seedTldr — real Jev — ${PENDING_KE
       const scores = new Map((g.output as { scores: Array<{ sid: string; relevance: number }> }).scores.map((x) => [x.sid, x.relevance]));
       expect(captured.lines).toEqual(deck.slides.map((s) => ({ text: s.text, relevance: scores.get(s.sid) })));
       expect(captured.promptVersion).toBe(JEV_PROMPT_VERSION);
-      expect(captured.model).toBe('typesafe/jev-1.13');
+      expect(captured.model).toBe(model);
       expect(readFileSync(path.join(tmp, `${slug}.json`), 'utf8')).not.toContain('"reason"');
     }
   });

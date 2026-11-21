@@ -11,6 +11,7 @@ import type { SiteSettingsDto, SiteSettingsResponse } from '@/lib/api/dto';
 import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { apiRequest, signInHref } from '../api';
 
+import { AiProviderSettings } from './AiProviderSettings';
 import { NewsletterSettings } from './NewsletterSettings';
 
 import {
@@ -65,6 +66,8 @@ export function SiteSettingsView({ wordmark, timeZone }: { wordmark: string; tim
         ) : null}
         {/* Phase 7: the second card — its own load and Save (spec/ui.md §4 "Site"). */}
         <NewsletterSettings timeZone={timeZone} />
+        {/* SMA-44: the AI provider every AI feature uses (#ai). */}
+        <AiProviderSettings timeZone={timeZone} />
       </div>
     </main>
   );

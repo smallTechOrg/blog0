@@ -34,16 +34,16 @@ export function chipLabel(chip: FormatChipDto): string {
 }
 
 /**
- * The bounds hint next to Generate (spec/ui.md §4): "Jev will pick the top <k> lines for this length"
+ * The bounds hint next to Generate (spec/ui.md §4): "The AI will pick the top <k> lines for this length"
  * (k = `bounds.target`), "all <k> lines" when k equals the eligible sentence count.
  */
 export function boundsHint(bounds: TldrStateDto['bounds'], sentenceCount?: number): string {
-  if (!bounds) return 'No eligible sentences yet — Jev needs sentences of at least 5 words.';
+  if (!bounds) return 'No eligible sentences yet — the AI needs sentences of at least 5 words.';
   const k = bounds.target;
   if (sentenceCount !== undefined && k >= sentenceCount) {
-    return k === 1 ? 'Jev will pick the only line for this length' : `Jev will pick all ${k} lines for this length`;
+    return k === 1 ? 'The AI will pick the only line for this length' : `The AI will pick all ${k} lines for this length`;
   }
-  return k === 1 ? 'Jev will pick the top line for this length' : `Jev will pick the top ${k} lines for this length`;
+  return k === 1 ? 'The AI will pick the top line for this length' : `The AI will pick the top ${k} lines for this length`;
 }
 
 /**
@@ -62,7 +62,7 @@ function plural(n: number, one: string, many: string): string {
 }
 
 /**
- * "Jev · <model> · <promptVersion> · ranked <N> sentences[ in <attempts> requests] · <tokens> tokens ·
+ * "AI · <model> · <promptVersion> · ranked <N> sentences[ in <attempts> requests] · <tokens> tokens ·
  * $<cost 4 dp> | cost n/a · <name> · <relative time>". The "ranked" part is left out when the
  * generation sent no sentences (a pre-Phase-8 or failed-before-sending row).
  */
@@ -74,5 +74,5 @@ export function generationMeta(g: GenerationDto, now: Date, timeZone: string): s
   const tokens = g.totalTokens === null ? '?' : nf.format(g.totalTokens);
   const cost = g.costUsd === null ? 'cost n/a' : `$${g.costUsd.toFixed(4)}`;
   const when = relativeTime(g.finishedAt ?? g.startedAt, now, timeZone);
-  return ['Jev', g.model, g.promptVersion, ranked, `${tokens} tokens`, cost, g.requestedBy, when].filter(Boolean).join(' · ');
+  return ['AI', g.model, g.promptVersion, ranked, `${tokens} tokens`, cost, g.requestedBy, when].filter(Boolean).join(' · ');
 }

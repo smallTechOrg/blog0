@@ -801,7 +801,7 @@ Drizzle API.
 base64url, writes `var/pglite-session-secret` with mode `0o600`, reads it back on later boots) and
 `BLOG0_OPENROUTER_API_KEY` may be absent/placeholder (→ `config.openrouterApiKey = null`;
 `getLlmClient()` throws `ApiError('LLM_NOT_CONFIGURED', 503, 'No OpenRouter key configured — add BLOG0_OPENROUTER_API_KEY to .env to generate with Jev.')`;
-`TldrStateDto.jevAvailable` is false so the TLDR tab shows the notice and disables Generate).
+`TldrStateDto.aiAvailable` is false so the TLDR tab shows the notice and disables Generate; SMA-44: true only once an AI provider is set in Admin → Site → AI provider).
 `BLOG0_TEST_DATABASE_URL` must stay `postgres://`.
 
 `pnpm dev:design` (`scripts/dev-design.mjs`) always forces PGlite: a `postgres://`

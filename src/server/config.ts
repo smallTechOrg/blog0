@@ -3,7 +3,6 @@ import 'server-only';
 import packageJson from '../../package.json';
 import { DatabaseUrlError, DEFAULT_PGLITE_URL, isPostgresUrl, parseDatabaseUrl, type DbEngine, type ParsedDatabaseUrl } from './db/url';
 import { ensureDesignerSessionSecret } from './designer/secret';
-import { openRouterKeyStatus } from './llm/key';
 
 // Typed, validated environment (spec/architecture.md §10). Documented 1:1 in .env.example.
 // `loadConfig(env)` is pure; `getConfig()` caches it. Never read config at module top level.
@@ -69,15 +68,6 @@ export interface Config {
   sessionSecret: Secret;
   /** 'env' = BLOG0_SESSION_SECRET; 'generated' = designer mode's var/pglite-session-secret. */
   sessionSecretSource: 'env' | 'generated';
-  /** null only on the pglite engine with no (or a placeholder) key — Jev then answers LLM_NOT_CONFIGURED. */
-  openrouterApiKey: Secret | null;
-  /** Only `pnpm check:openrouter`'s `GET {base}/key` uses it (Phase 8: no app code calls it). */
-  openrouterBaseUrl: string;
-  /** The Jev endpoint — OpenRouter's decisions API (alpha path, hence its own variable). */
-  openrouterDecisionsUrl: string;
-  /** An OpenRouter decisions model; no fallback chain (spec/agent.md §3). */
-  jevModel: string;
-  jevTimeoutMs: number;
   logLevel: LogLevel;
   logFile: string | null;
   adminEmail: string | null;
@@ -171,10 +161,6 @@ export const CONFIG_DEFAULTS = {
   port: 3410,
   publicBaseUrl: 'http://localhost:3410',
   siteSlug: 'blog0',
-  openrouterBaseUrl: 'https://openrouter.ai/api/v1',
-  openrouterDecisionsUrl: 'https://openrouter.ai/api/alpha/decisions',
-  jevModel: 'typesafe/jev-1.13',
-  jevTimeoutMs: 45_000,
   logLevel: 'info' as LogLevel,
   adminName: 'Vennamaneni Sai Krishna',
   storageDir: './var/storage',
@@ -349,28 +335,8 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     problems.push('BLOG0_SESSION_SECRET must be at least 32 characters (openssl rand -base64 48)');
   }
 
-  let openrouterApiKey = secret(env, 'BLOG0_OPENROUTER_API_KEY');
-  if (isPglite && openRouterKeyStatus(openrouterApiKey) !== 'real') {
-    openrouterApiKey = undefined; // → null: Jev answers LLM_NOT_CONFIGURED, the TLDR tab shows the notice
-  } else if (openrouterApiKey === undefined) {
-    problems.push('BLOG0_OPENROUTER_API_KEY is required (create one at https://openrouter.ai/keys)');
-  } else if (isPlaceholder(openrouterApiKey)) {
-    problems.push(placeholderProblem('BLOG0_OPENROUTER_API_KEY'));
-  }
-
-  const rawOpenrouterBase = plain(env, 'BLOG0_OPENROUTER_BASE_URL') ?? CONFIG_DEFAULTS.openrouterBaseUrl;
-  const openrouterBaseUrl = httpUrl(rawOpenrouterBase);
-  if (openrouterBaseUrl === null) problems.push('BLOG0_OPENROUTER_BASE_URL must be an absolute http(s) URL');
-
-  const rawOpenrouterDecisions =
-    plain(env, 'BLOG0_OPENROUTER_DECISIONS_URL') ?? CONFIG_DEFAULTS.openrouterDecisionsUrl;
-  const openrouterDecisionsUrl = httpUrl(rawOpenrouterDecisions);
-  if (openrouterDecisionsUrl === null) {
-    problems.push('BLOG0_OPENROUTER_DECISIONS_URL must be an absolute http(s) URL');
-  }
-
-  const jevModel = plain(env, 'BLOG0_JEV_MODEL') ?? CONFIG_DEFAULTS.jevModel;
-  const jevTimeoutMs = int(problems, env, 'BLOG0_JEV_TIMEOUT_MS', CONFIG_DEFAULTS.jevTimeoutMs, 1000, 600_000);
+  // SMA-44: the AI provider (endpoint, model, key) lives in the database (Admin → Site → AI
+  // provider); BLOG0_OPENROUTER_* / BLOG0_JEV_* are no longer read.
 
   const logLevelRaw = plain(env, 'BLOG0_LOG_LEVEL') ?? CONFIG_DEFAULTS.logLevel;
   const logLevel = LOG_LEVELS.includes(logLevelRaw as LogLevel) ? (logLevelRaw as LogLevel) : null;
@@ -441,11 +407,6 @@ export function loadConfig(env: Env, options: LoadConfigOptions = {}): Config {
     siteSlug,
     sessionSecret: new Secret(sessionSecret as string),
     sessionSecretSource,
-    openrouterApiKey: openrouterApiKey === undefined ? null : new Secret(openrouterApiKey),
-    openrouterBaseUrl: openrouterBaseUrl as string,
-    openrouterDecisionsUrl: openrouterDecisionsUrl as string,
-    jevModel,
-    jevTimeoutMs,
     logLevel: logLevel as LogLevel,
     logFile,
     adminEmail,

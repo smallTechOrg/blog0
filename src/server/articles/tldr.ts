@@ -5,7 +5,7 @@ import { and, eq } from 'drizzle-orm';
 import type { DeckInvalidDetails, DeckSlideDto, GenerationDto, SentenceDto, TldrStateDto } from '@/lib/api/dto';
 import type { RenderedArticle } from '@/lib/content/types';
 
-import { getConfig } from '../config';
+import { getAi, isAiConfigured, setAiForTests } from '../ai/provider';
 import { getDb, type Executor } from '../db/client';
 import { aiGeneration, articleFormat, type AiGenerationRow, type ArticleRow } from '../db/schema';
 import { readTldrPayload, TLDR_MIN_SLIDES, type TldrPayload } from '../formats/payload';
@@ -14,10 +14,9 @@ import { GENERATION_STALE_MS, isGenerationActive } from '../formats/types';
 import { ApiError } from '../http/api';
 import { computeBounds } from '../jev/bounds';
 import { buildState, guardInput, jevInputFromRendered } from '../jev/build-input';
-import { JEV_PROMPT_VERSION } from '../jev/prompt';
+import { RANK_PROMPT_VERSION } from '../jev/prompt';
 import { runJev } from '../jev/run';
 import type { JevErrorCode, JevResult } from '../jev/state';
-import { getLlmClient, isLlmConfigured } from '../llm';
 import type { LlmClient } from '../llm/types';
 import {
   findArticle,
@@ -34,7 +33,8 @@ import { notFound, type ActorContext } from './service';
 import { iso, renderRevision, UNKNOWN_USER } from './views';
 
 // TLDR (spec/architecture.md §3 "Generate", "Relevance in the editor", "Deck edit"): the editor's
-// TLDR state, the generation row, the Jev call and the draft deck. Jev only returns a relevance
+// TLDR state, the generation row, the AI ranking call (SMA-44: the site's AI provider) and the
+// draft deck. The model only returns a relevance
 // score per sentence id we issued; every slide's text is taken from the server's own sentence list.
 // Scores live only in ai_generation.output.scores; the editor reads the latest succeeded row.
 
@@ -46,7 +46,7 @@ const TASK = 'tldr.rank';
 /** Each stored raw response body is capped (spec/data.md → ai_generation.output). */
 const RAW_OUTPUT_MAX_CHARS = 50_000;
 
-/** HTTP status per Jev/LLM error code (spec/api.md → Error codes). */
+/** HTTP status per ranking/LLM error code (spec/api.md → Error codes). */
 const JEV_ERROR_STATUS: Record<JevErrorCode, number> = {
   JEV_NO_SENTENCES: 422,
   JEV_INPUT_TOO_LONG: 422,
@@ -64,26 +64,21 @@ const JEV_ERROR_STATUS: Record<JevErrorCode, number> = {
 // ---------------------------------------------------------------------------------------------
 
 export interface JevDepsOverride {
-  llm?: LlmClient;
+  llm: LlmClient;
   model?: string;
 }
 
-let depsOverride: JevDepsOverride | null = null;
-
+/** Swaps the site's AI provider for a stub client (src/server/ai/provider.ts → setAiForTests). */
 export function setJevDepsForTests(override: JevDepsOverride): void {
-  depsOverride = override;
+  setAiForTests({ client: override.llm, model: override.model });
 }
 
 export function resetJevDepsForTests(): void {
-  depsOverride = null;
+  setAiForTests(null);
 }
 
 // ---------------------------------------------------------------------------------------------
 
-/** Whether Generate can run: false only in designer mode with no OpenRouter key (or a test LLM override). */
-function jevAvailable(): boolean {
-  return depsOverride?.llm !== undefined || isLlmConfigured();
-}
 
 export async function getTldrState(siteId: string, id: string): Promise<TldrStateDto> {
   const row = await findArticle(siteId, id);
@@ -106,11 +101,9 @@ export async function generateTldr(
   requestId: string,
 ): Promise<{ tldr: TldrStateDto; generation: GenerationDto }> {
   const db = getDb();
-  const config = getConfig();
-  const model = depsOverride?.model ?? config.jevModel;
 
-  // 0. Designer mode without a key: refuse before any row or call exists (LLM_NOT_CONFIGURED, 503).
-  const llm = depsOverride?.llm ?? getLlmClient();
+  // 0. No AI provider set up: refuse before any row or call exists (LLM_NOT_CONFIGURED, 503).
+  const { client: llm, model } = await getAi(ctx.siteId);
 
   // 1. Revision must be current; guard the input BEFORE any row or call exists.
   const row = await findArticle(ctx.siteId, id);
@@ -141,7 +134,7 @@ export async function generateTldr(
       throw new ApiError(
         'GENERATION_IN_PROGRESS',
         409,
-        'Jev is already working on this article — wait for it to finish.',
+        'The AI is already ranking this article — wait for it to finish.',
         { generationId: latest!.id, retryAfterSec: Math.ceil((GENERATION_STALE_MS - (now.getTime() - latest!.startedAt.getTime())) / 1000) },
       );
     }
@@ -157,7 +150,7 @@ export async function generateTldr(
         requestedBy: ctx.user.id,
         startedAt: now,
         model,
-        promptVersion: JEV_PROMPT_VERSION,
+        promptVersion: RANK_PROMPT_VERSION,
         inputFingerprint: revision.sentencesFingerprint,
         sentenceCount: input.sentences.length,
         boundMin: bounds.min,
@@ -174,12 +167,11 @@ export async function generateTldr(
       llm,
       model,
       now: () => performance.now(),
-      timeoutMs: config.jevTimeoutMs,
     });
   } catch (error) {
     await db
       .update(aiGeneration)
-      .set({ status: 'failed', finishedAt: new Date(), errorCode: 'INTERNAL', errorMessage: 'Unexpected error while running Jev.' })
+      .set({ status: 'failed', finishedAt: new Date(), errorCode: 'INTERNAL', errorMessage: 'Unexpected error while ranking with the AI.' })
       .where(and(eq(aiGeneration.id, generation.id), eq(aiGeneration.siteId, ctx.siteId)));
     throw error;
   }
@@ -434,6 +426,6 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
     draft,
     published,
     latestGeneration: gen ? toGenerationDto(gen, names, now) : null,
-    jevAvailable: jevAvailable(),
+    aiAvailable: await isAiConfigured(siteId),
   };
 }

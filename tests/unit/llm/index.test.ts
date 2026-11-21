@@ -1,39 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { resetConfigForTests } from '@/server/config';
-import { getLlmClient, OpenRouterDecisionsClient, resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
+import { ChatClient, LlmError, parseJsonReply } from '@/server/llm';
+import { evalAiProvider, EVAL_AI_DEFAULTS, openRouterKeyStatus, PENDING_KEY_REASON } from '@/server/llm/key';
 
-const ENV_KEYS = ['BLOG0_DATABASE_URL', 'BLOG0_SESSION_SECRET', 'BLOG0_OPENROUTER_API_KEY'] as const;
-
-describe('getLlmClient', () => {
-  const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-
-  afterEach(() => {
-    for (const k of ENV_KEYS) {
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    }
-    resetConfigForTests();
-    resetLlmClientForTests();
-  });
-
-  it('builds one OpenRouter decisions client from config and resets for tests', () => {
-    process.env.BLOG0_DATABASE_URL = 'postgres://sai@localhost:5432/blog0_dev';
-    process.env.BLOG0_SESSION_SECRET = 'unit-test-session-secret-that-is-long-enough-1234';
-    process.env.BLOG0_OPENROUTER_API_KEY = 'unit-test-key';
-    resetConfigForTests();
-
-    const a = getLlmClient();
-    const b = getLlmClient();
-    resetLlmClientForTests();
-    const c = getLlmClient();
-
-    expect(a).toBeInstanceOf(OpenRouterDecisionsClient);
-    expect(typeof a.decide).toBe('function');
-    expect('completeJson' in a).toBe(false);
-    expect(a).toBe(b);
-    expect(c).not.toBe(a);
+describe('@/server/llm', () => {
+  it('exports the one chat client (SMA-44: no env-built singleton — the provider comes from the site)', async () => {
+    const mod = await import('@/server/llm');
+    expect(ChatClient).toBeTypeOf('function');
+    expect(LlmError).toBeTypeOf('function');
+    expect(parseJsonReply).toBeTypeOf('function');
+    expect(Object.keys(mod)).not.toContain('getLlmClient');
+    expect(Object.keys(mod)).not.toContain('OpenRouterDecisionsClient');
   });
 });
 
@@ -45,5 +22,12 @@ describe('openRouterKeyStatus', () => {
     expect(openRouterKeyStatus('pending-placeholder')).toBe('placeholder');
     expect(openRouterKeyStatus('sk-or-v1-0123456789abcdef')).toBe('real');
     expect(PENDING_KEY_REASON).toBe('PENDING KEY: BLOG0_OPENROUTER_API_KEY not set');
+  });
+});
+
+describe('evalAiProvider', () => {
+  it('is OpenRouter’s OpenAI-compatible endpoint with a small chat model by default; env overrides', () => {
+    expect(evalAiProvider({ BLOG0_OPENROUTER_API_KEY: ' k ' })).toEqual({ ...EVAL_AI_DEFAULTS, apiKey: 'k' });
+    expect(evalAiProvider({ BLOG0_EVAL_AI_BASE_URL: 'https://x.test/v1', BLOG0_EVAL_AI_MODEL: 'm' })).toEqual({ baseUrl: 'https://x.test/v1', model: 'm', apiKey: '' });
   });
 });
