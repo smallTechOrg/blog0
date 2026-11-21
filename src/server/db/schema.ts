@@ -27,7 +27,8 @@ import {
 // `email_hash`, the `erased` kinds, the widened ledger guard and `newsletter_erase_subscriber`),
 // 0005_newsletter_erase_delete.sql (owner decision 2026-10-19: erasure DELETES the subscriber; the
 // hashed `newsletter_erasure_marker`, the PII-free `newsletter_erasure_log`, `newsletter_issue.erased_message_count`,
-// the replaced `newsletter_erase_subscriber`, the erased-address insert guard and the 0004 tombstone repair).
+// the replaced `newsletter_erase_subscriber`, the erased-address insert guard and the 0004 tombstone repair),
+// 0006_known_device, 0007_ai_provider (SMA-44: the site's OpenAI-compatible AI provider).
 
 const id = () => uuid('id').primaryKey().defaultRandom();
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -135,6 +136,30 @@ export const site = pgTable('site', {
   check('site_newsletter_digest_days_check', sql`${t.newsletterDigestDays} between 1 and 60`),
   check('site_newsletter_digest_posts_check', sql`${t.newsletterDigestPosts} between 1 and 20`),
 ]);
+
+// ---------------------------------------------------------------------------------------------
+// AI provider (SMA-44, 0007_ai_provider): one OpenAI-compatible chat endpoint per site, set in
+// Admin → Site → AI provider. No row (or no key) = AI off. The key is AES-256-GCM sealed with a key
+// derived from BLOG0_SESSION_SECRET (src/server/ai/secret-box.ts) and never leaves the server.
+// last_* record the latest call outcome so the admin sees a failing provider.
+
+export const aiProvider = pgTable('ai_provider', {
+  siteId: uuid('site_id')
+    .primaryKey()
+    .references(() => site.id),
+  baseUrl: text('base_url').notNull(),
+  model: text('model').notNull(),
+  apiKeySealed: text('api_key_sealed'),
+  /** Last 4 characters of the key, for "Key saved (…abcd)". */
+  apiKeyHint: text('api_key_hint'),
+  lastOkAt: timestamp('last_ok_at', { withTimezone: true }),
+  lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+  lastErrorCode: text('last_error_code'),
+  lastErrorMessage: text('last_error_message'),
+  updatedBy: uuid('updated_by').references((): AnyPgColumn => appUser.id),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
 
 export const appUser = pgTable(
   'app_user',
@@ -622,6 +647,7 @@ export type NewsletterErasureMarkerRow = typeof newsletterErasureMarker.$inferSe
 export type NewsletterErasureLogRow = typeof newsletterErasureLog.$inferSelect;
 export type MediaAssetRow = typeof mediaAsset.$inferSelect;
 export type RateLimitBucketRow = typeof rateLimitBucket.$inferSelect;
+export type AiProviderRow = typeof aiProvider.$inferSelect;
 
 /** Every table, children first — the order resetDb() truncates in. */
 export const ALL_TABLE_NAMES = [
@@ -636,6 +662,7 @@ export const ALL_TABLE_NAMES = [
   'media_asset',
   'newsletter_subscriber',
   'ai_generation',
+  'ai_provider',
   'article_format',
   'article_revision',
   'article',

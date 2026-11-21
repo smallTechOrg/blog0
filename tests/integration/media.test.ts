@@ -21,7 +21,6 @@ import { ApiError, MULTIPART_OVERHEAD_BYTES, precheckContentLength } from '@/ser
 import { deleteAssetIfUnreferenced, deleteStoredFiles, isStorageKeyReferenced } from '@/server/media/cleanup';
 import { cleanOriginalFilename } from '@/server/media/ingest';
 import { probeImage } from '@/server/media/image-probe';
-import { resetLlmClientForTests } from '@/server/llm';
 import { resetLoggerForTests } from '@/server/log';
 import { seedSite } from '@/server/seed/site';
 import { resetCurrentSiteForTests } from '@/server/site/current';
@@ -626,7 +625,6 @@ describe('designer mode (pglite://memory): upload → stream with local disk, no
 
   function resetSingletons(): void {
     resetConfigForTests();
-    resetLlmClientForTests();
     resetCurrentSiteForTests();
     resetLoggerForTests();
     resetStorageForTests();

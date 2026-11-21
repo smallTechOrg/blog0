@@ -1,22 +1,28 @@
 import 'server-only';
 
+import { parseJsonReply } from '../llm/chat';
 import type { JevBatch } from './state';
 
-// spec/agent.md §2 step 6. Pure. For each batch, every question id must be present in that batch's
-// `answers` as `{ type: 'noul', noul: <finite number in [0,1]> }`. Ids we did not ask are ignored
-// (counted as `extra`). Any missing or invalid answer fails the whole run — no repair retry and no
-// imputed scores.
+// spec/agent.md §2 step 6. Pure. Each batch's reply must be JSON `{"scores":{"<sid>":<number in [0,1]>}}`
+// with every sid of that batch. Ids we did not send are ignored (counted as `extra`). Any missing or
+// invalid score fails the whole run — no repair retry and no imputed scores.
 
 export type ValidateResult =
   | { ok: true; scoresBySid: Map<string, number>; extra: number }
   | { ok: false; missing: string[]; invalid: string[]; extra: number };
 
-function noulOf(answer: unknown): number | null {
-  if (typeof answer !== 'object' || answer === null) return null;
-  const { type, noul } = answer as { type?: unknown; noul?: unknown };
-  if (type !== 'noul') return null;
-  if (typeof noul !== 'number' || !Number.isFinite(noul) || noul < 0 || noul > 1) return null;
-  return noul;
+function scoreOf(value: unknown): number | null {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 1) return null;
+  return n;
+}
+
+/** The `scores` object of a model reply, or {} when the reply is not JSON of that shape. */
+export function scoresOf(content: string): Record<string, unknown> {
+  const parsed = parseJsonReply(content);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+  const scores = (parsed as { scores?: unknown }).scores;
+  return typeof scores === 'object' && scores !== null && !Array.isArray(scores) ? (scores as Record<string, unknown>) : {};
 }
 
 export function validateAnswers(batches: readonly JevBatch[], answersByBatch: ReadonlyArray<Record<string, unknown>>): ValidateResult {
@@ -33,9 +39,9 @@ export function validateAnswers(batches: readonly JevBatch[], answersByBatch: Re
         missing.push(sid);
         continue;
       }
-      const noul = noulOf(answers[sid]);
-      if (noul === null) invalid.push(sid);
-      else scoresBySid.set(sid, noul);
+      const score = scoreOf(answers[sid]);
+      if (score === null) invalid.push(sid);
+      else scoresBySid.set(sid, score);
     }
   });
   if (missing.length > 0 || invalid.length > 0) return { ok: false, missing, invalid, extra };
@@ -43,5 +49,5 @@ export function validateAnswers(batches: readonly JevBatch[], answersByBatch: Re
 }
 
 export function invalidOutputMessage(bad: number, n: number): string {
-  return `Jev didn't score every sentence (${bad} of ${n} missing or invalid) — try again, or pick lines yourself.`;
+  return `The AI didn't score every sentence (${bad} of ${n} missing or invalid) — try again, or pick lines yourself.`;
 }

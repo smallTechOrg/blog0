@@ -1,5 +1,6 @@
-// Real-key Jev integration (spec/agent.md §7): runs runJev on the real content pipeline output
-// against the real OpenRouter decisions endpoint with the key from .env. Structural assertions only
+// Real-key TLDR ranking integration (spec/agent.md §7; SMA-44): runs runJev on the real content
+// pipeline output against a real OpenAI-compatible chat model (the eval provider: OpenRouter +
+// BLOG0_EVAL_AI_MODEL, key from .env). Structural assertions only
 // (every sentence scored once in [0,1], top k, verbatim, fields).
 // PENDING KEY rule (spec/architecture.md ## Conventions): with no real key and `realKeyRequired` false the
 // real-call suite is SKIPPED with "PENDING KEY: BLOG0_OPENROUTER_API_KEY not set"; when a real key is required
@@ -7,16 +8,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RenderedArticle } from '@/lib/content/types';
-import { getConfig } from '@/server/config';
+import { Secret } from '@/server/config';
 import { renderArticle } from '@/server/content/render';
 import { loadJevEvalArticles } from '@/server/jev/articles';
-import { planBatches } from '@/server/jev/batches';
+import { batchMessages, planBatches } from '@/server/jev/batches';
 import { buildState, jevInputFromRendered } from '@/server/jev/build-input';
 import { loadRankPrompt } from '@/server/jev/prompt';
 import { runJev } from '@/server/jev/run';
 import { JEV_REQUEST_CHAR_BUDGET, type JevInput } from '@/server/jev/state';
-import { getLlmClient, resetLlmClientForTests } from '@/server/llm';
-import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
+import { ChatClient } from '@/server/llm/chat';
+import { evalAiProvider, openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '@/server/llm/key';
 import type { LlmClient } from '@/server/llm/types';
 
 import { captureLogs, type CapturedLogs } from '../helpers/logs';
@@ -48,16 +49,17 @@ async function prepare(article: { slug: string; title: string; dek: string; body
   return { input, rendered };
 }
 
+const PROVIDER = evalAiProvider(process.env);
+
 function deps(model?: string) {
-  const config = getConfig();
-  return { llm: getLlmClient(), model: model ?? config.jevModel, now: () => performance.now(), timeoutMs: config.jevTimeoutMs };
+  const llm = new ChatClient({ apiKey: new Secret(PROVIDER.apiKey), baseUrl: PROVIDER.baseUrl, referer: 'http://localhost:3410' });
+  return { llm, model: model ?? PROVIDER.model, now: () => performance.now() };
 }
 
-describe.skipIf(pending)(realSuite('Jev against real OpenRouter'), () => {
+describe.skipIf(pending)(realSuite('TLDR ranking against a real chat model'), () => {
   let logs: CapturedLogs;
 
   beforeEach(() => {
-    resetLlmClientForTests();
     logs = captureLogs();
   });
 
@@ -65,8 +67,9 @@ describe.skipIf(pending)(realSuite('Jev against real OpenRouter'), () => {
     logs.stop();
   });
 
-  it('runs against the decisions model typesafe/jev-1.13 (BLOG0_JEV_MODEL unset or that slug)', () => {
-    expect(getConfig().jevModel).toBe('typesafe/jev-1.13');
+  it('runs against an OpenAI-compatible chat endpoint (the eval provider)', () => {
+    expect(PROVIDER.baseUrl).toMatch(/^https?:\/\//);
+    expect(PROVIDER.model).not.toBe('');
   });
 
   it.each(ARTICLES.map((a) => [a.slug, a] as const))('scores every sentence and selects the verbatim top k for %s', async (_slug, article) => {
@@ -105,25 +108,24 @@ describe.skipIf(pending)(realSuite('Jev against real OpenRouter'), () => {
     expect(res.usage.inputTokens).toBeGreaterThan(0);
     expect(res.usage.totalTokens).toBe((res.usage.inputTokens ?? 0) + (res.usage.outputTokens ?? 0));
     expect(res.usage.providerGenerationIds).toHaveLength(1);
-    expect(res.model).toBe('typesafe/jev-1.13');
-    expect(res.promptVersion).toBe('jev-rank-v1');
+    expect(res.model).toBe(PROVIDER.model);
+    expect(res.promptVersion).toBe('tldr-rank-v2');
     expect(res.latencyMs).toBeGreaterThan(0);
-    if (res.usage.costUsd === null) {
-      expect(logs.find('llm.cost_missing').length).toBeGreaterThan(0);
-    } else {
-      expect(res.usage.costUsd).toBeGreaterThanOrEqual(0);
-    }
+    if (res.usage.costUsd !== null) expect(res.usage.costUsd).toBeGreaterThanOrEqual(0);
     const okCalls = logs.find('llm.call').filter((l) => l.outcome === 'ok');
     expect(okCalls).toHaveLength(1);
-    expect(okCalls[0]).toMatchObject({ model: res.model, prompt_version: 'jev-rank-v1', request_id: input.requestId, batch: 1, batches: 1, questions: n });
+    expect(okCalls[0]).toMatchObject({ model: res.model, prompt_version: 'tldr-rank-v2', purpose: 'tldr.rank', request_id: input.requestId, batch: 1, batches: 1 });
     expect(okCalls[0].provider_generation_id).toBe(res.usage.providerGenerationIds[0]);
     expect(logs.find('jev.run')[0]).toMatchObject({ outcome: 'ok', k: res.k, batches: 1, sentence_count: n });
   });
 
-  it('a forced small request budget sends ≥ 2 real requests (state repeated) and still scores every sentence', async () => {
+  it('a forced small request budget sends ≥ 2 real requests (article repeated) and still scores every sentence', async () => {
     const { input } = await prepare(ARTICLES.find((a) => a.slug === 'artefact-driven-development')!);
-    const full = planBatches(input, buildState(input), loadRankPrompt(), getConfig().jevModel, JEV_REQUEST_CHAR_BUDGET)[0].requestChars;
-    const budget = Math.ceil(full * 0.6);
+    const state = buildState(input);
+    const prompt = loadRankPrompt();
+    const full = planBatches(input, state, prompt, JEV_REQUEST_CHAR_BUDGET)[0].requestChars;
+    const base = prompt.system.length + batchMessages({ questions: [], requestChars: 0 }, input, state, prompt)[1].content.length;
+    const budget = base + Math.ceil((full - base) * 0.6);
 
     const res = await runJev(input, { ...deps(), requestCharBudget: budget });
 
@@ -135,7 +137,6 @@ describe.skipIf(pending)(realSuite('Jev against real OpenRouter'), () => {
     const calls = logs.find('llm.call').filter((l) => l.outcome === 'ok');
     expect(calls).toHaveLength(res.batches);
     expect(calls.map((c) => c.batch).sort()).toEqual(Array.from({ length: res.batches }, (_, i) => i + 1));
-    expect(calls.reduce((sum, c) => sum + (c.questions as number), 0)).toBe(input.sentences.length);
   });
 
   it('selects all N from a short article with fewer than four eligible sentences', async () => {
@@ -155,25 +156,24 @@ describe.skipIf(pending)(realSuite('Jev against real OpenRouter'), () => {
     expect(res.selected.map((p) => p.index)).toEqual([0, 1, 2]);
   });
 
-  it('returns LLM_MODEL_NOT_FOUND for a wrong decisions slug (real call)', async () => {
-    // Observed body (2026-10-13): HTTP 400 {"error":{"message":"Model typesafe/does-not-exist does not exist","code":400}}
+  it('returns LLM_MODEL_NOT_FOUND for a model the provider does not offer (real call)', async () => {
     const { input } = await prepare(ARTICLES[0]);
 
-    const res = await runJev(input, deps('typesafe/does-not-exist'));
+    const res = await runJev(input, deps('blog0-test/does-not-exist'));
 
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.code).toBe('LLM_MODEL_NOT_FOUND');
-    expect(res.error.message).toBe("Model 'typesafe/does-not-exist' isn't available as a decisions model — set BLOG0_JEV_MODEL (default typesafe/jev-1.13).");
+    expect(res.error.message).toBe("The AI provider doesn't offer the model 'blog0-test/does-not-exist' — check the model in Admin → Site → AI provider.");
     expect(res.batches).toBe(1);
     expect(res.usage.totalTokens).toBeNull();
-    expect(logs.find('llm.call')[0]).toMatchObject({ outcome: 'http_error', http_status: 400, err_message: 'Model typesafe/does-not-exist does not exist' });
+    expect(logs.find('llm.call')[0]).toMatchObject({ outcome: 'http_error' });
   });
 });
 
 describe('Jev guard on the real pipeline (no model call)', () => {
   const neverCalled: LlmClient = {
-    decide: async () => {
+    chat: async () => {
       throw new Error('the model must not be called');
     },
   };

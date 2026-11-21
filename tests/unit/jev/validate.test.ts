@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { JevBatch } from '@/server/jev/state';
-import { invalidOutputMessage, validateAnswers } from '@/server/jev/validate';
+import { invalidOutputMessage, scoresOf, validateAnswers } from '@/server/jev/validate';
 
 const batch = (...sids: string[]): JevBatch => ({ questions: sids.map((sid, index) => ({ sid, index })), requestChars: 0 });
-const noul = (n: unknown) => ({ type: 'noul', noul: n });
+const noul = (n: unknown) => n; // SMA-44: a chat model answers a bare score per id
 
 describe('validateAnswers', () => {
   it('returns every score by sid across batches', () => {
@@ -34,11 +34,10 @@ describe('validateAnswers', () => {
     ['below 0', noul(-0.1)],
     ['NaN', noul(Number.NaN)],
     ['Infinity', noul(Number.POSITIVE_INFINITY)],
-    ['a string', noul('0.5')],
-    ['wrong type', { type: 'bool', noul: 0.5 }],
-    ['no noul', { type: 'noul' }],
+    ['a non-numeric string', 'high'],
+    ['an object', { type: 'noul', noul: 0.5 }],
     ['null', null],
-    ['a bare number', 0.5],
+    ['a boolean', true],
   ])('marks %s as invalid', (_label, answer) => {
     const v = validateAnswers([batch('a', 'b')], [{ a: noul(0.3), b: answer }]);
     expect(v).toEqual({ ok: false, missing: [], invalid: ['b'], extra: 0 });
@@ -53,7 +52,24 @@ describe('validateAnswers', () => {
     expect(validateAnswers([batch('a', 'b')], [{ a: noul(0), b: noul(1) }]).ok).toBe(true);
   });
 
+  it('accepts a numeric string (some models quote numbers)', () => {
+    const v = validateAnswers([batch('a')], [{ a: '0.25' }]);
+    expect(v.ok && v.scoresBySid.get('a')).toBe(0.25);
+  });
+
   it('writer message carries the count', () => {
-    expect(invalidOutputMessage(2, 31)).toBe("Jev didn't score every sentence (2 of 31 missing or invalid) — try again, or pick lines yourself.");
+    expect(invalidOutputMessage(2, 31)).toBe("The AI didn't score every sentence (2 of 31 missing or invalid) — try again, or pick lines yourself.");
+  });
+});
+
+describe('scoresOf', () => {
+  it('reads {"scores":{…}} from plain JSON, a Markdown fence, or JSON wrapped in prose', () => {
+    expect(scoresOf('{"scores":{"a":0.5}}')).toEqual({ a: 0.5 });
+    expect(scoresOf('```json\n{"scores":{"a":0.5}}\n```')).toEqual({ a: 0.5 });
+    expect(scoresOf('Here you go: {"scores":{"a":0.5}} Hope it helps.')).toEqual({ a: 0.5 });
+  });
+
+  it('is {} for anything else', () => {
+    for (const bad of ['', 'no json', '{"score":{"a":1}}', '{"scores":[1,2]}', '[1]', '{"scores":null}']) expect(scoresOf(bad)).toEqual({});
   });
 });

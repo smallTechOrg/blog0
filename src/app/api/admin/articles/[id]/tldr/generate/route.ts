@@ -4,7 +4,7 @@ import { revisionBody } from '@/server/articles/schemas';
 import { generateTldr } from '@/server/articles/tldr';
 import { withApi } from '@/server/http/api';
 
-// POST /api/admin/articles/:id/tldr/generate — the ONLY LLM call in blog0 (Jev, one explicit click).
+// POST /api/admin/articles/:id/tldr/generate — the TLDR ranking call (the site's AI provider, one explicit click).
 // Errors: CONFLICT, GENERATION_IN_PROGRESS, JEV_*, LLM_* (failed GenerationDto in error.details.generation).
 
 export const dynamic = 'force-dynamic';

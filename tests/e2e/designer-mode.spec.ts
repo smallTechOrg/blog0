@@ -22,7 +22,7 @@ const SEED_TITLES = [
   'AI Will Destroy the World',
   'AI is Expensive',
 ];
-const NO_KEY_NOTICE = 'No OpenRouter key configured';
+const NO_KEY_NOTICE = 'No AI provider set up';
 /** The upload round trip uses another seeded article, so the seeded sample on SLUG stays as seeded. */
 const UPLOAD_SLUG = 'ai-is-expensive';
 
@@ -166,10 +166,10 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     await page.getByRole('tab', { name: /^TLDR/ }).click();
 
     const panel = page.locator('#panel-tldr');
-    await expect(panel.getByTestId('jev-no-key')).toContainText(NO_KEY_NOTICE);
-    await expect(panel.getByTestId('jev-no-key')).toContainText('BLOG0_OPENROUTER_API_KEY');
-    // The primary Generate button ("Generate with Jev", or "Regenerate" once a deck exists) is disabled.
-    const generate = panel.locator('.tldrtab__head').getByRole('button', { name: /^(Generate with Jev|Regenerate)$/ });
+    await expect(panel.getByTestId('ai-no-provider')).toContainText(NO_KEY_NOTICE);
+    await expect(panel.getByTestId('ai-no-provider')).toContainText('No AI provider set up');
+    // The primary Generate button ("Generate with AI", or "Regenerate" once a deck exists) is disabled.
+    const generate = panel.locator('.tldrtab__head').getByRole('button', { name: /^(Generate with AI|Regenerate)$/ });
     await expect(generate).toBeDisabled();
     await expect(generate).toHaveAttribute('title', NO_KEY_NOTICE);
     await expect(page.locator('#tab-tldr .tabchip')).toHaveText('ready');

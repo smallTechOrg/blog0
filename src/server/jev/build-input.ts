@@ -4,10 +4,10 @@ import type { RenderedArticle } from '@/lib/content/types';
 
 import { JEV_MAX_SENTENCES, JEV_MAX_STATE_CHARS, type JevDecisionState, type JevError, type JevInput } from './state';
 
-// spec/agent.md §2 steps 2–3: buildState (the decisions `state`) and guardInput. Pure.
+// spec/agent.md §2 steps 2–3: buildState (the article as sent to the model) and guardInput. Pure.
 
 export const JEV_TOO_LONG_MESSAGE =
-  'This article is too long for Jev (limit 400 sentences / about 5 000 words) — pick lines by hand.';
+  'This article is too long for the AI (limit 400 sentences / about 5 000 words) — pick lines by hand.';
 export const JEV_NO_SENTENCES_MESSAGE = 'This article has no sentences of five or more words to choose from.';
 
 /** Builds JevInput from a rendered revision. */

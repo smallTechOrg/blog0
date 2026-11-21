@@ -50,6 +50,13 @@
       "when": 1792432877623,
       "tag": "0006_known_device",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795262572625,
+      "tag": "0007_ai_provider",
+      "breakpoints": true
     }
   ]
 }

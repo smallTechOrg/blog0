@@ -18,7 +18,7 @@ import type { ArticleResponse } from '@/lib/api/dto';
 import { resetJevDepsForTests, setJevDepsForTests } from '@/server/articles/tldr';
 import { resetConfigForTests, Secret } from '@/server/config';
 import { resetLoggerForTests } from '@/server/log';
-import { OpenRouterDecisionsClient } from '@/server/llm/openrouter';
+import { ChatClient } from '@/server/llm/chat';
 
 import { actAs, call, ORIGIN } from '../helpers/api';
 import { resetDb } from '../helpers/db';
@@ -113,9 +113,9 @@ describe('api.request lines', () => {
 describe('Generate failure logging (fake transport: HTTP 401)', () => {
   it('emits llm.call, jev.run and api.request lines with the error code and without the key or article text', async () => {
     setJevDepsForTests({
-      llm: new OpenRouterDecisionsClient({
+      llm: new ChatClient({
         apiKey: new Secret(FAKE_KEY),
-        decisionsUrl: 'https://openrouter.invalid/api/alpha/decisions',
+        baseUrl: 'https://provider.invalid/v1',
         referer: ORIGIN,
         retryDelaysMs: [],
         sleep: async () => {},
@@ -141,10 +141,10 @@ describe('Generate failure logging (fake transport: HTTP 401)', () => {
     const [api] = logs.find('api.request');
     expect(llm).toMatchObject({
       request_id: requestId,
-      prompt_version: 'jev-rank-v1',
+      prompt_version: 'tldr-rank-v2',
+      purpose: 'tldr.rank',
       batch: 1,
       batches: 1,
-      questions: 5,
       attempt: 1,
       outcome: 'http_error',
       http_status: 401,

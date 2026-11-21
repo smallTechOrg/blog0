@@ -28,3 +28,19 @@ export function realKeyRequired(env: Record<string, string | undefined> = proces
   if (flag === '0') return false;
   return env.CI === 'true';
 }
+
+/**
+ * The provider real-key tests, `pnpm eval:jev` and `pnpm check:openrouter` use (SMA-44: the app itself
+ * reads its provider from Admin → Site → AI provider, never from env). OpenRouter's OpenAI-compatible
+ * endpoint with BLOG0_OPENROUTER_API_KEY; BLOG0_EVAL_AI_BASE_URL / BLOG0_EVAL_AI_MODEL override.
+ */
+export const EVAL_AI_DEFAULTS = { baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4.1-mini' } as const;
+
+export function evalAiProvider(env: Record<string, string | undefined> = process.env): { baseUrl: string; model: string; apiKey: string } {
+  const pick = (v: string | undefined) => (v ?? '').trim() || undefined;
+  return {
+    baseUrl: pick(env.BLOG0_EVAL_AI_BASE_URL) ?? EVAL_AI_DEFAULTS.baseUrl,
+    model: pick(env.BLOG0_EVAL_AI_MODEL) ?? EVAL_AI_DEFAULTS.model,
+    apiKey: (env.BLOG0_OPENROUTER_API_KEY ?? '').trim(),
+  };
+}

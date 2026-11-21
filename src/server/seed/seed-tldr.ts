@@ -11,7 +11,7 @@ import type { Db } from '../db/client';
 import { aiGeneration, appUser, article, articleFormat, articleRevision } from '../db/schema';
 import { readTldrPayload } from '../formats/payload';
 import { ApiError } from '../http/api';
-import { isLlmConfigured } from '../llm';
+import { isAiConfigured } from '../ai/provider';
 import { log } from '../log';
 
 import { DECKS_DIR, loadDeckFixture, matchFixtureLines, writeDeckFixture } from './decks';
@@ -26,7 +26,7 @@ import { SEED_POSTS } from './posts';
 //                        published revision's eligible sentences (unmatched → warning, dropped),
 //                        saved through saveDeck as `source: 'writer'`, then publishArticle.
 //                        0 AI calls.
-//   - source 'auto'    → 'jev' when a real OpenRouter key is configured, else 'fixture'.
+//   - source 'auto'    → 'jev' (the AI) when the site has an AI provider set up, else 'fixture'.
 // Idempotent: a post whose deck is already published is never touched. Never runs per view.
 //
 // The services it reuses read the app's handle (getDb()), so `db` MUST be that handle (scripts:
@@ -66,11 +66,11 @@ export class SeedTldrError extends Error {
   }
 }
 
-/** 'auto' → 'jev' with a real key, else 'fixture'. An explicit 'jev' without a key is an error. */
+/** 'auto' → 'jev' (the AI) with a provider set up, else 'fixture'. An explicit 'jev' without one is an error. */
 export function resolveSeedTldrSource(requested: SeedTldrSource, keyConfigured: boolean): 'fixture' | 'jev' {
   if (requested === 'fixture') return 'fixture';
   if (requested === 'jev') {
-    if (!keyConfigured) throw new SeedTldrError('seed:tldr with Jev needs a real BLOG0_OPENROUTER_API_KEY in .env.');
+    if (!keyConfigured) throw new SeedTldrError('seed:tldr with the AI needs an AI provider — set one in Admin → Site → AI provider.');
     return 'jev';
   }
   return keyConfigured ? 'jev' : 'fixture';
@@ -141,10 +141,10 @@ function generationFromError(error: unknown): { costUsd: number | null } | null 
  * none, as `userId` (an active admin of the site). See the file header for the sources.
  */
 export async function seedTldr(db: Db, siteId: string, userId: string, opts: SeedTldrOptions): Promise<SeedTldrResult> {
-  const keyConfigured = isLlmConfigured();
+  const keyConfigured = await isAiConfigured(siteId);
   const source = resolveSeedTldrSource(opts.source, keyConfigured);
   if (opts.writeFixture && source !== 'jev') {
-    throw new SeedTldrError('--write-fixture captures real Jev output — it needs a real BLOG0_OPENROUTER_API_KEY (and not --source fixture).');
+    throw new SeedTldrError('--write-fixture captures real AI output — it needs an AI provider (Admin → Site → AI provider) and not --source fixture.');
   }
   const fixtureDir = opts.fixtureDir ?? DECKS_DIR;
   const ctx = await loadActor(db, siteId, userId);

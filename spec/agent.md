@@ -1,5 +1,19 @@
 # blog0 — AI-native design (agent.md)
 
+> **SMA-44 (user decision, 2026-11-21) — supersedes the Jev/decisions parts below.** Jev (the
+> OpenRouter decisions model) is removed; blog0 is back on ordinary chat LLMs. The provider is not
+> fixed: an admin sets any **OpenAI-compatible endpoint, model and API key** in Admin → Site → AI
+> provider (`ai_provider` row, key sealed at rest), with a **Test** button; nothing is configured by
+> default and every AI feature stays off until it is. TLDR ranking is now **one chat call per batch**
+> (prompt `tldr-rank-v2`: system + user message with the article and one `<sid>: <sentence>` line
+> per eligible sentence) answering JSON `{"scores":{"<sid>":0..1}}`; validation, top-k, batching,
+> the deadline, the generation row and the editor are unchanged. Adapter: `src/server/llm/chat.ts`
+> (`POST {base}/chat/completions`, `response_format: json_object` — dropped once if the provider
+> refuses it — same retry/timeout/error-code rules). Every call records its outcome on the
+> provider row; a failing provider is shown to the admin as a banner on every desk page. Writer
+> copy says "the AI" instead of "Jev". Internal identifiers (`src/server/jev/*`, `source: 'jev'`,
+> `JEV_*` error codes) keep their names for stored-data compatibility.
+
 Outcome of the lens: **AI augments the product** (outcome 2 in `agentic-ai.md`). blog0 is a
 conventional publishing app with exactly **one** AI capability — **Jev**, the TLDR line ranker.
 Everything else is deterministic code. Provider: **OpenRouter**. Model: **`typesafe/jev-1.13`**, an

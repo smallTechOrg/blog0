@@ -565,3 +565,16 @@
 .medcard__confirm { margin-top: 8px; display: grid; gap: 8px; }
 .medcard__confirm .admin-hint { margin: 0; }
 .medcard__newthumb { max-width: 100%; max-height: 120px; object-fit: contain; justify-self: start; border: 1px solid var(--border); border-radius: 6px; }
+
+/* Admin → Site → AI provider (SMA-44) */
+.aiset { margin-top: 28px; scroll-margin-top: calc(var(--headh, 56px) + 16px); }
+.aiset__status { margin: 0 0 14px; padding: 8px 12px; border-radius: 6px; font-family: var(--font-head); font-size: 14px; border: 1px solid var(--border); }
+.aiset__status--ok { color: var(--text); }
+.aiset__status--error { color: var(--accent-ink); font-weight: 600; background: var(--accent-softer); border-color: var(--accent-soft); }
+.aiset__status--muted { color: var(--muted); }
+.admin-link { appearance: none; border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.admin-link:disabled { opacity: 0.5; cursor: default; }
+
+/* The desk-wide banner when the AI provider is failing (SMA-44) */
+.aibanner { margin: 0; padding: 9px 20px; font-family: var(--font-head); font-size: 14px; color: var(--accent-ink); background: var(--accent-softer); border-bottom: 1px solid var(--accent-soft); }
+.aibanner a { color: inherit; font-weight: 600; }

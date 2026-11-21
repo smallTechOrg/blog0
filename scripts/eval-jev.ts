@@ -1,4 +1,4 @@
-// pnpm eval:jev — Jev ranking evaluation (spec/agent.md §7). Runs Jev for real on the 5 seed posts +
+// pnpm eval:jev — TLDR AI ranking evaluation (SMA-44: a chat model through an OpenAI-compatible endpoint) (spec/agent.md §7). Runs Jev for real on the 5 seed posts +
 // tests/fixtures/articles/hard-cases.md and prints, per article: slug, N, k, batches, the top k lines
 // with their scores in rank order, coverage (span of selected indices / N), thirds covered and picks
 // per third (first/middle/last, "clustered" when all k fall in one third), input/output tokens,
@@ -13,14 +13,14 @@ import './lib/allow-server-only';
 import { loadEnvConfig } from '@next/env';
 
 import { CONFIG_DEFAULTS, Secret } from '../src/server/config';
+import { ChatClient } from '../src/server/llm/chat';
 import { renderArticle } from '../src/server/content/render';
 import { loadJevEvalArticles } from '../src/server/jev/articles';
 import { jevInputFromRendered } from '../src/server/jev/build-input';
-import { JEV_PROMPT_VERSION } from '../src/server/jev/prompt';
+import { RANK_PROMPT_VERSION } from '../src/server/jev/prompt';
 import { rankScores } from '../src/server/jev/rank';
 import { runJev } from '../src/server/jev/run';
-import { openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '../src/server/llm/key';
-import { OpenRouterDecisionsClient } from '../src/server/llm/openrouter';
+import { evalAiProvider, openRouterKeyStatus, PENDING_KEY_REASON, realKeyRequired } from '../src/server/llm/key';
 
 function plain(name: string): string | undefined {
   const value = (process.env[name] ?? '').replace(/\s+#.*$/, '').trim();
@@ -53,15 +53,15 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const model = plain('BLOG0_JEV_MODEL') ?? CONFIG_DEFAULTS.jevModel;
-  const timeoutMs = Number(plain('BLOG0_JEV_TIMEOUT_MS') ?? CONFIG_DEFAULTS.jevTimeoutMs);
-  const llm = new OpenRouterDecisionsClient({
-    apiKey: new Secret((process.env.BLOG0_OPENROUTER_API_KEY ?? '').trim()),
-    decisionsUrl: plain('BLOG0_OPENROUTER_DECISIONS_URL') ?? CONFIG_DEFAULTS.openrouterDecisionsUrl,
+  const provider = evalAiProvider(process.env);
+  const model = provider.model;
+  const llm = new ChatClient({
+    apiKey: new Secret(provider.apiKey),
+    baseUrl: provider.baseUrl,
     referer: plain('BLOG0_PUBLIC_BASE_URL') ?? CONFIG_DEFAULTS.publicBaseUrl,
   });
 
-  console.log(`eval:jev · model ${model} · prompt ${JEV_PROMPT_VERSION}\n`);
+  console.log(`eval:jev · ${new URL(provider.baseUrl).host} · model ${model} · prompt ${RANK_PROMPT_VERSION}\n`);
   let failures = 0;
   let runs = 0;
   let totalCost = 0;
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
       requestId: `eval-jev-${article.slug}`,
     });
     const n = input.sentences.length;
-    const res = await runJev(input, { llm, model, now: () => performance.now(), timeoutMs });
+    const res = await runJev(input, { llm, model, now: () => performance.now() });
     runs++;
     totalLatency += res.latencyMs;
     totalIn += res.usage.inputTokens ?? 0;

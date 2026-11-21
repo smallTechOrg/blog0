@@ -57,7 +57,6 @@ export async function register(): Promise<void> {
           session_secret: config.sessionSecretSource,
         }
       : {}),
-    openrouter_key: config.openrouterApiKey === null ? 'not configured (Jev disabled)' : 'configured',
   });
 
   if (process.env.NODE_ENV === 'production') {

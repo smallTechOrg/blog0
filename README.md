@@ -82,9 +82,9 @@ Edit any component under `src/` and the browser updates in place.
 - **Re-running is safe:** the second run prints `5 posts: 0 created`, `decks: 0 seeded (0 calls)`,
   `listen: humans-are-software already has a recording` and no new password (a recording you
   removed in the admin is not re-added).
-- **Jev without a key:** the TLDR tab shows "No OpenRouter key configured" and **Generate** is
-  disabled (the API answers `503 LLM_NOT_CONFIGURED`). Add `BLOG0_OPENROUTER_API_KEY=<key>` to
-  `.env` and restart `pnpm dev:design` to use Jev for real.
+- **AI is off until you set a provider:** the TLDR tab shows "No AI provider set up" and
+  **Generate** is disabled (the API answers `503 LLM_NOT_CONFIGURED`). Add any OpenAI-compatible
+  endpoint, model and API key in **Admin → Site → AI provider** and press **Test**.
 - **Session secret:** generated once into `var/pglite-session-secret` (mode 0600) unless
   `BLOG0_SESSION_SECRET` is set.
 - **Blank a value from `.env` for one run:** set it empty in the shell, e.g.
@@ -139,15 +139,15 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
    ```
 
    Required: `BLOG0_DATABASE_URL`, `BLOG0_TEST_DATABASE_URL`, `BLOG0_SESSION_SECRET` (generate
-   with `openssl rand -base64 48`), `BLOG0_OPENROUTER_API_KEY` (from
-   <https://openrouter.ai/keys>). For seeding the first admin also `BLOG0_ADMIN_EMAIL`,
+   with `openssl rand -base64 48`). The AI provider is not an env setting: set it in
+   **Admin → Site → AI provider** once the site runs (SMA-44). `BLOG0_OPENROUTER_API_KEY` is only
+   for the real-key tests and `pnpm eval:jev`. For seeding the first admin also `BLOG0_ADMIN_EMAIL`,
    `BLOG0_ADMIN_PASSWORD` (≥ 12 characters) and optionally `BLOG0_ADMIN_NAME` (see step 7).
    `.env` is gitignored — never commit it. Every variable is listed in the
    [table below](#environment-variables).
 
-   No OpenRouter key yet? Set `BLOG0_OPENROUTER_API_KEY=pending-placeholder`: the server boots
-   (the `replace-with-…` template value is rejected at boot), real-key tests report
-   `PENDING KEY` (see [Tests](#tests)), and TLDR **Generate** fails until a real key is set.
+   No OpenRouter key for the tests? Leave `BLOG0_OPENROUTER_API_KEY=pending-placeholder`: real-key
+   tests report `PENDING KEY` (see [Tests](#tests)).
 
    Verify: `test -f .env && echo ".env present"`
 
@@ -185,23 +185,20 @@ Every command below runs from the repo root: `cd /Users/sai/Workspace/Code/blog0
 
    ```bash
    pnpm db:verify
-   # blog0_dev @ PostgreSQL 18.1 — 7 applied (latest 0006_known_device), 0 pending: OK
+   # blog0_dev @ PostgreSQL 18.1 — 8 applied (latest 0007_ai_provider), 0 pending: OK
    ```
 
-6. **Prove the OpenRouter key and Jev** (the decisions model `typesafe/jev-1.13`) with one real
-   1-question decisions call (prints only booleans/numbers, never the key; exit 1 on any failure):
+6. **(Optional) prove the tests' AI key** with one tiny real chat call (prints only
+   booleans/numbers, never the key; exit 1 on any failure). The site's own provider is set later
+   in **Admin → Site → AI provider**, where **Test** does the same check:
 
    ```bash
    pnpm check:openrouter
    # key present: true
-   # key valid: true
-   # decisions call: ok · model typesafe/jev-1.13 · noul 0.99 · tokens 338/20 · cost $0.000014 · 489 ms
+   # endpoint: openrouter.ai · model: openai/gpt-4.1-mini
+   # model answered: true (812 ms)
+   # json reply ok: true
    ```
-
-   Decisions models are not in OpenRouter's `/models` catalog and there is no fallback model. If
-   it prints `BLOG0_JEV_MODEL=<slug> is not an available decisions model`, remove the
-   `BLOG0_JEV_MODEL` line from `.env` (the default is `typesafe/jev-1.13`) or set it to a
-   decisions model.
 
 7. **Seed the site row and the first admin** into the dev database (idempotent; an existing
    admin's password only changes with `--reset-admin-password`). It reads
@@ -523,11 +520,9 @@ refuses to start and lists every problem when a required value is missing or inv
 | `BLOG0_SITE_SLUG` | no | `blog0` | which `site` row this process serves |
 | `BLOG0_TRUSTED_PROXY_HOPS` | no | `0` | reverse proxies in front of the app that append to `X-Forwarded-For` (the sign-in hard caps and the newsletter per-IP cap key on the Nth-from-right entry); `0` = no proxy, forwarded headers ignored, those per-IP caps skipped (sign-in is then protected by the progressive per-email delay alone — never a lockout) |
 | `BLOG0_SESSION_SECRET` | yes on postgres | pglite: generated | ≥ 32 chars (`openssl rand -base64 48`); on `pglite://` an absent value is generated once into `var/pglite-session-secret` (0600) |
-| `BLOG0_OPENROUTER_API_KEY` | yes on postgres | pglite: none | validated at boot for presence (`replace-with-…` rejected); `pending-placeholder` boots but real-key tests report PENDING KEY; liveness by `pnpm check:openrouter`. On `pglite://` absent/placeholder = Jev disabled (`LLM_NOT_CONFIGURED`) |
-| `BLOG0_OPENROUTER_BASE_URL` | no | `https://openrouter.ai/api/v1` | only `pnpm check:openrouter`'s `GET {base}/key` |
-| `BLOG0_OPENROUTER_DECISIONS_URL` | no | `https://openrouter.ai/api/alpha/decisions` | the Jev endpoint (OpenRouter decisions API) |
-| `BLOG0_JEV_MODEL` | no | `typesafe/jev-1.13` | must be an OpenRouter **decisions** model; no fallback (`spec/agent.md` §3) |
-| `BLOG0_JEV_TIMEOUT_MS` | no | `45000` | per decisions request |
+| `BLOG0_OPENROUTER_API_KEY` | no | — | tests/scripts only (SMA-44): the real-key tests, `pnpm eval:jev` and `pnpm check:openrouter`; a placeholder → real-key tests report PENDING KEY. The app's AI provider is set in Admin → Site → AI provider |
+| `BLOG0_EVAL_AI_BASE_URL` | no | `https://openrouter.ai/api/v1` | tests/scripts only: the OpenAI-compatible endpoint they use |
+| `BLOG0_EVAL_AI_MODEL` | no | `openai/gpt-4.1-mini` | tests/scripts only: the chat model they use |
 | `BLOG0_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `BLOG0_LOG_FILE` | no | — | append JSON lines here too (E2E sets it) |
 | `BLOG0_ADMIN_EMAIL` / `BLOG0_ADMIN_PASSWORD` / `BLOG0_ADMIN_NAME` | seed + E2E | name `Sai Krishna V` | first admin for `pnpm db:seed`; password ≥ 12; local dev may export them from gitignored `var/dev-admin.env` |

@@ -39,10 +39,8 @@ describe('loadConfig', () => {
     expect(config.port).toBe(3410);
     expect(config.publicBaseUrl).toBe('http://localhost:3410');
     expect(config.siteSlug).toBe('blog0');
-    expect(config.openrouterBaseUrl).toBe('https://openrouter.ai/api/v1');
-    expect(config.openrouterDecisionsUrl).toBe('https://openrouter.ai/api/alpha/decisions');
-    expect(config.jevModel).toBe('typesafe/jev-1.13');
-    expect(config.jevTimeoutMs).toBe(45_000);
+    // SMA-44: no AI settings in env — the provider lives in the database (Admin → Site → AI provider).
+    expect(Object.keys(config).filter((k) => /openrouter|jev/i.test(k))).toEqual([]);
     expect(config.logLevel).toBe('info');
     expect(config.logFile).toBeNull();
     expect(config.adminName).toBe('Vennamaneni Sai Krishna');
@@ -60,9 +58,8 @@ describe('loadConfig', () => {
     expect(run).toThrow(ConfigError);
     expect(run).toThrow(/\.env/);
     const problems = problemsOf(env);
-    expect(problems).toHaveLength(2);
+    expect(problems).toHaveLength(1);
     expect(problems.join('\n')).toMatch(/BLOG0_SESSION_SECRET/);
-    expect(problems.join('\n')).toMatch(/BLOG0_OPENROUTER_API_KEY/);
   });
 
   it('rejects invalid values with a precise message per variable', () => {
@@ -74,8 +71,6 @@ describe('loadConfig', () => {
       BLOG0_PUBLIC_BASE_URL: 'not a url',
       BLOG0_SITE_SLUG: 'Not A Slug',
       BLOG0_ADMIN_PASSWORD: 'short',
-      BLOG0_JEV_TIMEOUT_MS: '12abc',
-      BLOG0_OPENROUTER_DECISIONS_URL: 'ftp://openrouter.ai/api/alpha/decisions',
     });
 
     const problems = problemsOf(env);
@@ -89,18 +84,14 @@ describe('loadConfig', () => {
         expect.stringMatching(/^BLOG0_PUBLIC_BASE_URL must be an absolute/),
         expect.stringMatching(/^BLOG0_SITE_SLUG must be lowercase/),
         expect.stringMatching(/^BLOG0_ADMIN_PASSWORD must be at least 12/),
-        expect.stringMatching(/^BLOG0_JEV_TIMEOUT_MS must be an integer/),
-        expect.stringMatching(/^BLOG0_OPENROUTER_DECISIONS_URL must be an absolute http\(s\) URL/),
       ]),
     );
-    expect(problems).toHaveLength(9);
+    expect(problems).toHaveLength(7);
   });
 
   it('trims values and strips a trailing comment from non-secret fields', () => {
     const env = baseEnv({
       BLOG0_PORT: ' 4000   # local override',
-      BLOG0_JEV_MODEL: 'typesafe/jev-1.12 # older decisions model',
-      BLOG0_OPENROUTER_DECISIONS_URL: ' https://proxy.example.com/api/alpha/decisions/  # proxy',
       BLOG0_PUBLIC_BASE_URL: 'https://blog.example.com/  ',
       BLOG0_LOG_FILE: '   ',
       BLOG0_SESSION_SECRET: `  ${SESSION_SECRET}#keep  `,
@@ -109,8 +100,6 @@ describe('loadConfig', () => {
     const config = loadConfig(env);
 
     expect(config.port).toBe(4000);
-    expect(config.jevModel).toBe('typesafe/jev-1.12');
-    expect(config.openrouterDecisionsUrl).toBe('https://proxy.example.com/api/alpha/decisions');
     expect(config.publicBaseUrl).toBe('https://blog.example.com');
     expect(config.logFile).toBeNull();
     expect(config.sessionSecret.reveal()).toBe(`${SESSION_SECRET}#keep`);
@@ -119,7 +108,7 @@ describe('loadConfig', () => {
   it('never prints a secret through JSON.stringify, String() or util.inspect', () => {
     const config = loadConfig(baseEnv({ BLOG0_ADMIN_PASSWORD: 'admin-password-long-enough' }));
 
-    const outputs = [JSON.stringify(config), String(config.openrouterApiKey), `${config.sessionSecret}`, inspect(config, { depth: 5 })];
+    const outputs = [JSON.stringify(config), `${config.sessionSecret}`, inspect(config, { depth: 5 })];
 
     for (const output of outputs) {
       expect(output).not.toContain(API_KEY);
@@ -127,14 +116,12 @@ describe('loadConfig', () => {
       expect(output).not.toContain('admin-password-long-enough');
     }
     expect(JSON.stringify(config)).toContain('[redacted]');
-    expect(config.openrouterApiKey).toBeInstanceOf(Secret);
-    expect(config.openrouterApiKey?.reveal()).toBe(API_KEY);
+    expect(config.sessionSecret).toBeInstanceOf(Secret);
   });
 
   it('rejects the .env.example placeholder secrets with a message pointing at .env, never echoing the value', () => {
     const env = baseEnv({
       BLOG0_SESSION_SECRET: 'replace-with-output-of-openssl-rand-base64-48',
-      BLOG0_OPENROUTER_API_KEY: 'replace-with-your-openrouter-key',
       BLOG0_ADMIN_PASSWORD: 'replace-with-a-12-plus-char-password',
       BLOG0_NEW_ADMIN_PASSWORD: '  replace-with-anything-long-enough  ',
     });
@@ -151,7 +138,6 @@ describe('loadConfig', () => {
 
     expect(problems).toEqual([
       expect.stringMatching(/^BLOG0_SESSION_SECRET still holds the \.env\.example placeholder .*\.env/),
-      expect.stringMatching(/^BLOG0_OPENROUTER_API_KEY still holds the \.env\.example placeholder .*\.env/),
       expect.stringMatching(/^BLOG0_ADMIN_PASSWORD still holds the \.env\.example placeholder .*\.env/),
       expect.stringMatching(/^BLOG0_NEW_ADMIN_PASSWORD still holds the \.env\.example placeholder .*\.env/),
     ]);
@@ -159,15 +145,14 @@ describe('loadConfig', () => {
     expect(message).not.toMatch(/replace-with-/);
   });
 
-  it('accepts real-looking secrets and the keyless test value pending-placeholder', () => {
+  it('accepts a real-looking secret, and ignores BLOG0_OPENROUTER_API_KEY (SMA-44), even a placeholder', () => {
     const env = baseEnv({
-      BLOG0_OPENROUTER_API_KEY: 'pending-placeholder',
+      BLOG0_OPENROUTER_API_KEY: 'replace-with-your-openrouter-key',
       BLOG0_SESSION_SECRET: 'a-secret-that-merely-contains-replace-with-inside-it',
     });
 
     const config = loadConfig(env);
 
-    expect(config.openrouterApiKey?.reveal()).toBe('pending-placeholder');
     expect(config.sessionSecret.reveal()).toBe('a-secret-that-merely-contains-replace-with-inside-it');
   });
 
@@ -196,7 +181,6 @@ describe('loadConfig — designer mode (pglite engine)', () => {
     expect(config.sessionSecret.reveal()).toBe(GENERATED);
     expect(config.sessionSecretSource).toBe('generated');
     expect(calls).toBe(1);
-    expect(config.openrouterApiKey).toBeNull();
   });
 
   it('treats an empty BLOG0_DATABASE_URL like an absent one', () => {
@@ -218,14 +202,6 @@ describe('loadConfig — designer mode (pglite engine)', () => {
     expect(config.sessionSecret.reveal()).toBe(SESSION_SECRET);
     expect(config.sessionSecretSource).toBe('env');
     expect(calls).toBe(0);
-    expect(config.openrouterApiKey?.reveal()).toBe(API_KEY);
-  });
-
-  it('turns a placeholder OpenRouter key into "not configured" instead of a boot error', () => {
-    for (const key of ['replace-with-your-openrouter-key', 'pending-placeholder', '  ']) {
-      const config = loadConfig({ BLOG0_DATABASE_URL: 'pglite://memory', BLOG0_OPENROUTER_API_KEY: key }, { designerSessionSecret });
-      expect(config.openrouterApiKey).toBeNull();
-    }
   });
 
   it('still validates a session secret that IS set (too short, placeholder)', () => {
@@ -236,13 +212,10 @@ describe('loadConfig — designer mode (pglite engine)', () => {
     expect(placeholder).toEqual([expect.stringMatching(/^BLOG0_SESSION_SECRET still holds the \.env\.example placeholder/)]);
   });
 
-  it('keeps both secrets required on postgres even though pglite relaxes them', () => {
+  it('keeps the session secret required on postgres even though pglite relaxes it', () => {
     const problems = problemsOf({ BLOG0_DATABASE_URL: 'postgres://sai@localhost:5432/blog0_dev', BLOG0_OPENROUTER_API_KEY: '' });
 
-    expect(problems).toEqual([
-      expect.stringMatching(/^BLOG0_SESSION_SECRET is required/),
-      expect.stringMatching(/^BLOG0_OPENROUTER_API_KEY is required/),
-    ]);
+    expect(problems).toEqual([expect.stringMatching(/^BLOG0_SESSION_SECRET is required/)]);
   });
 
   it('rejects an empty pglite:// directory and never echoes a postgres URL in the error', () => {

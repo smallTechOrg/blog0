@@ -1,20 +1,39 @@
-// Deterministic stub LlmClient for Jev unit tests. Every response carries `provider: '<stub:jev>'`
-// so it can never be mistaken for real model output (real-key paths never use it).
+// Deterministic stub LlmClient for the TLDR ranking unit tests (SMA-44: a chat client). Every
+// response carries `provider: '<stub:jev>'` so it can never be mistaken for real model output
+// (real-key paths never use it). Replies are given as scores by sentence id; the stub turns them
+// into the model's JSON text `{"scores":{…}}` (legacy `{ type: 'noul', noul }` values are unwrapped).
 import type { Paragraph, Sentence } from '@/lib/content/types';
 import type { JevInput } from '@/server/jev/state';
-import type { DecisionsRequest, DecisionsResponse, LlmClient, LlmUsage } from '@/server/llm/types';
+import type { ChatRequest, ChatResponse, LlmClient, LlmUsage } from '@/server/llm/types';
 
-/** A reply: answers by id, an Error to throw, or a function of the request. */
-export type StubReply =
-  | Error
-  | { error: Error; delayMs: number }
-  | { answers: Record<string, unknown>; usage?: Partial<LlmUsage>; delayMs?: number }
-  | ((req: DecisionsRequest) => { answers: Record<string, unknown>; usage?: Partial<LlmUsage>; delayMs?: number } | Error);
+/** A recorded request, plus the sentence ids/texts of its <sentences> block (`questions`). */
+export type StubRequest = ChatRequest & { batch: { index: number; count: number }; questions: Record<string, string> };
+
+/** A reply: scores by id, raw content, an Error to throw, or a function of the request. */
+type StubAnswer = { answers: Record<string, unknown>; usage?: Partial<LlmUsage>; delayMs?: number } | { content: string; usage?: Partial<LlmUsage>; delayMs?: number };
+export type StubReply = Error | { error: Error; delayMs: number } | StubAnswer | ((req: StubRequest) => StubAnswer | Error);
 
 export const STUB_PROVIDER = '<stub:jev>';
 
+/** The `id: text` lines of the user message's <sentences> block. */
+export function sentencesOf(req: ChatRequest): Record<string, string> {
+  const user = req.messages.find((m) => m.role === 'user')?.content ?? '';
+  const block = /<sentences>\n([\s\S]*?)\n<\/sentences>/.exec(user)?.[1] ?? '';
+  const out: Record<string, string> = {};
+  for (const line of block.split('\n')) {
+    const m = /^(\S+): (.*)$/.exec(line);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+
+function unwrap(value: unknown): unknown {
+  if (typeof value === 'object' && value !== null && (value as { type?: unknown }).type === 'noul') return (value as { noul: unknown }).noul;
+  return value;
+}
+
 export class StubLlm implements LlmClient {
-  readonly requests: DecisionsRequest[] = [];
+  readonly requests: StubRequest[] = [];
   /** Max requests observed in flight at once. */
   maxInFlight = 0;
   #inFlight = 0;
@@ -32,8 +51,9 @@ export class StubLlm implements LlmClient {
     this.#advance = opts.advance ?? null;
   }
 
-  async decide(req: DecisionsRequest): Promise<DecisionsResponse> {
-    this.requests.push(structuredClone(req));
+  async chat(raw: ChatRequest): Promise<ChatResponse> {
+    const req: StubRequest = { ...structuredClone(raw), batch: raw.batch ?? { index: 1, count: 1 }, questions: sentencesOf(raw) };
+    this.requests.push(req);
     const n = this.requests.length;
     this.#inFlight += 1;
     this.maxInFlight = Math.max(this.maxInFlight, this.#inFlight);
@@ -53,9 +73,13 @@ export class StubLlm implements LlmClient {
       const delay = reply.delayMs ?? 0;
       if (this.#advance) this.#advance(delay);
       else await new Promise((resolve) => setTimeout(resolve, delay));
-      const body = { answers: reply.answers, provider: STUB_PROVIDER, id: `<stub:jev>-${n}` };
+      const content =
+        'content' in reply
+          ? reply.content
+          : JSON.stringify({ scores: Object.fromEntries(Object.entries(reply.answers).map(([k, v]) => [k, unwrap(v)])) });
+      const body = { id: `<stub:jev>-${n}`, provider: STUB_PROVIDER, choices: [{ message: { role: 'assistant', content } }] };
       return {
-        answers: reply.answers,
+        content,
         usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.0001, ...reply.usage },
         providerGenerationId: `<stub:jev>-${n}`,
         provider: STUB_PROVIDER,
@@ -107,12 +131,12 @@ export function makeInput(sentences: Sentence[], overrides: Partial<JevInput> = 
 
 /** Answers every question of a request with relevance(sid) (default: a deterministic spread). */
 export function answerAll(relevance: (sid: string, i: number) => unknown = (_sid, i) => ((i * 37) % 100) / 100) {
-  return (req: DecisionsRequest) => ({
-    answers: Object.fromEntries(Object.keys(req.questions).map((sid, i) => [sid, { type: 'noul', noul: relevance(sid, i) }])),
+  return (req: StubRequest) => ({
+    answers: Object.fromEntries(Object.keys(req.questions).map((sid, i) => [sid, relevance(sid, i)])),
   });
 }
 
 /** Answers by sid from a fixed map (ids not in the request are returned too — "extra"). */
 export function answersFor(scores: Record<string, number>): { answers: Record<string, unknown> } {
-  return { answers: Object.fromEntries(Object.entries(scores).map(([sid, noul]) => [sid, { type: 'noul', noul }])) };
+  return { answers: { ...scores } };
 }

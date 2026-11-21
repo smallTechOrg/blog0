@@ -2,8 +2,9 @@ import 'server-only';
 
 import type { Paragraph, Sentence } from '@/lib/content/types';
 
-// Jev state + result types (spec/agent.md §2 "State"). Phase 8: Jev ranks — one relevance
-// probability per eligible sentence from the decisions model; the server takes the top k.
+// TLDR ranking state + result types (spec/agent.md §2 "State"). The AI scores every eligible
+// sentence 0–1 for relevance (SMA-44: one chat call per batch); the server takes the top k.
+// (The `Jev*` names date from the Jev decisions model, removed in SMA-44.)
 
 export interface JevInput {
   articleId: string;
@@ -24,7 +25,7 @@ export interface JevBounds {
   target: number;
 }
 
-/** relevance = Jev's noul probability in [0,1], exactly as returned. */
+/** relevance = the model's score in [0,1], exactly as returned. */
 export interface JevScore {
   index: number;
   sid: string;
@@ -39,13 +40,13 @@ export interface JevUsage {
   providerGenerationIds: string[];
 }
 
-/** One decisions request: the questions (by sid, document order) and the request body size in chars. */
+/** One chat request: the sentences it scores (by sid, document order) and its message size in chars. */
 export interface JevBatch {
   questions: Array<{ sid: string; index: number }>;
   requestChars: number;
 }
 
-/** The decisions `state` — identical in every batch. */
+/** The article as sent — identical in every batch. */
 export interface JevDecisionState {
   title: string;
   dek: string;
@@ -83,7 +84,7 @@ export interface JevRunState {
   state: JevDecisionState;
   /** Planned (≥ 1 once planned). */
   batches: JevBatch[];
-  /** Decisions requests actually sent (stored as ai_generation.attempts). */
+  /** Chat requests actually sent (stored as ai_generation.attempts). */
   requestsSent: number;
   /** Raw response bodies in batch order (kept only on failure). */
   rawOutputs: string[];
@@ -100,7 +101,7 @@ interface JevResultCommon {
   bounds: JevBounds;
   model: string;
   promptVersion: string;
-  /** Decisions requests sent (0 when a guard refused the input). */
+  /** Chat requests sent (0 when a guard refused the input). */
   batches: number;
   usage: JevUsage;
   latencyMs: number;
@@ -111,10 +112,12 @@ export type JevResult =
   | ({ ok: false; error: JevError; rawOutputs: string[] } & JevResultCommon);
 
 export const JEV_MAX_SENTENCES = 400;
-/** JSON.stringify(state).length limit (≈ 5 000 words; the model context is 32k tokens). */
+/** JSON.stringify(state).length limit (≈ 5 000 words; keeps a request well inside a 32k-token context). */
 export const JEV_MAX_STATE_CHARS = 32_000;
-/** A batch's JSON.stringify({ model, state, questions }).length stays ≤ this (≈ ≤ 21k tokens at 3 chars/token). */
+/** A batch's system + user message chars stay ≤ this (≈ ≤ 21k tokens at 3 chars/token). */
 export const JEV_REQUEST_CHAR_BUDGET = 64_000;
+/** Per-request timeout; capped at the time left before the deadline. */
+export const JEV_TIMEOUT_MS = 60_000;
 export const JEV_BATCH_CONCURRENCY = 3;
 /** Whole-run budget, under the route's maxDuration = 120 s. */
 export const JEV_DEADLINE_MS = 110_000;

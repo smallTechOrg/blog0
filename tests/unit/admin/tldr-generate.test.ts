@@ -6,27 +6,27 @@ const BASE = { elapsed: 0, editorDirty: false, hasDraft: false, latestSucceeded:
 
 describe('generateButtonLabel', () => {
   it('shows the idle labels per spec/ui.md §4', () => {
-    expect(generateButtonLabel({ ...BASE, phase: 'idle' })).toBe('Generate with Jev');
+    expect(generateButtonLabel({ ...BASE, phase: 'idle' })).toBe('Generate with AI');
     expect(generateButtonLabel({ ...BASE, phase: 'idle', hasDraft: true })).toBe('Regenerate');
     expect(generateButtonLabel({ ...BASE, phase: 'idle', latestSucceeded: true })).toBe('Regenerate');
     expect(generateButtonLabel({ ...BASE, phase: 'idle', editorDirty: true, hasDraft: true })).toBe('Save & generate');
   });
 
-  it('shows a busy label while the editor pre-save runs, then the Jev timer', () => {
+  it('shows a busy label while the editor pre-save runs, then the AI timer', () => {
     expect(generateButtonLabel({ ...BASE, phase: 'saving', editorDirty: true })).toBe('Saving…');
-    expect(generateButtonLabel({ ...BASE, phase: 'running', elapsed: 7, editorDirty: true })).toBe('Jev is ranking… 7s');
+    expect(generateButtonLabel({ ...BASE, phase: 'running', elapsed: 7, editorDirty: true })).toBe('AI is ranking… 7s');
   });
 });
 
 describe('generatedNotice', () => {
-  it('says how many sentences Jev ranked and that the top lines are already the draft deck (no "then Save deck")', () => {
+  it('says how many sentences the AI ranked and that the top lines are already the draft deck (no "then Save deck")', () => {
     const text = generatedNotice(42, 6);
-    expect(text).toBe('Jev ranked 42 sentences and picked the top 6 — saved as your draft deck. Edit them or publish.');
+    expect(text).toBe('The AI ranked 42 sentences and picked the top 6 — saved as your draft deck. Edit them or publish.');
     expect(text).not.toMatch(/Save deck/);
   });
 
   it('uses the singular for one sentence and one line', () => {
-    expect(generatedNotice(1, 1)).toBe('Jev ranked 1 sentence and picked the top line — saved as your draft deck. Edit them or publish.');
+    expect(generatedNotice(1, 1)).toBe('The AI ranked 1 sentence and picked the top line — saved as your draft deck. Edit them or publish.');
   });
 });
 

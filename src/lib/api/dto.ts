@@ -115,7 +115,7 @@ export interface PublishBlockedDetails { reasons: PublishBlockedReason[] }
 // TLDR
 // ---------------------------------------------------------------------------------------------
 
-// Phase 8: `reason` is gone from every TLDR DTO; `relevance` (Jev's score in [0,1], or null when the sentence
+// Phase 8: `reason` is gone from every TLDR DTO; `relevance` (the AI's score in [0,1], or null when the sentence
 // has no score in the article's latest succeeded generation — never scored, changed since, or a pre-Phase-8 generation)
 // takes its place. Source of every relevance value: spec/architecture.md §3 "Relevance in the editor".
 export interface SentenceDto { sid: string; index: number; pid: string; text: string; words: number; headingPath: string[]; relevance: number | null }
@@ -124,7 +124,7 @@ export interface GenerationDto {
   id: string; status: 'running' | 'succeeded' | 'failed'; model: string; promptVersion: string;
   requestedBy: string; startedAt: string; finishedAt: string | null; latencyMs: number | null;
   attempts: number;                              // decisions requests sent (1 unless the article was batched)
-  sentenceCount: number;                         // sentences sent to Jev (= scored on success)
+  sentenceCount: number;                         // sentences sent to the AI (= scored on success)
   promptTokens: number | null; completionTokens: number | null; totalTokens: number | null; costUsd: number | null;   // input / output / sum
   picks: Array<{ index: number; sid: string; relevance: number | null }> | null;   // the k selected sentences, document order; null unless succeeded
                                                                                     // (legacy generations: their picks with relevance null)
@@ -134,12 +134,12 @@ export interface TldrStateDto {
   status: FormatStatus;
   bounds: { min: number; max: number; target: number } | null;   // null when 0 eligible sentences
   sentences: SentenceDto[];                                       // current revision, EVERY sentence (SMA-35), DOCUMENT order (the client sorts by relevance)
-  eligibleCount: number;                                          // how many of them Jev ranks (≥ 5 words)
+  eligibleCount: number;                                          // how many of them the AI ranks (≥ 5 words)
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
-  /** False only when no OpenRouter key is configured (designer mode): Generate is disabled. */
-  jevAvailable: boolean;
+  /** False when no AI provider is set up (Admin → Site → AI provider): Generate is disabled. */
+  aiAvailable: boolean;
 }
 
 /** GET /api/admin/articles/:id/tldr */
@@ -308,6 +308,42 @@ export interface SiteSettingsDto {
 }
 /** GET / PATCH /api/admin/site → data. */
 export interface SiteSettingsResponse { site: SiteSettingsDto }
+
+// ---------------------------------------------------------------------------------------------
+// AI provider (SMA-44): Admin → Site → AI provider. The key never leaves the server.
+// ---------------------------------------------------------------------------------------------
+
+export interface AiProviderStatusDto {
+  /** The latest call failed (and nothing has succeeded since). */
+  failing: boolean;
+  lastOkAt: string | null;
+  lastErrorAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+}
+
+/** GET/PUT /api/admin/ai */
+export interface AiProviderDto {
+  /** Endpoint, model and a readable key are all set: AI features run. */
+  configured: boolean;
+  /** OpenAI-compatible base URL, e.g. https://api.openai.com/v1 ('' when unset). */
+  baseUrl: string;
+  model: string;
+  keySet: boolean;
+  /** Last 4 characters of the saved key. */
+  keyHint: string | null;
+  /** A key is stored but can't be decrypted (the server secret changed): enter it again. */
+  keyUnreadable: boolean;
+  status: AiProviderStatusDto;
+}
+export interface AiProviderResponse { ai: AiProviderDto }
+/** PUT /api/admin/ai — apiKey omitted keeps the saved key; null removes it. */
+export interface SaveAiProviderRequest { baseUrl: string; model: string; apiKey?: string | null }
+/** POST /api/admin/ai/test — any field omitted falls back to the saved value. */
+export interface TestAiProviderRequest { baseUrl?: string; model?: string; apiKey?: string }
+export type AiProviderTestResult =
+  | { ok: true; latencyMs: number; model: string; /** The model answered valid JSON as asked. */ jsonOk: boolean }
+  | { ok: false; code: string; message: string };
 /**
  * PATCH body: any subset of the editable fields (never `newsletter`). Texts are trimmed; required
  * texts must be non-blank; social URLs are http(s) or blank/null (blank clears it, and the footer

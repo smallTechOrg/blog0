@@ -1,11 +1,11 @@
-// runJev with a stub decisions client (responses carry provider '<stub:jev>'): ranking, top-k,
+// runJev with a stub chat client (responses carry provider '<stub:jev>'): ranking, top-k,
 // batching, concurrency, validation failures (no retry), usage summing, error mapping, logs.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildState } from '@/server/jev/build-input';
 import { loadRankPrompt } from '@/server/jev/prompt';
 import { runJev } from '@/server/jev/run';
-import { planBatches } from '@/server/jev/batches';
+import { batchMessages, planBatches } from '@/server/jev/batches';
 import { JEV_BATCH_CONCURRENCY, JEV_REQUEST_CHAR_BUDGET } from '@/server/jev/state';
 import { LlmError, type LlmErrorCode } from '@/server/llm/types';
 import { resetLoggerForTests } from '@/server/log';
@@ -18,7 +18,7 @@ function clock(step = 10) {
   return () => (t += step);
 }
 
-const MODEL = 'typesafe/jev-1.13';
+const MODEL = 'stub/model';
 
 /** Fixed relevance per sentence index (from the sid p-<n>-s<k> → index 2n+k). */
 const indexOf = (sid: string) => {
@@ -29,8 +29,11 @@ const indexOf = (sid: string) => {
 /** A budget that splits `n` sentences into about `parts` batches. */
 function budgetFor(n: number, parts: number): number {
   const input = makeInput(makeSentences(n));
-  const one = planBatches(input, buildState(input), loadRankPrompt(), MODEL, JEV_REQUEST_CHAR_BUDGET)[0].requestChars;
-  return Math.ceil(one / parts) + 600;
+  const state = buildState(input);
+  const prompt = loadRankPrompt();
+  const one = planBatches(input, state, prompt, JEV_REQUEST_CHAR_BUDGET)[0].requestChars;
+  const base = prompt.system.length + batchMessages({ questions: [], requestChars: 0 }, input, state, prompt)[1].content.length;
+  return base + Math.ceil((one - base) / parts) + 10;
 }
 
 describe('runJev', () => {
@@ -63,7 +66,7 @@ describe('runJev', () => {
     expect(res.bounds).toEqual({ min: 4, max: 5, target: 4 });
     expect(res.scores).toEqual(input.sentences.map((s, i) => ({ index: i, sid: s.sid, relevance: rel[i] })));
     expect(res.selected.map((p) => p.index)).toEqual([1, 3, 5, 7]);
-    expect(res).toMatchObject({ model: MODEL, promptVersion: 'jev-rank-v1', batches: 1 });
+    expect(res).toMatchObject({ model: MODEL, promptVersion: 'tldr-rank-v2', batches: 1 });
     expect(res.usage).toEqual({
       inputTokens: 100,
       outputTokens: 20,
@@ -75,10 +78,10 @@ describe('runJev', () => {
 
     expect(llm.requests).toHaveLength(1);
     const req = llm.requests[0];
-    expect(req).toMatchObject({ model: MODEL, requestId: 'req-jev', promptVersion: 'jev-rank-v1', timeoutMs: 1234, batch: { index: 1, count: 1 } });
-    expect(req.state).toEqual(buildState(input));
+    expect(req).toMatchObject({ model: MODEL, requestId: 'req-jev', purpose: 'tldr.rank', json: true, promptVersion: 'tldr-rank-v2', timeoutMs: 1234, batch: { index: 1, count: 1 } });
+    expect(req.messages[0]).toEqual({ role: 'system', content: loadRankPrompt().system });
+    expect(req.messages[1].content).toContain(buildState(input).article);
     expect(Object.keys(req.questions)).toEqual(input.sentences.map((s) => s.sid));
-    expect(Object.values(req.questions).every((q) => q.type === 'noul' && q.criteria.true !== '' && q.criteria.false !== '')).toBe(true);
 
     const run = logs.find('jev.run');
     expect(run).toHaveLength(1);
@@ -90,7 +93,7 @@ describe('runJev', () => {
       k: 4,
       batches: 1,
       model: MODEL,
-      prompt_version: 'jev-rank-v1',
+      prompt_version: 'tldr-rank-v2',
       outcome: 'ok',
       top_relevance: 0.95,
       kth_relevance: 0.7,
@@ -115,7 +118,7 @@ describe('runJev', () => {
   it('ignores extra answer ids and logs the count', async () => {
     const input = makeInput(makeSentences(4));
     const llm = new StubLlm([
-      (req) => ({ answers: { ...answerAll()(req).answers, 'p-99-s0': { type: 'noul', noul: 1 }, junk: 'x' } }),
+      (req) => ({ answers: { ...answerAll()(req).answers, 'p-99-s0': 1, junk: 'x' } }),
     ]);
     const res = await runJev(input, { llm, model: MODEL, now: clock() });
     expect(res.ok).toBe(true);
@@ -139,7 +142,7 @@ describe('runJev', () => {
     if (res.ok) return;
     expect(res.error).toEqual({
       code: 'LLM_INVALID_OUTPUT',
-      message: "Jev didn't score every sentence (1 of 10 missing or invalid) — try again, or pick lines yourself.",
+      message: "The AI didn't score every sentence (1 of 10 missing or invalid) — try again, or pick lines yourself.",
     });
     expect(llm.requests).toHaveLength(1);
     expect(res.batches).toBe(1);
@@ -149,7 +152,7 @@ describe('runJev', () => {
     expect(logs.find('jev.run')[0]).toMatchObject({ outcome: 'error', err_code: 'LLM_INVALID_OUTPUT', missing_answers: 1, batches: 1 });
   });
 
-  it.each([1.2, -0.1, Number.NaN, '0.7'])('a noul of %s fails the run with LLM_INVALID_OUTPUT (no imputed score)', async (bad) => {
+  it.each([1.2, -0.1, null, 'high'])('a score of %s fails the run with LLM_INVALID_OUTPUT (no imputed score)', async (bad) => {
     const llm = new StubLlm([answerAll((sid) => (sid === 'p-0-s0' ? bad : 0.5))]);
     const res = await runJev(makeInput(makeSentences(8)), { llm, model: MODEL, now: clock() });
     expect(!res.ok && res.error.code).toBe('LLM_INVALID_OUTPUT');
@@ -192,6 +195,22 @@ describe('runJev', () => {
     expect(llm.requests).toHaveLength(1);
   });
 
+  it('a reply that is not JSON of the asked shape fails with LLM_INVALID_OUTPUT and keeps the raw body', async () => {
+    const llm = new StubLlm([{ content: 'Sure! Here are my thoughts on the article…' }]);
+    const res = await runJev(makeInput(makeSentences(6)), { llm, model: MODEL, now: clock() });
+    expect(!res.ok && res.error.code).toBe('LLM_INVALID_OUTPUT');
+    expect(!res.ok && res.error.message).toContain('(6 of 6 missing or invalid)');
+    expect(!res.ok && res.rawOutputs).toHaveLength(1);
+  });
+
+  it('accepts the scores inside a Markdown fence', async () => {
+    const input = makeInput(makeSentences(4));
+    const scores = Object.fromEntries(input.sentences.map((s, i) => [s.sid, i / 10]));
+    const llm = new StubLlm([{ content: '```json\n' + JSON.stringify({ scores }) + '\n```' }]);
+    const res = await runJev(input, { llm, model: MODEL, now: clock() });
+    expect(res.ok && res.scores.map((x) => x.relevance)).toEqual([0, 0.1, 0.2, 0.3]);
+  });
+
   it('rethrows unexpected (non-LLM) errors after logging them', async () => {
     const llm = new StubLlm([new Error('bug')]);
     await expect(runJev(makeInput(makeSentences(10)), { llm, model: MODEL, now: clock() })).rejects.toThrow('bug');
@@ -223,7 +242,7 @@ describe('runJev batching', () => {
     resetLoggerForTests();
   });
 
-  it('a forced small budget sends ≥ 2 requests, each with the identical state; every sid scored once; usage summed', async () => {
+  it('a forced small budget sends ≥ 2 requests, each with the whole article; every sid scored once; usage summed', async () => {
     const input = makeInput(makeSentences(24));
     const llm = new StubLlm([], {
       fallback: (req) => ({ ...answerAll((sid) => indexOf(sid) / 100)(req), usage: { inputTokens: 50, outputTokens: 5, costUsd: 0.00002 } }),
@@ -238,7 +257,7 @@ describe('runJev batching', () => {
     expect(res.batches).toBe(n);
     const state = buildState(input);
     for (const [i, r] of llm.requests.entries()) {
-      expect(r.state).toEqual(state);
+      expect(r.messages[1].content).toContain(state.article);
       expect(r.batch).toEqual({ index: i + 1, count: n });
     }
     const asked = llm.requests.flatMap((r) => Object.keys(r.questions));

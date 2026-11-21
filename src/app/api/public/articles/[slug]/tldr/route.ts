@@ -5,7 +5,7 @@ import { loadPublishedArticle } from '@/server/public/articles';
 // GET /api/public/articles/:slug/tldr (spec/api.md) — the published deck for a card's
 // TLDR overlay. Public, read-only, published-only: unknown, malformed, unpublished slugs and
 // articles without a published deck are 404 NOT_FOUND. Only reader-facing deck data leaves the
-// server — slide texts, times — never sids, Jev reasons, generation ids or
+// server — slide texts, times — never sids, scores, generation ids or
 // cost. Cacheable for 60 s (`Cache-Control: public, max-age=60`); errors stay `no-store`.
 
 export const dynamic = 'force-dynamic';

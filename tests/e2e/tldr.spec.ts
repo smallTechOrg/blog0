@@ -2,13 +2,15 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import { createArticleApi, e2eAdmin, originOf, signIn, signInThroughForm } from './helpers/admin';
 import { markdownPlainText, readE2eArticle } from './helpers/article-text';
+import { saveProviderOutOfBand } from './helpers/ai';
 import { generationRows } from './helpers/db';
-import { jevKeyPlan, PENDING_KEY_TITLE } from './helpers/jev-key';
+import { evalProvider, jevKeyPlan, PENDING_KEY_TITLE } from './helpers/jev-key';
 import { LOG_NOT_WIRED_REASON, apiRequests, logFileNotWired, readServerLog } from './helpers/logs';
 
 // TLDR golden path (capability jev-tldr; spec/roadmap.md "How the user tests it"): sign in, paste
-// an article, live preview, save, Generate with Jev (real OpenRouter decisions call: Jev scores
-// every sentence and the top k become the deck, each line labelled "relevance 0.xx" — or a
+// an article, live preview, save, set up the AI provider in Admin → Site (SMA-44: Test, then Save),
+// Generate with AI (a real OpenAI-compatible chat call: the model scores every sentence and the top
+// k become the deck, each line labelled "relevance 0.xx" — or a
 // visible PENDING KEY skip and the hand-pick fallback), hand-edit + preview + save the deck, publish, read it
 // live, play the TLDR deck, then edit a deck sentence → stale, the live page keeps the old deck,
 // nothing regenerates. Finally the server log carries the api.request / llm.call lines.
@@ -21,9 +23,10 @@ const TOPIC = 'Op-Ed';
 const MARKDOWN = readE2eArticle();
 const ARTICLE_TEXT = markdownPlainText(MARKDOWN);
 
-// Phase 8: Jev is the decisions model typesafe/jev-1.13 ranking with prompt jev-rank-v1 (spec/agent.md).
-const JEV_MODEL = 'typesafe/jev-1.13';
-const JEV_PROMPT_VERSION = 'jev-rank-v1';
+// SMA-44: the site's AI provider (here the eval provider: OpenRouter's chat endpoint) ranks with tldr-rank-v2.
+const EVAL = evalProvider();
+const JEV_MODEL = EVAL.model;
+const JEV_PROMPT_VERSION = 'tldr-rank-v2';
 const RELEVANCE = /^relevance [01]\.\d\d$/;
 
 const keyPlan = jevKeyPlan();
@@ -139,7 +142,41 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     expect(await res.text()).toContain('That article isn’t here.');
   });
 
-  test(`Generate with Jev (real OpenRouter call)${pendingKey ? ` — ${PENDING_KEY_TITLE}` : ''}`, async () => {
+  test(`the AI provider in Admin → Site: off by default, then set up and Test works (SMA-44)${pendingKey ? ` — ${PENDING_KEY_TITLE}` : ''}`, async () => {
+    test.skip(keyPlan === 'pending-skip', PENDING_KEY_TITLE);
+    expect(keyPlan, 'CI=true requires a real BLOG0_OPENROUTER_API_KEY (PENDING KEY is a failure under CI)').toBe('real');
+    const { page, articleId } = journey();
+    // Nothing is set up by default: the TLDR tab says so and Generate is off.
+    await page.getByRole('tab', { name: /^TLDR/ }).click();
+    await expect(page.locator('#panel-tldr').getByTestId('ai-no-provider')).toContainText('No AI provider set up');
+    await page.goto('/admin/site#ai');
+    const card = page.locator('#ai');
+    await expect(card.getByTestId('ai-status')).toHaveText('Not set up — AI features are off.');
+    // An endpoint and model without a key do not save.
+    await card.getByLabel('Endpoint').fill(EVAL.baseUrl);
+    await card.getByLabel('Model').fill(EVAL.model);
+    await card.getByRole('button', { name: 'Save' }).click();
+    await expect(card.getByTestId('ai-note')).toHaveText('Enter the API key.');
+
+    // The key goes in out of band (never typed into the browser — see helpers/ai.ts).
+    await saveProviderOutOfBand(EVAL);
+    await page.reload();
+    await expect(card.getByTestId('ai-status')).toHaveText('Set up — no calls yet. Use Test to check it.');
+    await expect(card.getByLabel('Endpoint')).toHaveValue(EVAL.baseUrl);
+    await expect(card.getByLabel('Model')).toHaveValue(EVAL.model);
+    await expect(card.getByLabel('API key')).toHaveValue('');
+    await expect(card.getByLabel('API key')).toHaveAttribute('placeholder', `Saved (…${EVAL.apiKey.slice(-4)}) — type to replace`);
+    expect(await page.content(), 'the key never comes back to the page').not.toContain(EVAL.apiKey);
+
+    await card.getByRole('button', { name: 'Test' }).click();
+    await expect(card.getByTestId('ai-note')).toContainText(`Works — ${EVAL.model} answered in`, { timeout: 30_000 });
+    await expect(card.getByTestId('ai-status')).toHaveText(/^Working — last call (just now|1 min ago)\.$/);
+
+    await page.goto(`/admin/articles/${articleId}`);
+    await expect(page.getByRole('tab', { name: /^TLDR/ })).toBeVisible();
+  });
+
+  test(`Generate with AI (real chat-model call)${pendingKey ? ` — ${PENDING_KEY_TITLE}` : ''}`, async () => {
     test.skip(keyPlan === 'pending-skip', PENDING_KEY_TITLE);
     expect(keyPlan, 'CI=true requires a real BLOG0_OPENROUTER_API_KEY (PENDING KEY is a failure under CI)').toBe('real');
     test.setTimeout(180_000);
@@ -148,12 +185,12 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await expect(page.locator('#panel-tldr .tldrtab__empty')).toContainText('No deck yet.');
 
     const panel = page.locator('#panel-tldr');
-    await expect(panel.locator('.tldrtab__head .admin-hint')).toHaveText(/^Jev will pick (the top \d+|all \d+) lines for this length$/);
+    await expect(panel.locator('.tldrtab__head .admin-hint')).toHaveText(/^The AI will pick (the top \d+|all \d+) lines for this length$/);
 
-    await page.getByRole('button', { name: 'Generate with Jev' }).click();
+    await page.getByRole('button', { name: 'Generate with AI' }).click();
 
     await expect(panel.locator('.admin-ok')).toContainText(
-      /Jev ranked \d+ sentences and picked the top \d+ — saved as your draft deck/,
+      /The AI ranked \d+ sentences and picked the top \d+ — saved as your draft deck/,
       { timeout: 150_000 },
     );
     const lines = await deckTexts(page);
@@ -164,16 +201,16 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
       expect(articleLines, `deck line is one of the article's sentences: ${line}`).toContain(line);
       expect(ARTICLE_TEXT, 'deck line is verbatim from the article').toContain(line);
     }
-    // Each deck line shows Jev's relevance score instead of a reason; no reasons anywhere.
+    // Each deck line shows the AI's relevance score instead of a reason; no reasons anywhere.
     const metas = await panel.locator('.deck__meta').allInnerTexts();
     expect(metas).toHaveLength(lines.length);
-    for (const meta of metas) expect(meta).toMatch(/^Jev · relevance [01]\.\d\d$/);
+    for (const meta of metas) expect(meta).toMatch(/^AI · relevance [01]\.\d\d$/);
     for (const rel of await panel.locator('.deck__meta .tldr-rel').allInnerTexts()) expect(rel).toMatch(RELEVANCE);
     await expect(panel.locator('.deck__reason')).toHaveCount(0);
-    await expect(panel.locator('.deck')).not.toContainText(/\breasons?\b|Jev:/i);
+    await expect(panel.locator('.deck')).not.toContainText(/\breasons?\b|Jev/i);
     await expect(panel.locator('.tldrtab__meta')).toHaveText(
       new RegExp(
-        `^Jev · ${JEV_MODEL.replace(/[./]/g, '\\$&')} · ${JEV_PROMPT_VERSION} · ranked \\d+ sentences( in \\d+ requests)? · ` +
+        `^AI · ${JEV_MODEL.replace(/[./-]/g, '\\$&')} · ${JEV_PROMPT_VERSION} · ranked \\d+ sentences( in \\d+ requests)? · ` +
           `[\\d,]+ tokens · (\\$\\d+\\.\\d{4}|cost n/a) · `,
       ),
     );
@@ -184,7 +221,7 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await expect(sortSwitch.getByRole('radio', { name: 'In article order' })).toHaveAttribute('aria-checked', 'false');
     const allScores = await pickerScores(page);
     expect(allScores.length).toBe(articleLines.length);
-    // SMA-35: every line is listed; short ones (< 5 words) Jev never sees come last, unscored.
+    // SMA-35: every line is listed; short ones (< 5 words) the AI never sees come last, unscored.
     const scores = allScores.filter((s) => !Number.isNaN(s));
     expect(allScores.slice(0, scores.length), 'scored lines first').toEqual(scores);
     for (let i = 1; i < scores.length; i += 1) {
