@@ -4,7 +4,6 @@ import { createPortal } from 'react-dom';
 
 import { TldrDeck } from '@/components/reader/TldrDeck';
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
-import { deckDisclosure } from '@/lib/view-models';
 
 import type { DeckLine } from './deck-edit';
 
@@ -32,7 +31,6 @@ export function DeckPreview({ title, dek, topic, dateLabel, readMinutes, lines, 
       title={title}
       tag={topic || undefined}
       meta={`${dateLabel} · ${readMinutes} min read`}
-      disclosure={deckDisclosure(lines.map((l) => l.source))}
       shareLink={shareLink}
       times={{ read: readMinutes, tldr, listen: null }}
       onClose={onClose}

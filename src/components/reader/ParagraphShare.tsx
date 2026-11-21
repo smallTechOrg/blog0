@@ -22,7 +22,8 @@ import { placeAgainst, type ShareController } from './ShareMenu';
    SMA-37: a bullet point is not a paragraph on its own — a tap on a
    list item lights and shares the whole list together with the
    paragraph that leads into it (the share unit, `shareUnit`); the link
-   points at the unit's first paragraph.
+   points at the unit's first paragraph. SMA-42: a tap on that lead-in
+   paragraph lights the same unit.
    ============================================================ */
 
 export interface ParagraphShareProps {
@@ -47,10 +48,13 @@ function paragraphText(el: Element): string {
 /**
  * SMA-37: the paragraphs that share together with `p`. A paragraph outside a list is its own unit.
  * A list item brings its outermost list (inside `root`) — every paragraph in it — and the paragraph
- * just before that list, which usually leads into it ("Three reasons:").
+ * just before that list, which usually leads into it ("Three reasons:"). That lead-in paragraph
+ * brings the same unit (SMA-42).
  */
 export function shareUnit(p: HTMLElement, root: HTMLElement): HTMLElement[] {
   let list = p.closest('ul, ol');
+  // SMA-42: the lead-in paragraph itself brings the list that follows it
+  if (!list && p.matches('p.para[id]') && p.nextElementSibling?.matches('ul, ol')) list = p.nextElementSibling;
   if (!list || !root.contains(list)) return [p];
   for (let up = list.parentElement?.closest('ul, ol'); up && root.contains(up); up = up.parentElement?.closest('ul, ol')) list = up;
   const unit: HTMLElement[] = [];

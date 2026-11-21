@@ -122,7 +122,7 @@ export interface SiteViewModel { wordmark: string; tagline: string; publisherNam
   aboutStrap: string; aboutStand: string; aboutBodyParagraphs: string[]; socialXUrl: string | null; socialLinkedinUrl: string | null;
   topics: string[]; year: number;
   newsletterConsentText: string }   // Phase 7: the line under the footer form (site.newsletter_consent_text)
-export interface DeckViewModel { slides: Array<{ text: string }>; disclosure: string; shareUrl: string }   // shareUrl absolute …/p/<slug>/tldr
+export interface DeckViewModel { slides: Array<{ text: string }>; shareUrl: string }   // no disclosure line (SMA-41)   // shareUrl absolute …/p/<slug>/tldr
 export interface ListenViewModel {
   audioUrl: string;                  // '/media/' + key (same-origin)
   mimeType: 'audio/mpeg' | 'audio/mp4';

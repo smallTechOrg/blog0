@@ -251,12 +251,12 @@ describe.skipIf(pendingKey)(pendingKey ? `real Jev Generate — ${PENDING_KEY_RE
     const writerLine = reloaded.draft!.slides.find((s) => s.sid === unpicked.sid)!;
     expect(writerLine).toMatchObject({ source: 'writer', relevance: unpicked.relevance });
 
-    // Publish → public view model shows exactly the edited deck, mixed disclosure.
+    // Publish → public view model shows exactly the edited deck, and no credit line (SMA-41).
     const published = data((await publish(created.id, revisionId)).env).article;
     const view = await getPublishedArticle(published.slug);
     const deckTexts = edited.map((s) => sentences.get(s.sid)!.text);
     expect(view!.deck!.slides.map((s) => s.text)).toEqual(deckTexts);
-    expect(view!.deck!.disclosure).toBe('Lines selected by Jev (AI) and the editors, verbatim from the article.');
+    expect(view!.deck).not.toHaveProperty('disclosure');
 
     // Text change → stale, flagged slide, publish blocked, no new generation, live deck unchanged.
     // Jev's picks vary run to run; a sentence whose source carries inline markup (bold, links)
@@ -361,7 +361,6 @@ describe('hand-picked deck lifecycle', () => {
     expect(reloaded.draft!.updatedBy).toBe('Asha Writer');
     expect(published.formats.find((f) => f.kind === 'tldr')).toEqual({ kind: 'tldr', status: 'ready', published: true, hasUnpublishedChanges: false });
     expect(view!.deck!.slides.map((s) => s.text)).toEqual([sentences[6].text, sentences[0].text, sentences[3].text]);
-    expect(view!.deck!.disclosure).toBe('Lines selected by the editors, verbatim from the article.');
     expect(view!.deck!.shareUrl).toBe(`${ORIGIN}/p/ordered/tldr`);
     expect(afterPublish.published!.slides.map((s) => s.text)).toEqual([sentences[6].text, sentences[0].text, sentences[3].text]);
     expect(await generationRows(created.id)).toBe(0);

@@ -6,7 +6,7 @@ import { TldrDeck } from '@/components/reader/TldrDeck';
 import { buildDeckSlides } from '@/lib/deck/timing';
 
 // spec/ui.md §3 Listen: one mode switcher — the article capsule, the deck's foot and the card's
-// Listen sheet — so a disabled Listen reads the same everywhere ("No recording yet").
+// Listen sheet — so Listen behaves the same everywhere: without a recording it is not shown (SMA-41).
 
 const noop = () => {};
 
@@ -23,7 +23,7 @@ describe('ModeCapsule', () => {
     expect(tab(html, 'Read')).toContain('aria-label="Read — 4 min"');
     expect(tab(html, 'Read')).toContain('class="mode is-on"');
     expect(tab(html, 'TLDR')).toMatch(/aria-label="TLDR — no summary yet"[^>]*disabled=""[^>]*title="No summary yet"/);
-    expect(tab(html, 'Listen')).toMatch(/aria-label="Listen — no recording yet"[^>]*disabled=""[^>]*title="No recording yet"/);
+    expect(html).not.toContain('Listen'); // no recording → no Listen tab (SMA-41)
   });
 
   it('takes an extra class and disables a timed mode that cannot be opened from here', () => {
@@ -40,12 +40,9 @@ describe('ModeCapsule', () => {
 describe('TldrDeck mode switcher', () => {
   const slides = buildDeckSlides('A title', 'A dek', ['One line.', 'Two lines.']);
 
-  it('without a recording, Listen carries the capsule’s copy: "No recording yet"', () => {
+  it('without a recording, the deck’s switcher has no Listen tab (SMA-41)', () => {
     const html = renderToStaticMarkup(<TldrDeck slides={slides} title="A title" times={{ read: 3, tldr: 1, listen: null }} onClose={noop} onRead={noop} />);
-    const listen = tab(html, 'Listen');
-    expect(listen).toContain('aria-label="Listen — no recording yet"');
-    expect(listen).toContain('title="No recording yet"');
-    expect(listen).toContain('disabled=""');
+    expect(html).not.toMatch(/role="tab"[^>]*aria-label="Listen/);
     expect(html).not.toContain('later phase');
     expect(html).toContain('class="modes modes--deck modes--timed"');
     expect(tab(html, 'TLDR')).toMatch(/class="mode is-on"[^>]*aria-selected="true"[^>]*aria-label="TLDR — 1 min"/);

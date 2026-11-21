@@ -11,7 +11,7 @@ export type ReaderMode = 'read' | 'tldr' | 'listen';
 export interface ModeCapsuleProps {
   /** Which mode is lit (`tldr` while the deck is open). */
   active: ReaderMode;
-  /** Minutes; `tldr: null` disables TLDR ("No summary yet"), `listen: null` disables Listen ("No recording yet"). */
+  /** Minutes; `tldr: null` disables TLDR ("No summary yet"); `listen: null` hides Listen — no recording, no tab (SMA-41). */
   times: { read: number; tldr: number | null; listen: number | null };
   onPick: (mode: ReaderMode) => void;
   /** Extra class on `.modes` (the deck's `modes--deck`). */
@@ -30,14 +30,14 @@ const MODES: Array<[ReaderMode, string, IconName]> = [
 const MISSING: Record<ReaderMode, { title: string; aria: string }> = {
   read: { title: '', aria: 'Read' },
   tldr: { title: 'No summary yet', aria: 'TLDR — no summary yet' },
-  listen: { title: 'No recording yet', aria: 'Listen — no recording yet' },
+  listen: { title: '', aria: 'Listen' }, // never shown: without a recording the tab is hidden
 };
 
 /** The Read / TLDR / Listen capsule (design `.modes.modes--timed`). Place inside `.modedock`. */
 export function ModeCapsule({ active, times, onPick, className, enabled }: ModeCapsuleProps) {
   return (
     <div className={cx('modes', className, 'modes--timed')} role="tablist" aria-label="How to take this in">
-      {MODES.map(([key, label, icon]) => {
+      {MODES.filter(([key]) => key !== 'listen' || times.listen != null).map(([key, label, icon]) => {
         const on = active === key;
         const min = times[key];
         const missing = min == null;

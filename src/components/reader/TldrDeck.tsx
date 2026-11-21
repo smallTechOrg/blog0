@@ -41,8 +41,6 @@ export interface TldrDeckProps {
   tag?: string;
   /** … and "<date> · N min read". */
   meta?: string;
-  /** AI disclosure printed under the intro slide (divergence 8); omitted when empty. */
-  disclosure?: string | null;
   /** Absolute deck link the end slide's Share copies (…/p/<slug>/tldr). Defaults to the current URL. */
   shareLink?: string;
   /** The site record's wordmark, carried by the deck's share text (`<title> — TLDR — <brand>`). */
@@ -53,7 +51,7 @@ export interface TldrDeckProps {
   onClose: () => void;
   /** "Read the full article" + the capsule's Read; omitted → the end button is hidden and Read disabled. */
   onRead?: () => void;
-  /** Capsule Listen; omitted → disabled with the capsule's "No recording yet". */
+  /** Capsule Listen; omitted → disabled (without a recording, `times.listen` null, it is hidden). */
   onListen?: () => void;
   layout?: DeckLayout;
 }
@@ -399,7 +397,6 @@ export function TldrDeck(props: TldrDeckProps) {
                   <p className="tdeck__eyebrow">{eyebrow}</p>
                   <h2 className="tdeck__big">{sl.text}</h2>
                   {sl.sub ? <p className="tdeck__stand">{sl.sub}</p> : null}
-                  {props.disclosure ? <p className="tdeck__note">{props.disclosure}</p> : null}
                 </div>
                 {tail}
               </>

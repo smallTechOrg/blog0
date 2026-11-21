@@ -9,7 +9,6 @@ import type { RenderedArticle } from '@/lib/content/types';
 import { resolveMarks, toTimedParagraphs } from '@/lib/listen/estimate';
 import { listenMinutes } from '@/lib/listen/marks';
 import {
-  deckDisclosure,
   type ArticleViewModel,
   type ListenViewModel,
   type PostCardViewModel,
@@ -193,7 +192,6 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       deck: deck
         ? {
             slides: deck.slides.map((s) => ({ text: s.text })),
-            disclosure: deckDisclosure(deck.slides.map((s) => s.source)),
             shareUrl: absolute(articlePath(row.slug) + '/tldr'),
           }
         : null,

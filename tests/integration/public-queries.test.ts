@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildDeckSlides, tldrMinutes } from '@/lib/deck/timing';
 import { estimateMarks, toTimedParagraphs } from '@/lib/listen/estimate';
-import { DECK_DISCLOSURE } from '@/lib/view-models';
 import { renderArticle, resetRenderCacheForTests } from '@/server/content';
 import { getDb } from '@/server/db/client';
 import { appUser, site, type SiteRow } from '@/server/db/schema';
@@ -81,7 +80,6 @@ describe('getPublishedArticle', () => {
     expect(vm.articleUrl).toBe('http://localhost:3410/p/measure-the-work');
     expect(vm.deck).not.toBeNull();
     expect(vm.deck?.slides.map((s) => s.text)).toEqual([pre.sentences[0].text, pre.sentences[2].text]);
-    expect(vm.deck?.disclosure).toBe(DECK_DISCLOSURE.jev);
     expect(vm.deck?.shareUrl).toBe('http://localhost:3410/p/measure-the-work/tldr');
     expect(vm.times.tldr).toBe(tldrMinutes(buildDeckSlides(vm.title, vm.dek, vm.deck?.slides.map((s) => s.text) ?? [])));
   });
@@ -152,13 +150,13 @@ describe('getPublishedArticle', () => {
     expect(logs.lines.some((l) => l.event === 'public.deck_invalid' && l.level === 'warn')).toBe(true);
   });
 
-  it('labels the disclosure by who picked the lines', async () => {
+  it('never credits who picked the lines (SMA-41: no "Lines selected by …" line)', async () => {
     const pre = await renderArticle({ title: 'T', dek: 'A short standfirst.', bodyMd: BODY_A });
     await seedArticle({ slug: 'mixed', title: 'T', bodyMd: BODY_A, deck: deckFrom(pre, [0, 1], ['jev', 'writer']) });
-    await seedArticle({ slug: 'editors', title: 'T', bodyMd: BODY_A, deck: deckFrom(pre, [0], ['writer']) });
 
-    expect((await getPublishedArticle('mixed'))?.deck?.disclosure).toBe(DECK_DISCLOSURE.mixed);
-    expect((await getPublishedArticle('editors'))?.deck?.disclosure).toBe(DECK_DISCLOSURE.editors);
+    const deck = (await getPublishedArticle('mixed'))?.deck;
+    expect(deck?.slides).toHaveLength(2);
+    expect(JSON.stringify(deck)).not.toContain('Lines selected');
   });
 
   it('carries the in-progress flag of a published piece', async () => {

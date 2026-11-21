@@ -55,7 +55,7 @@ TLDR deck, switchable through the design's mode capsule, with a shareable deck l
 - [ ] Direct load of `/p/<slug>/tldr` renders the page with the deck open.
 - [ ] Without user input the deck advances from the intro after 3.8 s (design dwell) — asserted with a controlled browser clock in the E2E test.
 - [ ] Clicking a progress segment jumps to that slide; Pause stops auto-advance.
-- [ ] On an article without a published recording, the capsule's Listen button is disabled with `title="No recording yet"`.
+- [ ] On an article without a published recording, the capsule has no Listen button (SMA-41).
 - [ ] The home page lists a published non-featured article in "Latest Articles" with its TLDR quick button when a deck exists.
 - [ ] The page's linked stylesheets return 200, are non-empty and contain `.tdeck__track` and `.modedock`.
 - [ ] Light/dark toggle switches `data-theme` and the deck/background colours change accordingly.

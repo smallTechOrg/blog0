@@ -22,7 +22,6 @@ const SEED_TITLES = [
   'AI Will Destroy the World',
   'AI is Expensive',
 ];
-const EDITORS_DISCLOSURE = 'Lines selected by the editors, verbatim from the article.';
 const NO_KEY_NOTICE = 'No OpenRouter key configured';
 /** The upload round trip uses another seeded article, so the seeded sample on SLUG stays as seeded. */
 const UPLOAD_SLUG = 'ai-is-expensive';
@@ -93,7 +92,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     for (const line of FIXTURE_LINES) expect(text).toContain(line);
   });
 
-  test('/p/<slug>/tldr plays the fixture deck (4–8 verbatim lines) with the editors disclosure', async ({ page }) => {
+  test('/p/<slug>/tldr plays the fixture deck (4–8 verbatim lines) with no credit line', async ({ page }) => {
     expect(FIXTURE_LINES.length).toBeGreaterThanOrEqual(4);
     expect(FIXTURE_LINES.length).toBeLessThanOrEqual(8);
 
@@ -102,7 +101,7 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     const deck = page.locator('.tdeck');
     await expect(deck).toBeVisible();
     await expect(deck.locator('.tdeck__big')).toHaveText(TITLE);
-    await expect(deck.locator('.tdeck__note')).toHaveText(EDITORS_DISCLOSURE);
+    await expect(deck.locator('.tdeck__note')).toHaveCount(0);
     const segs = deck.locator('.tdeck__seg');
     await expect(segs).toHaveCount(FIXTURE_LINES.length + 1);
     await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');

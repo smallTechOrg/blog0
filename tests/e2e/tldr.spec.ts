@@ -20,10 +20,6 @@ const DEK = 'Why the last 1% still needs people who understand the software.';
 const TOPIC = 'Op-Ed';
 const MARKDOWN = readE2eArticle();
 const ARTICLE_TEXT = markdownPlainText(MARKDOWN);
-const DISCLOSURE = {
-  jev: 'Lines selected by Jev (AI)',
-  editors: 'Lines selected by the editors, verbatim from the article.',
-};
 
 // Phase 8: Jev is the decisions model typesafe/jev-1.13 ranking with prompt jev-rank-v1 (spec/agent.md).
 const JEV_MODEL = 'typesafe/jev-1.13';
@@ -263,7 +259,7 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     const deck = page.locator('.tdeck');
     await expect(deck).toBeVisible();
     await expect(deck.locator('.tdeck__big')).toHaveText(TITLE);
-    await expect(deck.locator('.tdeck__note')).toContainText(j.generatedByJev ? DISCLOSURE.jev : DISCLOSURE.editors);
+    await expect(deck.locator('.tdeck__note')).toHaveCount(0); // no credit line (SMA-41)
     await expect(deck.locator('.tdeck__seg')).toHaveCount(afterMove.length + 1);
     await page.keyboard.press('ArrowRight');
     await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(afterMove[0]);
@@ -327,14 +323,12 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     const deck = page.locator('.tdeck');
     await expect(deck).toBeVisible();
     await expect(deck.locator('.tdeck__big')).toHaveText(TITLE);
-    await expect(deck.locator('.tdeck__note')).toContainText(j.generatedByJev ? DISCLOSURE.jev : DISCLOSURE.editors);
+    await expect(deck.locator('.tdeck__note')).toHaveCount(0); // no credit line (SMA-41)
     const segs = deck.locator('.tdeck__seg');
     await expect(segs).toHaveCount(publishedLines.length + 1);
     await expect(segs.nth(0)).toHaveAttribute('aria-selected', 'true');
-    // The deck's own mode switcher is the capsule: no recording → Listen disabled with its copy.
-    const deckListen = deck.locator('.tdeck__foot').getByRole('tab', { name: 'Listen — no recording yet' });
-    await expect(deckListen).toBeDisabled();
-    await expect(deckListen).toHaveAttribute('title', 'No recording yet');
+    // The deck's own mode switcher is the capsule: no recording → no Listen tab (SMA-41).
+    await expect(deck.locator('.tdeck__foot').getByRole('tab', { name: /^Listen/ })).toHaveCount(0);
     // Auto-advance: the intro holds 3.8 s, then the deck moves on with no input.
     await expect(segs.nth(1)).toHaveAttribute('aria-selected', 'true', { timeout: 8_000 });
     await expect(deck.locator('.tdeck__slide[aria-hidden="false"]')).toContainText(publishedLines[0]);

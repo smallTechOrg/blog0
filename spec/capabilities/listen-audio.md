@@ -87,9 +87,8 @@ player — on the article's Listen view, in the home-card overlay, and as the ca
   `.audio__note` reads "Read by <byline> · N min" instead of the design's placeholder text.
 - Listen is offered to readers (capsule enabled, card button shown, deck's Listen enabled,
   `/p/<slug>/listen` served) **only** when the article is published and its published Listen
-  payload exists; otherwise the capsule's Listen — and the TLDR deck's mode-switcher Listen,
-  with identical copy — is disabled with `title="No recording yet"` and
-  `aria-label="Listen — no recording yet"` (divergence 9, decided) and `/p/<slug>/listen` renders
+  payload exists; otherwise the capsule's Listen — and the TLDR deck's mode-switcher Listen —
+  is not shown at all (SMA-41; it was a disabled "No recording yet" tab) and `/p/<slug>/listen` renders
   the article in Read mode at `/p/<slug>`.
 - `times.listen` everywhere (capsule, cards, deck capsule, public DTOs) is the published
   recording's minutes — never the draft's.

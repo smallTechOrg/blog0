@@ -204,13 +204,12 @@ byline `<b>author</b> | date`, `SplitHeadline` h1, `Dek`, rule) → `.readbody` 
 (html blocks in `.prose` + figure components) → `.artfoot` (**Share article** button; in-progress
 note copy from the design when flagged; "Next: <title> →"). `.modedock` capsule at viewport
 bottom: Read (`readMinutes`), TLDR (`tldrMinutes` of the published deck; **disabled** with title
-"No summary yet" without one), Listen (`Listen · N min`; **disabled** with
-`title="No recording yet"` / `aria-label="Listen — no recording yet"` without a published
-recording — div. 9).
+"No summary yet" without one), Listen (`Listen · N min`; **hidden** without a published recording — SMA-41, replacing div. 9's
+disabled tab).
 - **TLDR deck**: opening sets URL `/p/<slug>/tldr` via `history.replaceState`; closing (X, Esc,
   Read) returns to `/p/<slug>`; loading `/p/<slug>/tldr` directly opens it. Slides =
   `[{kind:'intro', text: title, sub: dek}]` + one per published line. Intro slide adds
-  `<p class="tdeck__note">` with the disclosure (div. 8). Eyebrow = `topic · date · N min read`.
+  no disclosure line (SMA-41 removed "Lines selected by …"). Eyebrow = `topic · date · N min read`.
   End slide: **Read the full article** + `ShareLinkButton` (copies, then opens `ShareMenu`
   anchored to the button — native sheet on touch/narrow — with the deck share text). The deck's
   mode switcher offers Listen with the capsule's exact enabled/disabled copy. All gestures/timings
