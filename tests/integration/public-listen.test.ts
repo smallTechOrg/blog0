@@ -256,7 +256,7 @@ describe('article view model — published Listen', () => {
 
 describe('GET /api/public/articles/:slug/listen', () => {
   it('returns the PublicListenDto for a published article with a published Listen, cacheable for 60 s', async () => {
-    const { pids, audio } = await seedArticle({ slug: 'synced', listen: { publishedMarks: marksOver(), draftMarks: none } });
+    const { pids, audio, rendered } = await seedArticle({ slug: 'synced', listen: { publishedMarks: marksOver(), draftMarks: none } });
     const marks = marksOver()(pids);
 
     const res = await callListen('synced');
@@ -272,6 +272,7 @@ describe('GET /api/public/articles/:slug/listen', () => {
       meta: '8 Sep 2026 · 1 min read',
       audio: { url: `/media/${audio.key}`, mimeType: 'audio/mpeg', durationMs: DURATION_MS },
       marks,
+      blocks: rendered.blocks, // the article body, so a home-card Listen types the same text as the article page
       timing: 'synced',
       bylineName: 'Writer', // the author's display name, not the stored byline
       times: { read: 1, tldr: null, listen: 2 },
