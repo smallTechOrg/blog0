@@ -7,9 +7,10 @@ import type { RenderedArticle } from '@/lib/content/types';
 
 import { getAi, isAiConfigured, setAiForTests } from '../ai/provider';
 import { getDb, type Executor } from '../db/client';
-import { aiGeneration, articleFormat, type AiGenerationRow, type ArticleRow } from '../db/schema';
+import { aiGeneration, articleFormat, type AiGenerationRow, type ArticleRow, type RevisionRow } from '../db/schema';
+import { reconcileSlides } from '@/lib/deck/reconcile';
 import { readTldrPayload, TLDR_MIN_SLIDES, type TldrPayload, type TldrSlide } from '../formats/payload';
-import { missingSlides, tldrAdapter } from '../formats/tldr';
+import { tldrAdapter } from '../formats/tldr';
 import { GENERATION_STALE_MS, isGenerationActive } from '../formats/types';
 import { ApiError } from '../http/api';
 import { computeBounds } from '../jev/bounds';
@@ -30,6 +31,8 @@ import {
 } from './repo';
 import type { SaveDeckBody } from './schemas';
 import { findMediaAsset } from '../media/repo';
+import { loadArticleImageAssets } from '../public/image-dims';
+import { rebaseDeckOnRevision } from './deck-rebase';
 import { notFound, type ActorContext } from './service';
 import { iso, renderRevision, UNKNOWN_USER } from './views';
 
@@ -80,6 +83,17 @@ export function resetJevDepsForTests(): void {
 
 // ---------------------------------------------------------------------------------------------
 
+
+/**
+ * A deck saved before SMA-52 may read `stale` only because the article's sentence ids moved. Opening
+ * the editor re-attaches its slides to the current text (idempotent); a deck with a line whose text is
+ * really gone stays stale.
+ */
+async function healStaleDeck(siteId: string, articleId: string, revision: RevisionRow): Promise<void> {
+  const formatRow = await findFormatRow(siteId, articleId, TLDR);
+  if (!formatRow?.draftPayload || formatRow.draftFingerprint === revision.sentencesFingerprint) return;
+  await getDb().transaction((tx) => rebaseDeckOnRevision(tx, siteId, articleId, revision));
+}
 
 function mediaUrl(key: string): string {
   return `/media/${key}`;
@@ -405,6 +419,7 @@ function toSentenceDtos(rendered: RenderedArticle, relevance: Map<string, number
 
 async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new Date(), db: Executor = getDb()): Promise<TldrStateDto> {
   const revision = await requireCurrentRevision(siteId, row, db);
+  await healStaleDeck(siteId, row.id, revision);
   const [rendered, formatRow, gen, scored] = await Promise.all([
     renderRevision(revision),
     findFormatRow(siteId, row.id, TLDR, db),
@@ -418,9 +433,12 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
   const draftPayload = readTldrPayload(formatRow?.draftPayload);
   let draft: TldrStateDto['draft'] = null;
   if (formatRow && draftPayload) {
-    const missing = new Set(missingSlides(draftPayload.slides, rendered.lines));
+    // SMA-52: slides follow their text — a slide whose sentence got a new id (or moved) still shows,
+    // attached to the sentence it now is; only a slide whose text is gone is flagged missing.
+    const attached = reconcileSlides(draftPayload.slides, rendered.lines);
+    const missing = new Set(attached.missing);
     draft = {
-      slides: draftPayload.slides.map(
+      slides: attached.slides.map(
         (s): DeckSlideDto => ({
           sid: s.sid,
           text: s.text,
@@ -450,6 +468,7 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
     draft,
     published,
     latestGeneration: gen ? toGenerationDto(gen, names, now) : null,
+    articleImages: (await loadArticleImageAssets(siteId, revision.bodyMd)).map((a) => toImageDto({ ...a, alt: '' })),
     aiAvailable: await isAiConfigured(siteId),
   };
 }

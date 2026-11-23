@@ -113,6 +113,36 @@ describe('image slides in the deck', () => {
   });
 });
 
+describe('images the article already shows (SMA-53)', () => {
+  it('offers the article\'s own images, in document order and once each, ready to add to the deck', async () => {
+    const first = await upload('sample.png', 'image/png');
+    const second = await upload('sample.jpg', 'image/jpeg');
+    const unused = await upload('sample.webp', 'image/webp');
+    const created = await createArticle({
+      title: 'Has pictures',
+      topic: 'Analysis',
+      bodyMd: `Intro line that is long enough.\n\n![b](${second.url})\n\nMiddle line that is long enough.\n\n![a](${first.url})\n\n![again](${second.url})`,
+    });
+
+    const state = await tldr(created.id);
+
+    expect(state.articleImages.map((i) => i.assetId)).toEqual([second.id, first.id]);
+    expect(state.articleImages.map((i) => i.assetId)).not.toContain(unused.id);
+    expect(state.articleImages[0]).toMatchObject({ key: second.key, url: second.url, width: second.width, height: second.height });
+
+    // an offered image can go straight into the deck (same save as an uploaded one)
+    const saved = data(
+      (await putDeck(created.id, { revisionId: created.currentRevision.id, slides: [{ sid: `img:${first.id}`, source: 'image', assetId: first.id, text: '', alt: 'a' }] })).env,
+    ).tldr;
+    expect(saved.draft!.slides[0].image!.key).toBe(first.key);
+  });
+
+  it('offers nothing for an article with no images', async () => {
+    const created = await createArticle({ title: 'No pictures', topic: 'Analysis', bodyMd: BODY });
+    expect((await tldr(created.id)).articleImages).toEqual([]);
+  });
+});
+
 describe('slideshow-only posts', () => {
   async function patch(id: string, body: Record<string, unknown>) {
     return data((await call<UpdateArticleResponse>(patchRoute, 'PATCH', `/api/admin/articles/${id}`, { body, id })).env);

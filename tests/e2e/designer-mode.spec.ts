@@ -168,8 +168,8 @@ test.describe('designer mode: pnpm dev:design on embedded PGlite, no .env values
     const panel = page.locator('#panel-tldr');
     await expect(panel.getByTestId('ai-no-provider')).toContainText(NO_KEY_NOTICE);
     await expect(panel.getByTestId('ai-no-provider')).toContainText('No AI provider set up');
-    // The primary Generate button ("Generate with AI", or "Regenerate" once a deck exists) is disabled.
-    const generate = panel.locator('.tldrtab__head').getByRole('button', { name: /^(Generate with AI|Regenerate)$/ });
+    // The optional AI section's Generate button ("Generate with AI", or "Regenerate" once a deck exists) is disabled.
+    const generate = panel.locator('.tldrtab__ai').getByRole('button', { name: /^(Generate with AI|Regenerate)$/ });
     await expect(generate).toBeDisabled();
     await expect(generate).toHaveAttribute('title', NO_KEY_NOTICE);
     await expect(page.locator('#tab-tldr .tabchip')).toHaveText('ready');

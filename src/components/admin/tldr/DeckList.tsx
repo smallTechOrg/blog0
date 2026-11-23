@@ -1,18 +1,10 @@
 'use client';
 
-import { relevanceLabel } from '../labels';
-
 import type { DeckLine } from './deck-edit';
 
 // The ordered draft deck (spec/ui.md §4 TLDR tab → Deck): ordinal, verbatim line, meta line
-// ("AI · relevance 0.82" / "Added by you · relevance 0.41"; the score is left out when null),
+// ("AI" / "Added by you" / "Image"; no relevance scores — SMA-52),
 // ↑ ↓ ✕; lines that vanished from the text are flagged. No reasons anywhere (Phase 8).
-
-/** "relevance 0.82" in its muted monospace span; nothing when the score is null. */
-export function RelevanceTag({ relevance }: { relevance: number | null }) {
-  const label = relevanceLabel(relevance);
-  return label ? <span className="tldr-rel mono">{label}</span> : null;
-}
 
 export interface DeckListProps {
   lines: readonly DeckLine[];
@@ -65,15 +57,7 @@ export function DeckList({ lines, onMove, onRemove, onEditImage, disabled }: Dec
                 <p className="deck__text">{l.text}</p>
               )}
               {l.missing ? <p className="deck__missing">No longer in the article</p> : null}
-              <p className="deck__meta">
-                {l.source === 'jev' ? 'AI' : l.image ? 'Image' : 'Added by you'}
-                {relevanceLabel(l.relevance) ? (
-                  <>
-                    {' · '}
-                    <RelevanceTag relevance={l.relevance} />
-                  </>
-                ) : null}
-              </p>
+              <p className="deck__meta">{l.source === 'jev' ? 'AI' : l.image ? 'Image' : 'Added by you'}</p>
             </div>
             <div className="deck__tools">
               <button

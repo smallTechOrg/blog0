@@ -573,6 +573,57 @@ describe('hand-picked deck lifecycle', () => {
     expect(await generationRows(created.id)).toBe(0);
   });
 
+  it('SMA-52: editing other text keeps unchanged deck lines — they follow their sentence to its new id, the deck stays ready and publishable', async () => {
+    const created = await createArticle({ title: 'Follow the text', topic: 'Analysis', bodyMd: BODY });
+    const { sentences } = await tldr(created.id);
+    // sentences[0] and [1] share a paragraph; [2] and [3] share another
+    const deck = [sentences[0], sentences[2], sentences[7]].map((s) => ({ sid: s.sid, source: 'writer' as const }));
+    await putDeck(created.id, { revisionId: created.currentRevision.id, slides: deck });
+    const first = data((await publish(created.id, created.currentRevision.id)).env).article;
+
+    // 1) edit the SIBLING of a deck line (the paragraph hash, so every sid in it, changes) and add a
+    //    paragraph on top (every index shifts)
+    const edited = await save(created.id, {
+      baseRevisionId: first.currentRevision.id,
+      bodyMd: 'A brand new opening paragraph that pushes every line down.\n\n' + editSentence(BODY, sentences[1].text),
+    });
+    const after = await tldr(created.id);
+
+    expect(after.status).toBe('ready');
+    expect(edited.article.formats.find((f) => f.kind === 'tldr')!.status).toBe('ready');
+    expect(after.draft!.slides.map((s) => s.text)).toEqual([sentences[0].text, sentences[2].text, sentences[7].text]);
+    expect(after.draft!.slides.every((s) => !s.missing)).toBe(true);
+    // each slide now sits on a sentence that really exists in the new revision, under its new id
+    const bySid = new Map(after.sentences.map((s) => [s.sid, s.text]));
+    for (const sl of after.draft!.slides) expect(bySid.get(sl.sid)).toBe(sl.text);
+    expect(after.draft!.slides[0].sid).not.toBe(sentences[0].sid);
+    // the reader's deck is untouched, and nothing differs from what is live (no "unpublished changes")
+    const chip = edited.article.formats.find((f) => f.kind === 'tldr')!;
+    expect(chip.hasUnpublishedChanges).toBe(false);
+    const republished = await publish(created.id, edited.article.currentRevision.id);
+    expect(republished.status).toBe(200);
+    expect(await generationRows(created.id)).toBe(0);
+
+    // 2) only the line whose OWN text is edited goes missing — the others stay attached
+    const again = await save(created.id, { baseRevisionId: edited.article.currentRevision.id, bodyMd: editSentence(edited.article.currentRevision.bodyMd, sentences[2].text) });
+    const stale = await tldr(created.id);
+    expect(stale.status).toBe('stale');
+    expect(stale.draft!.slides.map((s) => s.missing)).toEqual([false, true, false]);
+    expect(again.article.formats.find((f) => f.kind === 'tldr')!.status).toBe('stale');
+  });
+
+  it('SMA-52: a deck that only read stale because ids moved (saved before this change) heals when the editor opens it', async () => {
+    const created = await createArticle({ title: 'Old stale', topic: 'Analysis', bodyMd: BODY });
+    const { sentences } = await tldr(created.id);
+    await putDeck(created.id, { revisionId: created.currentRevision.id, slides: [{ sid: sentences[0].sid, source: 'writer' }] });
+    // simulate the old behaviour: the fingerprint no longer matches the revision
+    await getDb().update(articleFormat).set({ draftFingerprint: 'old-fingerprint' }).where(eq(articleFormat.articleId, created.id));
+
+    const healed = await tldr(created.id);
+
+    expect(healed.status).toBe('ready');
+  });
+
   it('clears the draft deck with DELETE while the published deck keeps serving', async () => {
     const created = await createArticle({ title: 'Clear deck', topic: 'Analysis', bodyMd: BODY });
     const { sentences } = await tldr(created.id);

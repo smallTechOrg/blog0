@@ -27,7 +27,6 @@ const ARTICLE_TEXT = markdownPlainText(MARKDOWN);
 const EVAL = evalProvider();
 const JEV_MODEL = EVAL.model;
 const JEV_PROMPT_VERSION = 'tldr-rank-v2';
-const RELEVANCE = /^relevance [01]\.\d\d$/;
 
 const keyPlan = jevKeyPlan();
 const pendingKey = keyPlan !== 'real';
@@ -52,17 +51,6 @@ function journey(): Journey {
 
 async function deckTexts(page: Page): Promise<string[]> {
   return page.locator('#panel-tldr .deck__text').allInnerTexts();
-}
-
-/** The scores shown on the article-line rows, in display order (NaN for an unscored row). */
-async function pickerScores(page: Page): Promise<number[]> {
-  const rows = page.locator('#panel-tldr .picker__line');
-  const out: number[] = [];
-  for (const row of await rows.all()) {
-    const rel = row.locator('.tldr-rel');
-    out.push((await rel.count()) === 0 ? Number.NaN : Number((await rel.innerText()).replace('relevance ', '')));
-  }
-  return out;
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -188,9 +176,10 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await expect(page.locator('#panel-tldr .tldrtab__empty')).toContainText('No deck yet.');
 
     const panel = page.locator('#panel-tldr');
-    await expect(panel.locator('.tldrtab__head .admin-hint')).toHaveText(/^The AI will pick (the top \d+|all \d+) lines for this length$/);
+    // SMA-52: building by hand is the default; the AI is an optional section at the bottom
+    await expect(panel.locator('.tldrtab__ai')).toContainText('Fill the deck with AI');
 
-    await page.getByRole('button', { name: 'Generate with AI' }).click();
+    await panel.locator('.tldrtab__ai').getByRole('button', { name: 'Generate with AI' }).click();
 
     await expect(panel.locator('.admin-ok')).toContainText(
       /The AI ranked \d+ sentences and picked the top \d+ — saved as your draft deck/,
@@ -204,11 +193,11 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
       expect(articleLines, `deck line is one of the article's sentences: ${line}`).toContain(line);
       expect(ARTICLE_TEXT, 'deck line is verbatim from the article').toContain(line);
     }
-    // Each deck line shows the AI's relevance score instead of a reason; no reasons anywhere.
+    // Each deck line says it came from the AI; no relevance scores and no reasons anywhere (SMA-52).
     const metas = await panel.locator('.deck__meta').allInnerTexts();
     expect(metas).toHaveLength(lines.length);
-    for (const meta of metas) expect(meta).toMatch(/^AI · relevance [01]\.\d\d$/);
-    for (const rel of await panel.locator('.deck__meta .tldr-rel').allInnerTexts()) expect(rel).toMatch(RELEVANCE);
+    for (const meta of metas) expect(meta).toBe('AI');
+    await expect(panel.locator('.tldr-rel')).toHaveCount(0);
     await expect(panel.locator('.deck__reason')).toHaveCount(0);
     await expect(panel.locator('.deck')).not.toContainText(/\breasons?\b|Jev/i);
     await expect(panel.locator('.tldrtab__meta')).toHaveText(
@@ -218,35 +207,11 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
       ),
     );
 
-    // The picker defaults to "By relevance": every eligible sentence is scored, highest first.
-    const sortSwitch = panel.getByRole('radiogroup', { name: 'Sort article lines' });
-    await expect(sortSwitch.getByRole('radio', { name: 'By relevance' })).toHaveAttribute('aria-checked', 'true');
-    await expect(sortSwitch.getByRole('radio', { name: 'In article order' })).toHaveAttribute('aria-checked', 'false');
-    const allScores = await pickerScores(page);
-    expect(allScores.length).toBe(articleLines.length);
-    // SMA-35: every line is listed; short ones (< 5 words) the AI never sees come last, unscored.
-    const scores = allScores.filter((s) => !Number.isNaN(s));
-    expect(allScores.slice(0, scores.length), 'scored lines first').toEqual(scores);
-    for (let i = 1; i < scores.length; i += 1) {
-      expect(scores[i], `row ${i + 1} is not ranked above row ${i}`).toBeLessThanOrEqual(scores[i - 1]);
-    }
-    expect(scores[0]).toBe(Math.max(...scores));
-    // Pure top-k: the deck's lowest score is ≥ every unpicked sentence's score (both as displayed).
-    const deckScores = metas.map((m) => Number(m.replace(/^.*relevance /, '')));
-    const unpicked = allScores.filter((s, i) => !Number.isNaN(s) && !lines.includes(articleLines[i]));
-    expect(Math.min(...deckScores)).toBeGreaterThanOrEqual(Math.max(...unpicked));
-    await expect(panel.locator('.picker__line.is-on')).toHaveCount(lines.length);
-    await expect(panel.locator('.picker__sec').first()).toBeVisible();
-
-    // "In article order" shows today's grouped list under the article's headings (scores kept).
-    await sortSwitch.getByRole('radio', { name: 'In article order' }).click();
-    await expect(sortSwitch.getByRole('radio', { name: 'In article order' })).toHaveAttribute('aria-checked', 'true');
+    // The picker lists every line in article order under its headings, with no relevance and no sort switch.
+    await expect(panel.getByRole('radiogroup', { name: 'Sort article lines' })).toHaveCount(0);
     await expect(panel.locator('.picker__head', { hasText: 'The 1% in practice' })).toBeVisible();
-    const inOrder = await panel.locator('.picker__line .picker__text').allInnerTexts();
-    expect([...inOrder].sort()).toEqual([...articleLines].sort());
-    await expect(panel.locator('.picker__line .tldr-rel')).toHaveCount(inOrder.length);
-    await sortSwitch.getByRole('radio', { name: 'By relevance' }).click();
-    await expect(sortSwitch.getByRole('radio', { name: 'By relevance' })).toHaveAttribute('aria-checked', 'true');
+    await expect(panel.locator('.picker__line .tldr-rel')).toHaveCount(0);
+    await expect(panel.locator('.picker__line.is-on')).toHaveCount(lines.length);
 
     const rows = await generationRows(articleId);
     expect(rows).toHaveLength(1);
@@ -283,10 +248,7 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await expect(panel.locator('.deck__item')).toHaveCount(before.length);
     const afterAdd = await deckTexts(page);
     expect(afterAdd).toContain(added);
-    // A writer line shows "Added by you" plus its score when Jev scored it.
-    await expect(panel.locator('.deck__item', { hasText: added }).locator('.deck__meta')).toHaveText(
-      j.generatedByJev ? /^Added by you · relevance [01]\.\d\d$/ : 'Added by you',
-    );
+    await expect(panel.locator('.deck__item', { hasText: added }).locator('.deck__meta')).toHaveText('Added by you');
     // Move one up.
     await panel.getByRole('button', { name: 'Move line 3 up' }).click();
     const afterMove = await deckTexts(page);

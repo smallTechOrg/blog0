@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { Sentence } from '@/lib/content/types';
+import { reconcileSlides } from '@/lib/deck/reconcile';
 
 import { readTldrPayload, type TldrSlide } from './payload';
 import { isGenerationActive, publishDraft, type FormatAdapter } from './types';
@@ -9,16 +10,17 @@ import { isGenerationActive, publishDraft, type FormatAdapter } from './types';
 // generating (latest run `running` < 3 min) → ready (draft fp == current sentences fp) → stale
 // (fp differs) → failed (no draft, latest run failed) → missing.
 
-/** Slides whose sid + text no longer exist among the given eligible sentences. */
+/**
+ * Slides whose text is no longer anywhere in the article (SMA-52: the sentence id is not what
+ * matters — a slide follows its text when the article is edited). An image slide can never go missing.
+ */
 export function missingSlides(slides: readonly Pick<TldrSlide, 'sid' | 'text' | 'image'>[], sentences: readonly Sentence[]): string[] {
-  const textBySid = new Map(sentences.map((s) => [s.sid, s.text]));
-  // An image slide is not a sentence of the article: it can never go missing.
-  return slides.filter((s) => !s.image && textBySid.get(s.sid) !== s.text).map((s) => s.sid);
+  return reconcileSlides(slides, sentences).missing;
 }
 
 function sameSlides(a: readonly TldrSlide[] | undefined, b: readonly TldrSlide[] | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return a.length === b.length && a.every((s, i) => s.sid === b[i].sid && s.text === b[i].text && s.image?.alt === b[i].image?.alt);
+  return a.length === b.length && a.every((s, i) => s.text === b[i].text && s.image?.assetId === b[i].image?.assetId && s.image?.alt === b[i].image?.alt);
 }
 
 export const tldrAdapter: FormatAdapter = {

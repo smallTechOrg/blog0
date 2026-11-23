@@ -1290,3 +1290,14 @@ table.data td.neg { color: var(--accent-ink); }
   font-family: var(--font-body, var(--font-head)); font-size: clamp(15px, 1.7vw, 21px); line-height: 1.35; color: var(--text);
 }
 @media (min-width: 720px) { .tdeck__slide:has(.tdeck__card--photo) { padding: 10px 24px 20px; } }
+
+/* SMA-51: the Edit link a signed-in author/admin sees on a public article */
+.editlink {
+  flex: none; display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 14px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  font-family: var(--font-head); font-size: 12.5px; font-weight: 600; text-decoration: none; position: relative; z-index: 6;
+  transition: border-color .15s ease, background .15s ease;
+}
+.editlink:hover { background: var(--surface-2); border-color: var(--accent); }
+.modebar .editlink { margin-left: auto; margin-right: 10px; }
+.tdeck__head .editlink { margin-left: 10px; }

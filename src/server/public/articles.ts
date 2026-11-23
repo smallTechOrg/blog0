@@ -116,6 +116,8 @@ export function nextArticleOf(list: readonly NextCandidate[], slug: string): { s
 
 export interface PublishedArticlePage {
   article: ArticleViewModel;
+  /** The article's id — only ever used server-side, to build the Edit link for a signed-in viewer (SMA-51). */
+  articleId: string;
   /** Instants for OG tags (`article:published_time`, `article:modified_time`). */
   publishedAt: Date;
   /** When the article last changed for readers: the body-change date when known, else the last publish. */
@@ -180,6 +182,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
   const publishedAt = row.firstPublishedAt as Date;
 
   return {
+    articleId: row.id,
     article: {
       slug: row.slug,
       title: row.title,
