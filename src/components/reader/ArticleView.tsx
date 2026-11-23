@@ -38,12 +38,13 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
   const router = useRouter();
   const [mode, setMode] = useState<'read' | 'listen'>(initialMode === 'listen' && a.listen != null ? 'listen' : 'read');
   /* the deck is part of the address: /p/<slug>/tldr opens it, closing returns to /p/<slug> */
-  const [deck, setDeck] = useState(initialMode === 'tldr' && a.deck != null);
+  const [deck, setDeck] = useState((initialMode === 'tldr' || a.mediaOnly) && a.deck != null);
 
   const listening = mode === 'listen';
   const base = '/p/' + a.slug;
   const firstRun = useRef(true);
   useEffect(() => {
+    if (a.mediaOnly) return; // a slideshow post keeps its one address, /p/<slug>
     const want = deck ? base + '/tldr' : listening ? base + '/listen' : base;
     if (firstRun.current) {
       firstRun.current = false;
@@ -59,15 +60,15 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
     } catch {
       /* history unavailable (sandboxed frames) — the deck and the player still work */
     }
-  }, [deck, listening, base]);
+  }, [deck, listening, base, a.mediaOnly]);
 
   /* one share surface for the page: paragraphs, selections and Share article */
   const sharing = useShare(brand);
   const readRef = useRef<HTMLDivElement>(null);
 
   const slides = useMemo(
-    () => (a.deck ? buildDeckSlides(a.title, a.dek, a.deck.slides.map((s) => s.text)) : []),
-    [a.deck, a.title, a.dek],
+    () => (a.deck ? buildDeckSlides(a.title, a.dek, a.deck.slides, { intro: !a.mediaOnly }) : []),
+    [a.deck, a.title, a.dek, a.mediaOnly],
   );
 
   function pickMode(k: ReaderMode) {
@@ -77,6 +78,27 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
     }
     if (k === 'listen' && !a.listen) return;
     setMode(k);
+  }
+
+  /* A slideshow-only post is its deck: no Read column, no Listen, no capsule. Closing the deck
+     returns to the home page. */
+  if (a.mediaOnly && a.deck) {
+    return (
+      <main className="modeframe">
+        <TldrDeck
+          key={a.slug + '-deck'}
+          slides={slides}
+          title={a.title}
+          tag={a.topic}
+          meta={a.publishedLabel}
+          shareLink={a.articleUrl}
+          brand={brand}
+          times={{ read: 0, tldr: a.times.tldr ?? 1, listen: null }}
+          slideshow
+          onClose={() => router.push('/')}
+        />
+      </main>
+    );
   }
 
   return (

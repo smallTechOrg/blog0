@@ -224,6 +224,8 @@ export const article = pgTable(
     isFeatured: boolean('is_featured').notNull().default(false),
     featuredRank: integer('featured_rank'),
     inProgress: boolean('in_progress').notNull().default(false),
+    // SMA-49: a slideshow-only post — no Read, no Listen; its published TLDR deck is the post.
+    mediaOnly: boolean('media_only').notNull().default(false),
     firstPublishedAt: timestamp('first_published_at', { withTimezone: true }),
     lastPublishedAt: timestamp('last_published_at', { withTimezone: true }),
     contentUpdatedAt: timestamp('content_updated_at', { withTimezone: true }),

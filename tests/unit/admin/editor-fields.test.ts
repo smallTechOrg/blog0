@@ -6,7 +6,7 @@ import type { ArticleDetailDto } from '@/lib/api/dto';
 function article(over: Partial<ArticleDetailDto> = {}, rev: Partial<ArticleDetailDto['currentRevision']> = {}): ArticleDetailDto {
   return {
     id: 'a1', slug: 'hello-world', slugLocked: false, status: 'draft', topic: 'AI', bylineName: 'Sai',
-    isFeatured: false, featuredRank: null, inProgress: false, firstPublishedAt: null, lastPublishedAt: null,
+    isFeatured: false, featuredRank: null, inProgress: false, mediaOnly: false, firstPublishedAt: null, lastPublishedAt: null,
     currentRevision: {
       id: 'r1', number: 1, createdAt: '2026-10-12T10:00:00Z', createdBy: 'Sai',
       title: 'Hello world', dek: 'A dek', bodyMd: 'Body text here.', wordCount: 3, eligibleSentenceCount: 0, ...rev,

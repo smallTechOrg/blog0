@@ -155,6 +155,14 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
             />
             Show ‘Draft — in progress’ badge
           </label>
+          <label className="admin-check">
+            <input
+              type="checkbox"
+              checked={fields.mediaOnly}
+              onChange={(e) => onField('mediaOnly', e.target.checked)}
+            />
+            Slideshow only — readers get just the TLDR deck (images and short lines), no article text or Listen
+          </label>
         </div>
       </details>
 

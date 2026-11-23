@@ -61,7 +61,7 @@ export interface ArticleListItemDto {
 export interface RevisionRefDto { id: string; number: number; createdAt: string; createdBy: string }
 export interface ArticleDetailDto {
   id: string; slug: string; slugLocked: boolean; status: ArticleStatus;
-  topic: string; bylineName: string; isFeatured: boolean; featuredRank: number | null; inProgress: boolean;
+  topic: string; bylineName: string; isFeatured: boolean; featuredRank: number | null; inProgress: boolean; mediaOnly: boolean;
   firstPublishedAt: string | null; lastPublishedAt: string | null;
   currentRevision: RevisionRefDto & { title: string; dek: string; bodyMd: string; wordCount: number; eligibleSentenceCount: number };
   publishedRevisionId: string | null;
@@ -94,7 +94,7 @@ export type GetArticleResponse = ArticleResponse;
 export interface UpdateArticleRequest {
   baseRevisionId: string;
   title?: string; dek?: string; bodyMd?: string; topic?: string; slug?: string;
-  isFeatured?: boolean; featuredRank?: number | null; inProgress?: boolean;
+  isFeatured?: boolean; featuredRank?: number | null; inProgress?: boolean; mediaOnly?: boolean;
 }
 export interface UpdateArticleResponse { article: ArticleDetailDto; revisionCreated: boolean }
 
@@ -106,7 +106,7 @@ export interface PublishRequest { revisionId: string }
 export type PublishResponse = ArticleResponse;
 export type UnpublishResponse = ArticleResponse;
 /** 422 PUBLISH_BLOCKED → error.details. Listen never blocks publishing. */
-export type PublishBlockedReasonCode = 'TITLE_REQUIRED' | 'TOPIC_REQUIRED' | 'BODY_REQUIRED' | 'TLDR_DECK_STALE';
+export type PublishBlockedReasonCode = 'TITLE_REQUIRED' | 'TOPIC_REQUIRED' | 'BODY_REQUIRED' | 'DECK_REQUIRED' | 'TLDR_DECK_STALE';
 /** `sids` for TLDR_DECK_STALE. */
 export interface PublishBlockedReason { code: PublishBlockedReasonCode; message: string; sids?: string[] }
 export interface PublishBlockedDetails { reasons: PublishBlockedReason[] }
@@ -119,7 +119,9 @@ export interface PublishBlockedDetails { reasons: PublishBlockedReason[] }
 // has no score in the article's latest succeeded generation — never scored, changed since, or a pre-Phase-8 generation)
 // takes its place. Source of every relevance value: spec/architecture.md §3 "Relevance in the editor".
 export interface SentenceDto { sid: string; index: number; pid: string; text: string; words: number; headingPath: string[]; relevance: number | null }
-export interface DeckSlideDto { sid: string; text: string; source: 'jev' | 'writer'; relevance: number | null; missing: boolean } // missing = sid/text no longer in current revision
+/** SMA-49: a hand-placed image slide (`source: 'image'`, `sid: 'img:<assetId>'`, `text` = optional caption). */
+export interface DeckImageDto { assetId: string; key: string; url: string; alt: string; width: number; height: number }
+export interface DeckSlideDto { sid: string; text: string; source: 'jev' | 'writer' | 'image'; relevance: number | null; missing: boolean; image?: DeckImageDto } // missing = sid/text no longer in current revision
 export interface GenerationDto {
   id: string; status: 'running' | 'succeeded' | 'failed'; model: string; promptVersion: string;
   requestedBy: string; startedAt: string; finishedAt: string | null; latencyMs: number | null;
@@ -136,7 +138,7 @@ export interface TldrStateDto {
   sentences: SentenceDto[];                                       // current revision, EVERY sentence (SMA-35), DOCUMENT order (the client sorts by relevance)
   eligibleCount: number;                                          // how many of them the AI ranks (≥ 5 words)
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
-  published: { slides: Array<{ text: string }>; publishedAt: string } | null;
+  published: { slides: Array<{ text: string; image?: { url: string; alt: string } }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
   /** False when no AI provider is set up (Admin → Site → AI provider): Generate is disabled. */
   aiAvailable: boolean;
@@ -157,7 +159,11 @@ export interface GenerateTldrErrorDetails { generation: GenerationDto }
  */
 export interface SaveDeckRequest {
   revisionId: string;
-  slides: Array<{ sid: string; source: 'jev' | 'writer' }>;
+  slides: Array<
+    | { sid: string; source: 'jev' | 'writer' }
+    /** An image slide: the asset (an image of this site), a caption (≤ 200, may be empty) and alt text. */
+    | { sid: string; source: 'image'; assetId: string; text: string; alt: string }
+  >;
 }
 export interface TldrResponse { tldr: TldrStateDto }
 export type SaveDeckResponse = TldrResponse;
@@ -248,7 +254,7 @@ export interface ImageUploadResponse {
 /** GET /api/public/articles/:slug/tldr — published only, else 404. */
 export interface PublicTldrDto {
   slug: string; title: string; topic: string; dek: string; meta: string;
-  slides: Array<{ text: string }>;
+  slides: Array<{ text: string; image?: { url: string; alt: string } }>;
   times: { read: number; tldr: number; listen: number | null };
   shareUrl: string;
 }

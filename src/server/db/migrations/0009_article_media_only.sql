@@ -1,0 +1,1 @@
+ALTER TABLE "article" ADD COLUMN "media_only" boolean DEFAULT false NOT NULL;

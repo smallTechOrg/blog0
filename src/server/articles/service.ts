@@ -17,6 +17,7 @@ import { renderArticle } from '../content/render';
 import { getDb, type Tx } from '../db/client';
 import { article, articleRevision, type ArticleRow, type RevisionRow } from '../db/schema';
 import { formatAdapters } from '../formats';
+import { readTldrPayload } from '../formats/payload';
 import { ApiError } from '../http/api';
 import { log } from '../log';
 import { audioRefOf, deleteAssetIfUnreferenced, deleteStoredFiles } from '../media/cleanup';
@@ -212,6 +213,7 @@ export async function updateArticle(
       if (body.isFeatured !== undefined && body.isFeatured !== row.isFeatured) patch.isFeatured = body.isFeatured;
       if (body.featuredRank !== undefined && body.featuredRank !== row.featuredRank) patch.featuredRank = body.featuredRank;
       if (body.inProgress !== undefined && body.inProgress !== row.inProgress) patch.inProgress = body.inProgress;
+      if (body.mediaOnly !== undefined && body.mediaOnly !== row.mediaOnly) patch.mediaOnly = body.mediaOnly;
 
       if (body.slug !== undefined && body.slug !== row.slug) {
         if (row.firstPublishedAt) {
@@ -278,8 +280,11 @@ async function publishReasons(
   const reasons: Reason[] = [];
   if (revision.title.trim() === '') reasons.push({ code: 'TITLE_REQUIRED', message: 'Add a title before publishing.' });
   if (row.topic.trim() === '') reasons.push({ code: 'TOPIC_REQUIRED', message: 'Choose a topic before publishing.' });
-  if (revision.bodyMd.trim() === '') reasons.push({ code: 'BODY_REQUIRED', message: 'The article body is empty.' });
+  if (revision.bodyMd.trim() === '' && !row.mediaOnly) reasons.push({ code: 'BODY_REQUIRED', message: 'The article body is empty.' });
   const rows = await formatRows(siteId, [row.id], tx);
+  if (row.mediaOnly && !readTldrPayload(rows.find((r) => r.kind === 'tldr')?.draftPayload)) {
+    reasons.push({ code: 'DECK_REQUIRED', message: 'A slideshow post needs a TLDR deck — add at least one slide.' });
+  }
   for (const adapter of formatAdapters()) {
     const check = adapter.validateForPublish({ row: rows.find((r) => r.kind === adapter.kind) ?? null, revision, rendered });
     if (!check.ok) {

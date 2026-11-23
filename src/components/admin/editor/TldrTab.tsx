@@ -20,10 +20,13 @@ import { boundsHint, FORMAT_STATUS_LABEL, generationMeta } from '../labels';
 import { DeckList } from '../tldr/DeckList';
 import { DeckPreview } from '../tldr/DeckPreview';
 import {
+  addImage,
   addSentence,
   deckFromDraft,
   deckFromPicks,
   deckIsDirty,
+  editImage,
+  imageLine,
   moveLine,
   reconcileDeck,
   removeLine,
@@ -32,6 +35,7 @@ import {
 } from '../tldr/deck-edit';
 import { SentencePicker } from '../tldr/SentencePicker';
 
+import { uploadImage } from '../listen/listen-api';
 import { generateButtonLabel, generatedNotice, runExclusive, type GeneratePhase } from './tldr-generate';
 
 // TLDR tab (spec/ui.md §4, capability jev-tldr). Generate with AI (one ranking call per click —
@@ -53,6 +57,8 @@ export interface TldrTabProps {
   saveFirst: () => Promise<ArticleDetailDto | null>;
   /** Re-reads the article (format chips, publish state) after a deck change. */
   onArticleChanged: () => void;
+  /** A slideshow-only post (SMA-49): the deck is the post — no title card, no Read hand-over. */
+  mediaOnly?: boolean;
 }
 
 type DeckState = { saved: DeckLine[]; lines: DeckLine[] };
@@ -85,6 +91,8 @@ export function TldrTab(props: TldrTabProps) {
   const [busy, setBusy] = useState<null | 'save' | 'clear'>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(() => new Date());
 
   /** Take the server's state; keep the writer's unsaved deck edits unless `force`. */
@@ -237,6 +245,27 @@ export function TldrTab(props: TldrTabProps) {
     );
   }
 
+  /** Adds the chosen picture(s) to the end of the deck (an upload to the media library first). */
+  async function addImages(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setNotice(null);
+    try {
+      for (const file of Array.from(files)) {
+        const res = await uploadImage(file, { alt: '', articleId });
+        if (!res.ok) {
+          setNotice({ tone: 'error', text: `Couldn’t add ${file.name}: ${res.error.message}` });
+          break;
+        }
+        const line = imageLine(res.data.asset, '');
+        setDeck((prev) => ({ ...prev, lines: addImage(prev.lines, line) }));
+      }
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  }
+
   function toggle(sentence: SentenceDto, checked: boolean): void {
     setDeck((prev) => ({
       ...prev,
@@ -363,8 +392,30 @@ export function TldrTab(props: TldrTabProps) {
               disabled={inFlight || busy !== null}
               onMove={(pos, delta) => setDeck((prev) => ({ ...prev, lines: moveLine(prev.lines, pos, delta) }))}
               onRemove={(sid) => setDeck((prev) => ({ ...prev, lines: removeLine(prev.lines, sid) }))}
+              onEditImage={(sid, patch) => setDeck((prev) => ({ ...prev, lines: editImage(prev.lines, sid, patch) }))}
             />
           )}
+          <p className="tldrtab__addimg">
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              hidden
+              data-testid="deck-image-input"
+              onChange={(e) => void addImages(e.target.files)}
+            />
+            <button
+              type="button"
+              className="admin-btn admin-btn--small"
+              onClick={() => fileInput.current?.click()}
+              disabled={uploading || inFlight || busy !== null}
+              aria-busy={uploading}
+            >
+              {uploading ? 'Uploading…' : 'Add image'}
+            </button>{' '}
+            <span className="admin-hint">PNG, JPEG, WebP or GIF. Add a caption and alt text under each picture.</span>
+          </p>
         </section>
         <section className="tldrtab__col" aria-labelledby={`lines-h-${articleId}`}>
           <h2 className="tldrtab__h" id={`lines-h-${articleId}`}>
@@ -413,6 +464,7 @@ export function TldrTab(props: TldrTabProps) {
           dateLabel={props.dateLabel}
           readMinutes={readMinutes}
           lines={deck.lines}
+          mediaOnly={props.mediaOnly}
           shareLink={article.publicUrl ? `${article.publicUrl.replace(/\/$/, '')}/tldr` : undefined}
           onClose={() => setPreviewing(false)}
         />

@@ -54,6 +54,9 @@ export interface TldrDeckProps {
   /** Capsule Listen; omitted → disabled (without a recording, `times.listen` null, it is hidden). */
   onListen?: () => void;
   layout?: DeckLayout;
+  /** A slideshow-only post (SMA-49): no Read / Listen to hand over to, so the mode capsule and the
+   *  "Read the full article" button are left out. */
+  slideshow?: boolean;
 }
 
 type TouchState = { x: number; y: number; axis: 'x' | 'y' | null; w: number; last?: number };
@@ -375,7 +378,7 @@ export function TldrDeck(props: TldrDeckProps) {
           const tail =
             i === n - 1 ? (
               <div key="end" className="tdeck__end">
-                {onRead ? (
+                {onRead && !props.slideshow ? (
                   <button className="btn-outline" type="button" onClick={onRead}>
                     Read the full article
                   </button>
@@ -409,9 +412,11 @@ export function TldrDeck(props: TldrDeckProps) {
                   <img className="tdeck__figimg" src={sl.img} alt={sl.alt || ''} />
                 </div>
                 <div key="g" className="tdeck__fig">
-                  <p className="tdeck__body" style={{ fontSize: tldrType(sl) }}>
-                    {sl.text}
-                  </p>
+                  {sl.text ? (
+                    <p className="tdeck__body" style={{ fontSize: tldrType(sl) }}>
+                      {sl.text}
+                    </p>
+                  ) : null}
                   {tail}
                 </div>
               </>
@@ -446,7 +451,7 @@ export function TldrDeck(props: TldrDeckProps) {
       {/* The mode switcher stays reachable from inside the deck, so Read and
           Audio are one tap away without closing it first. */}
       <div className="tdeck__foot">
-        <ModeCapsule
+        {props.slideshow ? null : <ModeCapsule
           className="modes--deck"
           active="tldr"
           times={{ read: times.read, tldr: times.tldr, listen: onListen ? times.listen : null }}
@@ -455,7 +460,7 @@ export function TldrDeck(props: TldrDeckProps) {
             if (mode === 'read') onRead?.();
             else if (mode === 'listen') onListen?.();
           }}
-        />
+        />}
         <span className="sr" aria-live="polite">
           {'Slide ' + (idx + 1) + ' of ' + n}
         </span>

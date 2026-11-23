@@ -66,7 +66,7 @@ export function siteBrandFromDocument(doc: Pick<Document, 'querySelector'>): str
 export function SummaryHost({ mode, slug, deck, listen, canSwitch, onSwitch, onClose, brand }: SummaryHostProps) {
   const router = useRouter();
   const slides = useMemo(
-    () => (deck ? buildDeckSlides(deck.title, deck.dek, deck.slides.map((s) => s.text)) : []),
+    () => (deck ? buildDeckSlides(deck.title, deck.dek, deck.slides) : []),
     [deck],
   );
   if (typeof document === 'undefined') return null;

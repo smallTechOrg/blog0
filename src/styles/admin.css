@@ -605,3 +605,9 @@
 /* The desk-wide banner when the AI provider is failing (SMA-44) */
 .aibanner { margin: 0; padding: 9px 20px; font-family: var(--font-head); font-size: 14px; color: var(--accent-ink); background: var(--accent-softer); border-bottom: 1px solid var(--accent-soft); }
 .aibanner a { color: inherit; font-weight: 600; }
+
+/* SMA-49: image slides in the TLDR deck editor */
+.deck__image { display: flex; gap: 12px; align-items: flex-start; }
+.deck__thumb { height: auto; max-height: 96px; object-fit: cover; border-radius: 4px; flex: none; }
+.deck__imgfields { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.tldrtab__addimg { margin: 12px 0 0; }

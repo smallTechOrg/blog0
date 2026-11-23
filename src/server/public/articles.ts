@@ -58,9 +58,14 @@ function published<T>(read: (raw: unknown) => T | null, raw: unknown, event: str
   return payload;
 }
 
+/** A published slide as the reader gets it: the text and, for an image slide, its same-origin URL. */
+export function publicSlide(s: TldrPayload['slides'][number]): { text: string; image?: { url: string; alt: string } } {
+  return s.image ? { text: s.text, image: { url: `/media/${s.image.key}`, alt: s.image.alt } } : { text: s.text };
+}
+
 /** Minutes for the capsule/card TLDR badge: the design's formula over the whole deck (intro included). */
 function deckMinutes(title: string, dek: string, deck: TldrPayload | null): number | null {
-  return deck ? tldrMinutes(buildDeckSlides(title, dek, deck.slides.map((s) => s.text))) : null;
+  return deck ? tldrMinutes(buildDeckSlides(title, dek, deck.slides.map(publicSlide))) : null;
 }
 
 function absolute(path: string): string {
@@ -134,6 +139,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       // 2026-11-09); article.byline_name is only the name at creation.
       bylineName: appUser.displayName,
       inProgress: article.inProgress,
+      mediaOnly: article.mediaOnly,
       firstPublishedAt: article.firstPublishedAt,
       lastPublishedAt: article.lastPublishedAt,
       contentUpdatedAt: article.contentUpdatedAt,
@@ -183,6 +189,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       publishedLabel: fmtDate(publishedAt, site.timezone),
       updatedLabel: null, // revision history (content_updated_at label) is deferred
       inProgress: row.inProgress,
+      mediaOnly: row.mediaOnly,
       blocks: rendered.blocks,
       times: {
         read: rendered.stats.readMinutes,
@@ -191,7 +198,7 @@ export async function loadPublishedArticle(slug: string): Promise<PublishedArtic
       },
       deck: deck
         ? {
-            slides: deck.slides.map((s) => ({ text: s.text })),
+            slides: deck.slides.map(publicSlide),
             shareUrl: absolute(articlePath(row.slug) + '/tldr'),
           }
         : null,
@@ -245,6 +252,7 @@ export async function publishedCards(): Promise<PublishedCard[]> {
       slug: article.slug,
       topic: article.topic,
       inProgress: article.inProgress,
+      mediaOnly: article.mediaOnly,
       isFeatured: article.isFeatured,
       featuredRank: article.featuredRank,
       firstPublishedAt: article.firstPublishedAt,
@@ -275,6 +283,7 @@ export async function publishedCards(): Promise<PublishedCard[]> {
         topic: r.topic,
         publishedLabel: fmtDate(firstPublishedAt, site.timezone),
         inProgress: r.inProgress,
+        mediaOnly: r.mediaOnly,
         times: {
           tldr: deckMinutes(r.title, r.dek, published(readTldrPayload, r.deckPayload, 'public.deck_invalid', r.id)),
           // the published recording's minutes — never the draft's (spec/capabilities/listen-audio.md)

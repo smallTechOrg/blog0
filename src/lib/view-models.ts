@@ -20,7 +20,7 @@ export interface SiteViewModel {
 }
 
 export interface DeckViewModel {
-  slides: Array<{ text: string }>;
+  slides: Array<{ text: string; image?: { url: string; alt: string } }>;
   shareUrl: string; // absolute …/p/<slug>/tldr
 }
 
@@ -43,6 +43,8 @@ export interface ArticleViewModel {
   publishedLabel: string; // fmtDate(first_published_at, site tz) e.g. "8 Sep 2026"
   updatedLabel: string | null; // publication-record (Frozen — not scheduled): always null
   inProgress: boolean;
+  /** SMA-49: a slideshow-only post — the page is its deck, no Read / Listen. */
+  mediaOnly: boolean;
   blocks: Block[]; // from RenderedArticle
   times: { read: number; tldr: number | null; listen: number | null };
   deck: DeckViewModel | null; // published deck only
@@ -59,6 +61,7 @@ export interface PostCardViewModel {
   topic: string;
   publishedLabel: string;
   inProgress: boolean;
+  mediaOnly?: boolean;
   times: { tldr: number | null; listen: number | null };
 }
 

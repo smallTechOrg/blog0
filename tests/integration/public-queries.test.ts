@@ -272,6 +272,7 @@ describe('listPublishedPostCards', () => {
       topic: 'Op-Ed',
       publishedLabel: '8 Sep 2026',
       inProgress: true,
+      mediaOnly: false,
       times: { tldr: null, listen: null },
     });
     expect(cards[1].times.tldr).toBe(tldrMinutes(buildDeckSlides('With deck', 'A short standfirst.', [pre.sentences[0].text, pre.sentences[1].text])));

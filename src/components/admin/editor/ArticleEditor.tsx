@@ -251,6 +251,7 @@ export function ArticleEditor({ articleId, timeZone }: ArticleEditorProps) {
               dateLabel={dateLabel}
               timeZone={timeZone}
               saveFirst={save}
+              mediaOnly={fields.mediaOnly}
               onArticleChanged={() => void refreshArticle()}
             />
           ) : null}

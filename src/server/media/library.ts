@@ -53,7 +53,16 @@ async function usageByAsset(siteId: string, assetId?: string): Promise<Map<strin
     join article a on a.id = r.article_id and (a.current_revision_id = r.id or a.published_revision_id = r.id)
     join article_revision cur on cur.id = a.current_revision_id
     where m.site_id = ${siteId} and m.kind = 'image' ${only}
-    order by a.updated_at desc
+    union
+    -- SMA-49: images placed on a TLDR deck (draft or published payload)
+    select distinct m.id as asset_id, a.id as article_id, a.slug as slug, a.status as status, cur.title as title, a.updated_at as updated_at
+    from media_asset m
+    join article_format f on f.site_id = m.site_id and f.kind = 'tldr'
+      and (f.draft_payload::text like '%' || m.id::text || '%' or f.published_payload::text like '%' || m.id::text || '%')
+    join article a on a.id = f.article_id
+    join article_revision cur on cur.id = a.current_revision_id
+    where m.site_id = ${siteId} and m.kind = 'image' ${only}
+    order by updated_at desc
   `);
   const out = new Map<string, MediaUsageDto[]>();
   for (const r of rowsOf<UsageRow>(result)) {

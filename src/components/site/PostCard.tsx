@@ -48,7 +48,7 @@ export function PostCard({ post: p, variant = 'post', i }: PostCardProps) {
      excerpt. Capped shorter than an article H1 so a scrolling feed keeps up. */
   const excerptDelay = Math.min(dekDelay(p.title), 700);
   const cls = variant === 'card' ? 'fcard' : variant === 'card-lead' ? 'fcard fcard--lead' : 'post';
-  const hasQuick = p.times.tldr != null || p.times.listen != null;
+  const hasQuick = !p.mediaOnly && (p.times.tldr != null || p.times.listen != null);
 
   const [state, setState] = useState<Record<SummaryMode, QuickState>>({ tldr: 'idle', listen: 'idle' });
   const [deck, setDeck] = useState<PublicTldrDto | null>(null);

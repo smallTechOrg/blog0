@@ -100,3 +100,25 @@ describe('tdeckSlide', () => {
     expect(tdeckSlide(obj)).toBe(obj);
   });
 });
+
+describe('image slides and slideshow decks (SMA-49)', () => {
+  it('turns a line with an image into a slide carrying img + alt, and leaves text-only lines alone', () => {
+    const slides = buildDeckSlides('T', '', ['plain', { text: 'cap', image: { url: '/media/a.png', alt: 'A' } }, { text: 'text' }]);
+
+    expect(slides.slice(1)).toEqual([
+      { kind: 'line', text: 'plain' },
+      { kind: 'line', text: 'cap', img: '/media/a.png', alt: 'A' },
+      { kind: 'line', text: 'text' },
+    ]);
+  });
+
+  it('drops the title card for a slideshow-only post', () => {
+    const slides = buildDeckSlides('T', 'dek', [{ text: '', image: { url: '/media/a.png', alt: '' } }], { intro: false });
+
+    expect(slides).toEqual([{ kind: 'line', text: '', img: '/media/a.png', alt: '' }]);
+  });
+
+  it('holds a captionless image for 4.5 s', () => {
+    expect(tldrDwell({ kind: 'line', text: '', img: '/media/a.png' })).toBe(4500);
+  });
+});
