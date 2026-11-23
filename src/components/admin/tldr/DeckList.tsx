@@ -18,10 +18,12 @@ export interface DeckListProps {
   lines: readonly DeckLine[];
   onMove: (pos: number, delta: -1 | 1) => void;
   onRemove: (sid: string) => void;
+  /** Edit an image line's caption / alt text (SMA-49). */
+  onEditImage?: (sid: string, patch: { text?: string; alt?: string }) => void;
   disabled?: boolean;
 }
 
-export function DeckList({ lines, onMove, onRemove, disabled }: DeckListProps) {
+export function DeckList({ lines, onMove, onRemove, onEditImage, disabled }: DeckListProps) {
   return (
     <ol className="deck">
       {lines.map((l, i) => {
@@ -32,10 +34,39 @@ export function DeckList({ lines, onMove, onRemove, disabled }: DeckListProps) {
               {String(n).padStart(2, '0')}
             </span>
             <div className="deck__body">
-              <p className="deck__text">{l.text}</p>
+              {l.image ? (
+                <div className="deck__image">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- admin thumbnail of an uploaded image */}
+                  <img className="deck__thumb" src={l.image.url} alt={l.image.alt} width={96} />
+                  <div className="deck__imgfields">
+                    <input
+                      className="admin-input"
+                      type="text"
+                      maxLength={200}
+                      placeholder="Caption (optional)"
+                      aria-label={`Caption for slide ${n}`}
+                      value={l.text}
+                      disabled={disabled}
+                      onChange={(e) => onEditImage?.(l.sid, { text: e.target.value })}
+                    />
+                    <input
+                      className="admin-input"
+                      type="text"
+                      maxLength={200}
+                      placeholder="Alt text — describe the image"
+                      aria-label={`Alt text for slide ${n}`}
+                      value={l.image.alt}
+                      disabled={disabled}
+                      onChange={(e) => onEditImage?.(l.sid, { alt: e.target.value })}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <p className="deck__text">{l.text}</p>
+              )}
               {l.missing ? <p className="deck__missing">No longer in the article</p> : null}
               <p className="deck__meta">
-                {l.source === 'jev' ? 'AI' : 'Added by you'}
+                {l.source === 'jev' ? 'AI' : l.image ? 'Image' : 'Added by you'}
                 {relevanceLabel(l.relevance) ? (
                   <>
                     {' · '}

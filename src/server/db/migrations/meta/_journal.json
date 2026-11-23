@@ -64,6 +64,13 @@
       "when": 1795264045998,
       "tag": "0008_ai_assistant_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795418126426,
+      "tag": "0009_article_media_only",
+      "breakpoints": true
     }
   ]
 }

@@ -111,10 +111,10 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
     const applied = await runMigrations(getDbHandle());
     const status = await getMigrationStatus(getDbHandle());
 
-    expect(applied).toEqual(['0000_init', '0001_rate_limit_bucket', '0002_newsletter', '0003_newsletter_prune_fix', '0004_newsletter_erasure', '0005_newsletter_erase_delete', '0006_known_device', '0007_ai_provider', '0008_ai_assistant_prompt']);
+    expect(applied).toEqual(['0000_init', '0001_rate_limit_bucket', '0002_newsletter', '0003_newsletter_prune_fix', '0004_newsletter_erasure', '0005_newsletter_erase_delete', '0006_known_device', '0007_ai_provider', '0008_ai_assistant_prompt', '0009_article_media_only']);
     expect(status.engine).toBe('pglite');
     expect(status.pending).toEqual([]);
-    expect(status.latestApplied).toBe('0008_ai_assistant_prompt');
+    expect(status.latestApplied).toBe('0009_article_media_only');
     expect(status.serverVersion).toMatch(/^17\./);
     expect(await runMigrations(getDbHandle())).toEqual([]); // idempotent
   });
@@ -297,7 +297,7 @@ describe('designer mode on embedded PGlite (pglite://memory)', () => {
 
         const savedDeck = await noDeadlock(
           'saveDeck',
-          saveDeck(ctx, created.id, { revisionId, slides: slides.map((s) => ({ sid: s.sid, source: s.source })) }),
+          saveDeck(ctx, created.id, { revisionId, slides: slides.map((s) => ({ sid: s.sid, source: s.source as 'jev' | 'writer' })) }),
         );
         expect(savedDeck.draft!.slides.map((s) => s.text)).toEqual(slides.map((s) => s.text));
 

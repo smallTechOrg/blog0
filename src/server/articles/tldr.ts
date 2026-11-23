@@ -2,13 +2,13 @@ import 'server-only';
 
 import { and, eq } from 'drizzle-orm';
 
-import type { DeckInvalidDetails, DeckSlideDto, GenerationDto, SentenceDto, TldrStateDto } from '@/lib/api/dto';
+import type { DeckImageDto, DeckInvalidDetails, DeckSlideDto, GenerationDto, SentenceDto, TldrStateDto } from '@/lib/api/dto';
 import type { RenderedArticle } from '@/lib/content/types';
 
 import { getAi, isAiConfigured, setAiForTests } from '../ai/provider';
 import { getDb, type Executor } from '../db/client';
 import { aiGeneration, articleFormat, type AiGenerationRow, type ArticleRow } from '../db/schema';
-import { readTldrPayload, TLDR_MIN_SLIDES, type TldrPayload } from '../formats/payload';
+import { readTldrPayload, TLDR_MIN_SLIDES, type TldrPayload, type TldrSlide } from '../formats/payload';
 import { missingSlides, tldrAdapter } from '../formats/tldr';
 import { GENERATION_STALE_MS, isGenerationActive } from '../formats/types';
 import { ApiError } from '../http/api';
@@ -29,6 +29,7 @@ import {
   userNames,
 } from './repo';
 import type { SaveDeckBody } from './schemas';
+import { findMediaAsset } from '../media/repo';
 import { notFound, type ActorContext } from './service';
 import { iso, renderRevision, UNKNOWN_USER } from './views';
 
@@ -79,6 +80,14 @@ export function resetJevDepsForTests(): void {
 
 // ---------------------------------------------------------------------------------------------
 
+
+function mediaUrl(key: string): string {
+  return `/media/${key}`;
+}
+
+function toImageDto(image: NonNullable<TldrSlide['image']>): DeckImageDto {
+  return { ...image, url: mediaUrl(image.key) };
+}
 
 export async function getTldrState(siteId: string, id: string): Promise<TldrStateDto> {
   const row = await findArticle(siteId, id);
@@ -257,22 +266,36 @@ export async function saveDeck(ctx: ActorContext, id: string, body: SaveDeckBody
     const bySid = new Map(rendered.lines.map((s) => [s.sid, s]));
     const seen = new Set<string>();
     const bad: string[] = [];
+    // SMA-49: image slides resolve their asset here (an image of this site), never from the client.
+    const images = new Map<string, TldrSlide>();
     for (const slide of body.slides) {
-      if (!bySid.has(slide.sid) || seen.has(slide.sid)) bad.push(slide.sid);
+      if (slide.source === 'image') {
+        const asset = await findMediaAsset(ctx.siteId, slide.assetId, tx);
+        const okAsset = asset && asset.kind === 'image' && asset.width && asset.height;
+        if (!okAsset || slide.sid !== `img:${asset.id}` || seen.has(slide.sid)) bad.push(slide.sid);
+        else {
+          images.set(slide.sid, {
+            sid: slide.sid,
+            text: slide.text,
+            source: 'image',
+            image: { assetId: asset.id, key: asset.storageKey, alt: slide.alt, width: asset.width!, height: asset.height! },
+          });
+        }
+      } else if (!bySid.has(slide.sid) || seen.has(slide.sid)) bad.push(slide.sid);
       seen.add(slide.sid);
     }
     if (bad.length > 0) {
       throw new ApiError(
         'DECK_INVALID',
         422,
-        `Some deck lines aren't sentences of the current version (or appear twice): ${bad.length} line${bad.length === 1 ? '' : 's'}.`,
+        `Some deck lines aren't sentences of the current version, images of this site (or appear twice): ${bad.length} line${bad.length === 1 ? '' : 's'}.`,
         { sids: [...new Set(bad)] } satisfies DeckInvalidDetails,
       );
     }
 
     const existing = readTldrPayload((await findFormatRow(ctx.siteId, id, TLDR, tx))?.draftPayload);
     const payload: TldrPayload = {
-      slides: body.slides.map((s) => ({ sid: s.sid, text: bySid.get(s.sid)!.text, source: s.source })),
+      slides: body.slides.map((s): TldrSlide => images.get(s.sid) ?? { sid: s.sid, text: bySid.get(s.sid)!.text, source: s.source === 'image' ? 'writer' : s.source }),
       generationId: existing?.generationId ?? null,
     };
     await upsertFormatDraft(tx, ctx.siteId, id, TLDR, draftOf(ctx, payload, revision.id, revision.sentencesFingerprint));
@@ -404,6 +427,7 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
           source: s.source,
           relevance: relevance.get(s.sid) ?? null,
           missing: missing.has(s.sid),
+          ...(s.image ? { image: toImageDto(s.image) } : {}),
         }),
       ),
       revisionId: formatRow.draftRevisionId ?? revision.id,
@@ -415,7 +439,7 @@ async function buildTldrState(siteId: string, row: ArticleRow, now: Date = new D
   const publishedPayload = readTldrPayload(formatRow?.publishedPayload);
   const published: TldrStateDto['published'] =
     formatRow && publishedPayload && formatRow.publishedAt
-      ? { slides: publishedPayload.slides.map((s) => ({ text: s.text })), publishedAt: formatRow.publishedAt.toISOString() }
+      ? { slides: publishedPayload.slides.map((s) => ({ text: s.text, ...(s.image ? { image: { url: mediaUrl(s.image.key), alt: s.image.alt } } : {}) })), publishedAt: formatRow.publishedAt.toISOString() }
       : null;
 
   return {

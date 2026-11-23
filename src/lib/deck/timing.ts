@@ -31,9 +31,16 @@ export function tdeckSlide(s: DeckSlide | string): DeckSlide {
 }
 
 /** The deck the reader sees: the title card, then one slide per published line, in order. */
-export function buildDeckSlides(title: string, dek: string, lines: readonly string[]): DeckSlide[] {
+export type DeckLineInput = string | { text: string; image?: { url: string; alt: string } };
+
+export function buildDeckSlides(title: string, dek: string, lines: readonly DeckLineInput[], opts: { intro?: boolean } = {}): DeckSlide[] {
+  const body = lines.map((l): DeckSlide =>
+    typeof l === 'string' ? { kind: 'line', text: l } : l.image ? { kind: 'line', text: l.text, img: l.image.url, alt: l.image.alt } : { kind: 'line', text: l.text },
+  );
+  // A slideshow-only post (SMA-49) opens straight on its first slide: no title card.
+  if (opts.intro === false) return body;
   const intro: DeckSlide = dek ? { kind: 'intro', text: title, sub: dek } : { kind: 'intro', text: title };
-  return [intro, ...lines.map((text): DeckSlide => ({ kind: 'line', text }))];
+  return [intro, ...body];
 }
 
 /* How long a slide holds before the deck moves on: roughly the time it
@@ -43,9 +50,11 @@ export function tldrWords(s: Pick<DeckSlide, 'text'> | null | undefined): number
   return String((s && s.text) || '').trim().split(/\s+/).length;
 }
 
-export function tldrDwell(sl: Pick<DeckSlide, 'kind' | 'text'> | null | undefined): number {
+export function tldrDwell(sl: Pick<DeckSlide, 'kind' | 'text'> & { img?: string } | null | undefined): number {
   /* the title card is a beat, not a read */
   if (sl && sl.kind === 'intro') return 3800;
+  /* a picture with no caption: time to look at it */
+  if (sl && sl.img && !String(sl.text || '').trim()) return 4500;
   const w = tldrWords(sl);
   return Math.round(Math.max(2800, Math.min(9000, 1100 + (w / 3.1) * 1000)));
 }

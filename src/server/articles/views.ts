@@ -95,6 +95,7 @@ export async function buildArticleDetail(siteId: string, row: ArticleRow, now: D
     isFeatured: row.isFeatured,
     featuredRank: row.featuredRank,
     inProgress: row.inProgress,
+    mediaOnly: row.mediaOnly,
     firstPublishedAt: iso(row.firstPublishedAt),
     lastPublishedAt: iso(row.lastPublishedAt),
     currentRevision: {

@@ -9,11 +9,24 @@ export const TLDR_MIN_SLIDES = 1;
 // Phase 8: slides carry no `reason` (Jev ranks; relevance lives only in ai_generation.output.scores).
 // Legacy payloads whose slides have `reason: string | null` parse unchanged — zod strips the
 // unknown key — so pre-Phase-8 decks still read, edit and publish. No migration.
-const tldrSlideSchema = z.object({
-  sid: z.string().min(1),
-  text: z.string().min(1),
-  source: z.enum(['jev', 'writer']),
+// SMA-49: a slide may be a hand-placed image (`source: 'image'`). Its `sid` is `img:<assetId>`
+// (not a sentence id), `text` is an optional caption ('' allowed) and `image` carries the asset.
+const tldrImageSchema = z.object({
+  assetId: z.string().uuid(),
+  key: z.string().min(1).max(160),
+  alt: z.string().max(200).default(''),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
 });
+
+const tldrSlideSchema = z
+  .object({
+    sid: z.string().min(1),
+    text: z.string(),
+    source: z.enum(['jev', 'writer', 'image']),
+    image: tldrImageSchema.optional(),
+  })
+  .refine((s) => (s.source === 'image' ? s.image !== undefined : s.image === undefined && s.text.length > 0));
 
 const tldrPayloadSchema = z.object({
   slides: z.array(tldrSlideSchema).min(TLDR_MIN_SLIDES),
@@ -21,6 +34,7 @@ const tldrPayloadSchema = z.object({
 });
 
 export type TldrSlide = z.infer<typeof tldrSlideSchema>;
+export type TldrImage = z.infer<typeof tldrImageSchema>;
 export type TldrPayload = z.infer<typeof tldrPayloadSchema>;
 
 /** Parses a stored payload; a corrupt/unknown payload reads as "no deck" (never crashes a page). */

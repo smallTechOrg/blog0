@@ -42,6 +42,7 @@ export const updateArticleBody = z.object({
   isFeatured: z.boolean().optional(),
   featuredRank: z.number().int().min(0).max(10_000).nullable().optional(),
   inProgress: z.boolean().optional(),
+  mediaOnly: z.boolean().optional(),
 });
 
 export const revisionBody = z.object({ revisionId: id });
@@ -53,10 +54,18 @@ export const saveDeckBody = z.object({
   // stripped by zod, not refused — relevance is never accepted from the client.
   slides: z
     .array(
-      z.object({
-        sid: z.string().trim().min(1).max(64),
-        source: z.enum(['jev', 'writer']),
-      }),
+      z.discriminatedUnion('source', [
+        z.object({ sid: z.string().trim().min(1).max(64), source: z.literal('jev') }),
+        z.object({ sid: z.string().trim().min(1).max(64), source: z.literal('writer') }),
+        // SMA-49: a hand-placed image slide; the server resolves the asset (key, size) itself.
+        z.object({
+          sid: z.string().trim().min(1).max(64),
+          source: z.literal('image'),
+          assetId: z.string().trim().min(1).max(64),
+          text: z.string().trim().max(200),
+          alt: z.string().trim().max(200),
+        }),
+      ]),
     ),
 });
 

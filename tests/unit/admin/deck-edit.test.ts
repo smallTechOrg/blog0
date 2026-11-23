@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addImage,
   addSentence,
   deckFromDraft,
   deckFromPicks,
   deckIsDirty,
+  editImage,
   hasScores,
+  imageLine,
   moveLine,
   reconcileDeck,
   removeLine,
@@ -183,5 +186,43 @@ describe('sorting article lines by relevance', () => {
   it('captions a row with its last heading, or "Intro" before the first heading', () => {
     expect(sectionOf(sentence(0, ['Part one', 'Detail']))).toBe('Detail');
     expect(sectionOf(sentence(0, []))).toBe('Intro');
+  });
+});
+
+describe('image lines (SMA-49)', () => {
+  const asset = { id: 'a1', key: 'k.png', url: '/media/k.png', mimeType: 'image/png' as const, bytes: 10, width: 40, height: 30 };
+
+  it('builds an image line whose sid is img:<assetId>, and does not add the same image twice', () => {
+    const l = imageLine(asset, '');
+
+    expect(l).toMatchObject({ sid: 'img:a1', source: 'image', text: '', missing: false, image: { assetId: 'a1', url: '/media/k.png' } });
+    expect(addImage([line(0)], l)).toHaveLength(2);
+    expect(addImage([l], l)).toEqual([l]);
+  });
+
+  it('edits only the caption and alt text of the named image line', () => {
+    const l = imageLine(asset, '');
+    const out = editImage([line(0), l], 'img:a1', { text: 'Caption', alt: 'Alt' });
+
+    expect(out[0]).toEqual(line(0));
+    expect(out[1]).toMatchObject({ text: 'Caption', image: { alt: 'Alt' } });
+  });
+
+  it('saves an image line with its asset, caption and alt; text lines send only sid + source', () => {
+    const l = editImage([imageLine(asset, '')], 'img:a1', { text: 'C', alt: 'A' })[0];
+
+    expect(toSaveSlides([line(1), l])).toEqual([
+      { sid: 's1', source: 'jev' },
+      { sid: 'img:a1', source: 'image', assetId: 'a1', text: 'C', alt: 'A' },
+    ]);
+  });
+
+  it('is dirty when a caption or alt text changes, and never flags an image as missing on reconcile', () => {
+    const saved = [imageLine(asset, '')];
+    const edited = editImage(saved, 'img:a1', { text: 'New' });
+
+    expect(deckIsDirty(saved, edited)).toBe(true);
+    expect(deckIsDirty(saved, saved)).toBe(false);
+    expect(reconcileDeck(saved, SENTENCES)[0].missing).toBe(false);
   });
 });

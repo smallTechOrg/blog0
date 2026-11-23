@@ -1,7 +1,7 @@
 // Hand-editing the TLDR draft deck (spec/ui.md §4 TLDR tab, capability jev-tldr). Pure.
 // Text always comes from the server's sentence list; the client only orders sids.
 
-import type { DeckSlideDto, GenerationDto, SaveDeckRequest, SentenceDto, TldrStateDto } from '@/lib/api/dto';
+import type { DeckImageDto, DeckSlideDto, GenerationDto, ImageUploadResponse, SaveDeckRequest, SentenceDto, TldrStateDto } from '@/lib/api/dto';
 
 export type DeckLine = DeckSlideDto;
 
@@ -35,6 +35,7 @@ export function deckFromPicks(
 export function reconcileDeck(deck: readonly DeckLine[], sentences: readonly SentenceDto[]): DeckLine[] {
   const bySid = new Map(sentences.map((s) => [s.sid, s]));
   return deck.map((l) => {
+    if (l.image) return l; // an image is not a sentence of the article: it never goes missing
     const s = bySid.get(l.sid);
     const missing = !s || s.text !== l.text;
     const relevance = !s || missing ? null : s.relevance;
@@ -62,6 +63,24 @@ export function addSentence(deck: DeckLine[], sentence: SentenceDto, sentences: 
   return [...deck.slice(0, after.pos), fresh, ...deck.slice(after.pos)];
 }
 
+/** A freshly uploaded image as a deck line (SMA-49): `sid` is `img:<assetId>`, the caption starts empty. */
+export function imageLine(asset: ImageUploadResponse['asset'], alt: string): DeckLine {
+  const image: DeckImageDto = { assetId: asset.id, key: asset.key, url: asset.url, alt, width: asset.width, height: asset.height };
+  return { sid: `img:${asset.id}`, text: '', source: 'image', relevance: null, missing: false, image };
+}
+
+/** Appends an image line; no-op when that image is already in the deck. */
+export function addImage(deck: DeckLine[], line: DeckLine): DeckLine[] {
+  return deck.some((l) => l.sid === line.sid) ? deck : [...deck, line];
+}
+
+/** Edits an image line's caption and/or alt text. */
+export function editImage(deck: DeckLine[], sid: string, patch: { text?: string; alt?: string }): DeckLine[] {
+  return deck.map((l) =>
+    l.sid === sid && l.image ? { ...l, text: patch.text ?? l.text, image: { ...l.image, alt: patch.alt ?? l.image.alt } } : l,
+  );
+}
+
 export function removeLine(deck: DeckLine[], sid: string): DeckLine[] {
   return deck.filter((l) => l.sid !== sid);
 }
@@ -75,12 +94,16 @@ export function moveLine(deck: DeckLine[], pos: number, delta: -1 | 1): DeckLine
 }
 
 export function toSaveSlides(deck: readonly DeckLine[]): SaveDeckRequest['slides'] {
-  return deck.map((l) => ({ sid: l.sid, source: l.source }));
+  return deck.map((l) =>
+    l.source === 'image' && l.image
+      ? { sid: l.sid, source: 'image' as const, assetId: l.image.assetId, text: l.text, alt: l.image.alt }
+      : { sid: l.sid, source: l.source === 'image' ? ('writer' as const) : l.source },
+  );
 }
 
 export function deckIsDirty(saved: readonly DeckLine[], current: readonly DeckLine[]): boolean {
   if (saved.length !== current.length) return true;
-  return saved.some((l, i) => l.sid !== current[i].sid || l.source !== current[i].source);
+  return saved.some((l, i) => l.sid !== current[i].sid || l.source !== current[i].source || l.text !== current[i].text || l.image?.alt !== current[i].image?.alt);
 }
 
 export type PickerOrder = 'relevance' | 'article';

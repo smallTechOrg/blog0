@@ -103,7 +103,7 @@ describe('DeckList', () => {
 
 const ARTICLE: ArticleDetailDto = {
   id: 'a1', slug: 'hello', slugLocked: false, status: 'draft', topic: 'AI', bylineName: 'Sai', isFeatured: false, featuredRank: null,
-  inProgress: false, firstPublishedAt: null, lastPublishedAt: null,
+  inProgress: false, mediaOnly: false, firstPublishedAt: null, lastPublishedAt: null,
   currentRevision: { id: 'r1', number: 2, createdAt: '2026-10-12T11:00:00Z', createdBy: 'Sai', title: 'Hello', dek: '', bodyMd: 'Hi', wordCount: 1, eligibleSentenceCount: 0 },
   publishedRevisionId: null, revisionCount: 2, formats: CHIPS, topics: ['AI'], publicUrl: null,
 };

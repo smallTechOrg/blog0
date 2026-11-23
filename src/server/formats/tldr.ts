@@ -10,14 +10,15 @@ import { isGenerationActive, publishDraft, type FormatAdapter } from './types';
 // (fp differs) → failed (no draft, latest run failed) → missing.
 
 /** Slides whose sid + text no longer exist among the given eligible sentences. */
-export function missingSlides(slides: readonly Pick<TldrSlide, 'sid' | 'text'>[], sentences: readonly Sentence[]): string[] {
+export function missingSlides(slides: readonly Pick<TldrSlide, 'sid' | 'text' | 'image'>[], sentences: readonly Sentence[]): string[] {
   const textBySid = new Map(sentences.map((s) => [s.sid, s.text]));
-  return slides.filter((s) => textBySid.get(s.sid) !== s.text).map((s) => s.sid);
+  // An image slide is not a sentence of the article: it can never go missing.
+  return slides.filter((s) => !s.image && textBySid.get(s.sid) !== s.text).map((s) => s.sid);
 }
 
 function sameSlides(a: readonly TldrSlide[] | undefined, b: readonly TldrSlide[] | undefined): boolean {
   if (!a || !b) return !a && !b;
-  return a.length === b.length && a.every((s, i) => s.sid === b[i].sid && s.text === b[i].text);
+  return a.length === b.length && a.every((s, i) => s.sid === b[i].sid && s.text === b[i].text && s.image?.alt === b[i].image?.alt);
 }
 
 export const tldrAdapter: FormatAdapter = {

@@ -29,7 +29,7 @@ export const GET = withApi(
       topic: a.topic,
       dek: a.dek,
       meta: a.publishedLabel + ' · ' + a.times.read + ' min read',
-      slides: a.deck.slides.map((s) => ({ text: s.text })),
+      slides: a.deck.slides,
       times: { read: a.times.read, tldr: a.times.tldr, listen: a.times.listen },
       shareUrl: a.deck.shareUrl,
     };

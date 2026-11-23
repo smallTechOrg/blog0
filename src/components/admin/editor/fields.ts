@@ -12,12 +12,13 @@ export interface EditorFields {
   isFeatured: boolean;
   featuredRank: number | null;
   inProgress: boolean;
+  mediaOnly: boolean;
 }
 
 export type FieldPatch = Omit<UpdateArticleRequest, 'baseRevisionId'>;
 
 const KEYS: Array<keyof EditorFields> = [
-  'title', 'dek', 'bodyMd', 'topic', 'slug', 'isFeatured', 'featuredRank', 'inProgress',
+  'title', 'dek', 'bodyMd', 'topic', 'slug', 'isFeatured', 'featuredRank', 'inProgress', 'mediaOnly',
 ]; // not bylineName: it is the author's display name, never sent (owner decision 2026-11-09)
 
 export function fieldsFrom(a: ArticleDetailDto): EditorFields {
@@ -31,6 +32,7 @@ export function fieldsFrom(a: ArticleDetailDto): EditorFields {
     isFeatured: a.isFeatured,
     featuredRank: a.featuredRank,
     inProgress: a.inProgress,
+    mediaOnly: a.mediaOnly,
   };
 }
 
