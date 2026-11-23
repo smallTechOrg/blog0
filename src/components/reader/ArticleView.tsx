@@ -67,8 +67,8 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
   const readRef = useRef<HTMLDivElement>(null);
 
   const slides = useMemo(
-    () => (a.deck ? buildDeckSlides(a.title, a.dek, a.deck.slides, { intro: !a.mediaOnly }) : []),
-    [a.deck, a.title, a.dek, a.mediaOnly],
+    () => (a.deck ? buildDeckSlides(a.title, a.dek, a.deck.slides) : []),
+    [a.deck, a.title, a.dek],
   );
 
   function pickMode(k: ReaderMode) {

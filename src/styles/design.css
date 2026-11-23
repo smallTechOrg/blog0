@@ -1272,3 +1272,21 @@ table.data td.neg { color: var(--accent-ink); }
 @media (min-width: 1240px) {
   .arthead h1 { font-size: 44px; }
 }
+
+/* SMA-49: a picture slide is the picture — the whole slide, fitted by aspect ratio (never cropped) */
+.tdeck__slide:has(.tdeck__card--photo) { padding: 8px 12px 18px; }
+.tdeck__card.tdeck__card--photo {
+  display: flex; flex-direction: column; gap: 12px; align-items: stretch;
+  width: 100%; max-width: none; height: 100%; margin: 0;
+}
+.tdeck__photoframe { position: relative; flex: 1 1 0; min-height: 0; }
+.tdeck__photoimg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; display: block; border-radius: 4px;
+}
+.tdeck__photofoot { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; }
+.tdeck__cap {
+  margin: 0; text-align: center; max-width: 60ch;
+  font-family: var(--font-body, var(--font-head)); font-size: clamp(15px, 1.7vw, 21px); line-height: 1.35; color: var(--text);
+}
+@media (min-width: 720px) { .tdeck__slide:has(.tdeck__card--photo) { padding: 10px 24px 20px; } }
