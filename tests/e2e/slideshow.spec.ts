@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test';
 import { createArticleApi, originOf, signIn } from './helpers/admin';
 import { IMAGE_FIXTURE } from './helpers/upload';
 
-test('slideshow-only post: add images to the deck, publish, and the public page is just the deck', async ({ page }, testInfo) => {
+test('slideshow-only post: add images to the deck, publish, and the public page is the deck (title card, then full-screen pictures)', async ({ page }, testInfo) => {
   await signIn(page);
   const article = await createArticleApi(page.request, originOf(testInfo), { title: 'Pictures only walk', topic: 'Photos' });
 
@@ -33,11 +33,18 @@ test('slideshow-only post: add images to the deck, publish, and the public page 
   await page.goto(href);
   const deck = page.getByRole('dialog', { name: /Summary of Pictures only walk/ });
   await expect(deck).toBeVisible();
-  // the first slide is the picture (no title card), with its caption and alt text
-  const img = deck.locator('.tdeck__figimg').first();
+  // the deck opens on the title card (title + dek), like every other TLDR deck
+  await expect(deck.locator('.tdeck__big')).toHaveText('Pictures only walk');
+  await page.keyboard.press('ArrowRight');
+  // the picture fills the slide: fitted, not cropped, with its caption and alt text
+  const img = deck.locator('.tdeck__photoimg');
   await expect(img).toHaveAttribute('src', /^\/media\//);
   await expect(img).toHaveAttribute('alt', 'A test chart');
+  await expect(img).toHaveCSS('object-fit', 'contain');
   await expect(deck.getByText('The first picture')).toBeVisible();
+  const [frame, view] = await Promise.all([deck.locator('.tdeck__photoframe').boundingBox(), page.viewportSize()]);
+  expect(frame!.width).toBeGreaterThan(view!.width * 0.8);
+  expect(frame!.height).toBeGreaterThan(view!.height * 0.4);
   // no Read / Listen to hand over to
   await expect(page.getByRole('tablist', { name: 'How to take this in' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Read the full article' })).toHaveCount(0);

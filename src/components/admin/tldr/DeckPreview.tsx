@@ -18,7 +18,7 @@ export interface DeckPreviewProps {
   dateLabel: string;
   readMinutes: number;
   lines: readonly DeckLine[];
-  /** A slideshow-only post: no title card, no Read hand-over. */
+  /** A slideshow-only post: no Read hand-over. */
   mediaOnly?: boolean;
   shareLink?: string;
   onClose: () => void;
@@ -29,7 +29,6 @@ export function DeckPreview({ title, dek, topic, dateLabel, readMinutes, lines, 
     title,
     dek,
     lines.map((l) => (l.image ? { text: l.text, image: { url: l.image.url, alt: l.image.alt } } : { text: l.text })),
-    { intro: !mediaOnly },
   );
   const tldr = tldrMinutes(slides);
   const deck = (

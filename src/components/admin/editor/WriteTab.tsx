@@ -1,10 +1,11 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { ArticleDetailDto } from '@/lib/api/dto';
 import { ARTICLE_LIMITS } from '@/lib/articles/limits';
 
+import { NEW_ARTICLE_TITLE } from '../NewArticleStart';
 import { AssistantPanel } from './AssistantPanel';
 import type { EditorFields } from './fields';
 import { LivePreview } from './LivePreview';
@@ -41,6 +42,18 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
     }
   }
   const id = article.id;
+  // A brand-new draft (SMA-50: "New article" opens this editor on an empty "Untitled" draft): focus
+  // the title with "Untitled" selected, so the first keystroke names the article.
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const a = article;
+    if (a.currentRevision.number === 1 && a.currentRevision.title === NEW_ARTICLE_TITLE && a.currentRevision.bodyMd === '') {
+      titleRef.current?.focus();
+      titleRef.current?.select();
+    }
+    // only when the editor opens on this article
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article.id]);
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const imageRef = useRef<ImageUploadHandle>(null);
   const paste = usePasteImages(id, editorRef, imageRef);
@@ -51,6 +64,7 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
         <label className="admin-field writetab__title">
           <span className="admin-label">Title</span>
           <input
+            ref={titleRef}
             className="admin-input admin-input--title"
             value={fields.title}
             maxLength={ARTICLE_LIMITS.title}
@@ -166,8 +180,8 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
         </div>
       </details>
 
-      <div className="split" data-pane={pane} data-side={side}>
-        <div className="split__toggle modes" role="group" aria-label="Show">
+      <div className="edsplit" data-pane={pane} data-side={side}>
+        <div className="edsplit__toggle modes" role="group" aria-label="Show">
           <button type="button" className={pane === 'write' ? 'mode is-on' : 'mode'} aria-pressed={pane === 'write'} onClick={() => show('write')}>
             Write
           </button>
@@ -188,7 +202,7 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
             Assistant{fresh > 0 ? <span className="tabchip">{fresh}</span> : null}
           </button>
         </div>
-        <div className="split__write">
+        <div className="edsplit__write">
           <MarkdownEditor
             ref={editorRef}
             id={`md-${id}`}
@@ -225,8 +239,8 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
             }
           />
         </div>
-        <div className="split__side">
-          <div className="split__sidetabs modes" role="group" aria-label="Side panel">
+        <div className="edsplit__side">
+          <div className="edsplit__sidetabs modes" role="group" aria-label="Side panel">
             <button type="button" className={side === 'preview' ? 'mode is-on' : 'mode'} aria-pressed={side === 'preview'} onClick={() => setSide('preview')}>
               Preview
             </button>
@@ -239,7 +253,7 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
               Assistant{fresh > 0 ? <span className="tabchip">{fresh}</span> : null}
             </button>
           </div>
-          <div className="split__preview">
+          <div className="edsplit__preview">
             <LivePreview
               title={fields.title}
               dek={fields.dek}
@@ -250,7 +264,7 @@ export function WriteTab({ article, fields, onField, dateLabel, timeZone }: Writ
               dateLabel={dateLabel}
             />
           </div>
-          <div className="split__assist">
+          <div className="edsplit__assist">
             <AssistantPanel assistant={assistant} timeZone={timeZone} />
           </div>
         </div>

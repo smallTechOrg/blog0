@@ -103,17 +103,20 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
   test('New article → paste Markdown → the editor shows "Saved · rev 1" and a live Read preview', async () => {
     const { page } = journey();
     await page.getByRole('link', { name: 'New article' }).click();
-    await expect(page.getByRole('heading', { name: 'New article' })).toBeVisible();
-
-    await page.getByLabel('Title').fill(TITLE);
-    await page.getByLabel('Topic').fill(TOPIC);
-    await page.getByLabel('Dek').fill(DEK);
-    await page.getByLabel(/^Markdown/).fill(MARKDOWN);
-    await page.getByRole('button', { name: 'Create' }).click();
-
+    // SMA-50: New article opens the very same editor, on an empty "Untitled" draft
     await expect(page).toHaveURL(/\/admin\/articles\/[0-9a-f-]{36}$/);
     j.articleId = page.url().split('/').pop()!;
     await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 1');
+    await expect(page.getByRole('textbox', { name: 'Title' })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Assistant' })).toBeVisible();
+    await expect(page.getByText('Settings', { exact: true })).toBeVisible();
+
+    await page.getByRole('textbox', { name: 'Title' }).fill(TITLE);
+    await page.getByLabel('Topic').fill(TOPIC);
+    await page.getByLabel('Dek').fill(DEK);
+    await page.getByLabel('Markdown', { exact: true }).fill(MARKDOWN);
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 2');
     await expect(page.getByLabel('Markdown', { exact: true })).toHaveValue(MARKDOWN);
     const preview = page.getByRole('region', { name: 'Live preview' });
     await expect(preview.getByRole('heading', { level: 1, name: TITLE })).toBeVisible();
@@ -437,7 +440,7 @@ test.describe('golden path: paste → TLDR → publish → read', () => {
     await expect(page.locator('.pubbar__state')).toHaveText('Unsaved changes');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
 
-    await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 2');
+    await expect(page.locator('.pubbar__state')).toHaveText('Saved · rev 3');
     await expect(page.locator('#tab-tldr .tabchip')).toHaveText('stale');
     await page.getByRole('tab', { name: /^TLDR/ }).click();
     await expect(page.locator('#panel-tldr .tldrtab__stale')).toBeVisible();

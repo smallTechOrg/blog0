@@ -68,7 +68,7 @@ test('the writing assistant comments while you write (fake provider)', async ({ 
     bodyMd: 'The lighthouse was built in 1887.',
   });
   await page.goto(`/admin/articles/${article.id}`);
-  const side = page.locator('.split__side');
+  const side = page.locator('.edsplit__side');
   await side.getByRole('button', { name: /^Assistant/ }).click();
 
   // No provider: the panel says how to turn it on.

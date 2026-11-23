@@ -362,7 +362,7 @@ export function TldrDeck(props: TldrDeckProps) {
         {slides.map((raw, i) => {
           const sl = tdeckSlide(raw);
           /* an image, when there is one, always gets the split figure layout */
-          const lay: DeckLayout = sl.img ? 'split' : layout;
+          const lay: DeckLayout | 'photo' = sl.img ? 'photo' : layout;
           const d = i - idx;
           /* the card drifts against the track and fades off-centre */
           const cardStyle: CSSProperties = {
@@ -404,21 +404,21 @@ export function TldrDeck(props: TldrDeckProps) {
                 {tail}
               </>
             );
-          } else if (lay === 'split' && sl.img) {
+          } else if (lay === 'photo' && sl.img) {
+            /* a picture takes the whole slide: fitted (never cropped) to the room there is, by its own
+               aspect ratio; the caption and, on the last slide, the end buttons sit under it */
             inner = (
               <>
-                <div key="f" className="tdeck__figbox">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- design markup; deck art is user content */}
-                  <img className="tdeck__figimg" src={sl.img} alt={sl.alt || ''} />
+                <div key="f" className="tdeck__photoframe">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- deck art is user content */}
+                  <img className="tdeck__photoimg" src={sl.img} alt={sl.alt || ''} />
                 </div>
-                <div key="g" className="tdeck__fig">
-                  {sl.text ? (
-                    <p className="tdeck__body" style={{ fontSize: tldrType(sl) }}>
-                      {sl.text}
-                    </p>
-                  ) : null}
-                  {tail}
-                </div>
+                {sl.text || tail ? (
+                  <div key="g" className="tdeck__photofoot">
+                    {sl.text ? <p className="tdeck__cap">{sl.text}</p> : null}
+                    {tail}
+                  </div>
+                ) : null}
               </>
             );
           } else {
