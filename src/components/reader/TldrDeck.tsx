@@ -57,6 +57,8 @@ export interface TldrDeckProps {
   /** A slideshow-only post (SMA-49): no Read / Listen to hand over to, so the mode capsule and the
    *  "Read the full article" button are left out. */
   slideshow?: boolean;
+  /** SMA-51: the desk editor for this article; set only for a signed-in author/admin. */
+  editHref?: string;
 }
 
 type TouchState = { x: number; y: number; axis: 'x' | 'y' | null; w: number; last?: number };
@@ -348,6 +350,11 @@ export function TldrDeck(props: TldrDeckProps) {
         >
           {playing ? '❙❙' : '▶'}
         </button>
+        {props.editHref ? (
+          <a className="editlink" href={props.editHref}>
+            Edit
+          </a>
+        ) : null}
         <button className="tdeck__x" type="button" onClick={onClose} aria-label="Close summary">
           <Icon name="close" size={14} />
         </button>

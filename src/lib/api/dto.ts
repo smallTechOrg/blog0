@@ -140,6 +140,8 @@ export interface TldrStateDto {
   draft: { slides: DeckSlideDto[]; revisionId: string; updatedAt: string; updatedBy: string } | null;
   published: { slides: Array<{ text: string; image?: { url: string; alt: string } }>; publishedAt: string } | null;
   latestGeneration: GenerationDto | null;
+  /** SMA-53: the images the article already shows (current revision, document order) — the editor offers them for the deck. */
+  articleImages: DeckImageDto[];
   /** False when no AI provider is set up (Admin → Site → AI provider): Generate is disabled. */
   aiAvailable: boolean;
 }

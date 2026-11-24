@@ -76,3 +76,40 @@ export async function loadImageDims(siteId: string, srcs: readonly string[]): Pr
   }
   return dims;
 }
+
+export interface ArticleImageAsset {
+  assetId: string;
+  key: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * The site's image assets the Markdown body shows (SMA-53: the TLDR editor offers them for the
+ * deck), in document order, each once. Unknown keys and assets without dimensions are left out.
+ */
+export async function loadArticleImageAssets(siteId: string, bodyMd: string): Promise<ArticleImageAsset[]> {
+  const keys = mediaImageSrcs(bodyMd)
+    .map(storageKeyOf)
+    .filter((k): k is string => k !== null);
+  if (keys.length === 0) return [];
+  const rows = await getDb()
+    .select({ id: mediaAsset.id, storageKey: mediaAsset.storageKey, width: mediaAsset.width, height: mediaAsset.height })
+    .from(mediaAsset)
+    .where(
+      and(
+        eq(mediaAsset.siteId, siteId),
+        eq(mediaAsset.kind, 'image'),
+        inArray(mediaAsset.storageKey, keys),
+        isNotNull(mediaAsset.width),
+        isNotNull(mediaAsset.height),
+      ),
+    );
+  const byKey = new Map(rows.map((r) => [r.storageKey, r]));
+  const out: ArticleImageAsset[] = [];
+  for (const key of keys) {
+    const r = byKey.get(key);
+    if (r && r.width && r.height) out.push({ assetId: r.id, key, width: r.width, height: r.height });
+  }
+  return out;
+}

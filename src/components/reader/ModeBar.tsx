@@ -11,9 +11,11 @@ export interface ModeBarProps {
   onClose: () => void;
   /** The X's label; defaults to "Back to all articles" (Read) / "Close the player" (Listen). */
   closeLabel?: string;
+  /** SMA-51: the desk editor for this article — only passed to a signed-in author/admin. */
+  editHref?: string;
 }
 
-export function ModeBar({ mode, title, onClose, closeLabel }: ModeBarProps) {
+export function ModeBar({ mode, title, onClose, closeLabel, editHref }: ModeBarProps) {
   const listening = mode === 'listen';
   return (
     <div className="modebar">
@@ -22,6 +24,11 @@ export function ModeBar({ mode, title, onClose, closeLabel }: ModeBarProps) {
         <span className="modebar__sep" aria-hidden="true" />
         <span className="modebar__title">{title}</span>
       </div>
+      {editHref ? (
+        <a className="editlink" href={editHref}>
+          Edit
+        </a>
+      ) : null}
       <button
         className="modebar__x"
         type="button"

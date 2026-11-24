@@ -16,7 +16,7 @@ import type {
 
 import { AdminLoadError, useAdminLoad } from '../AdminLoad';
 import { apiRequest, articleApi } from '../api';
-import { boundsHint, FORMAT_STATUS_LABEL, generationMeta } from '../labels';
+import { FORMAT_STATUS_LABEL, generationMeta } from '../labels';
 import { DeckList } from '../tldr/DeckList';
 import { DeckPreview } from '../tldr/DeckPreview';
 import {
@@ -304,6 +304,9 @@ export function TldrTab(props: TldrTabProps) {
   // No AI provider set up (SMA-44; spec/ui.md §4): Generate disabled + notice.
   const aiAvailable = tldr?.aiAvailable !== false;
 
+  const articleImages = tldr?.articleImages ?? [];
+  const inDeck = new Set(deck.lines.filter((l) => l.image).map((l) => l.sid));
+
   return (
     <div className="tldrtab">
       <div className="tldrtab__head">
@@ -311,36 +314,12 @@ export function TldrTab(props: TldrTabProps) {
           <span className={`fchip fchip--${status}`} data-status={status}>
             TLDR {FORMAT_STATUS_LABEL[status] ?? status}
           </span>
-          <span className="admin-hint">{boundsHint(tldr?.bounds ?? null, tldr ? tldr.eligibleCount : undefined)}</span>
         </div>
-        <button
-          type="button"
-          className="admin-btn admin-btn--primary"
-          onClick={() => void generate()}
-          disabled={inFlight || busy !== null || noEligible || !aiAvailable}
-          aria-busy={inFlight}
-          title={
-            !aiAvailable ? 'No AI provider set up' : noEligible ? 'The saved article has no sentences of 5+ words for the AI' : undefined
-          }
-        >
-          {inFlight ? <span className="spinner" aria-hidden="true" /> : null}
-          {generateLabel}
-        </button>
       </div>
 
-      {!aiAvailable ? (
-        <p className="stub" role="note" data-testid="ai-no-provider">
-          <span className="stub__label">No AI provider set up</span> — add an endpoint, model and API key in{' '}
-          <a href="/admin/site#ai">Site → AI provider</a> to generate with AI. You can still pick lines yourself from the article on the
-          right.
-        </p>
-      ) : null}
-      {latest && latest.status === 'succeeded' && !failure ? (
-        <p className="tldrtab__meta mono">{generationMeta(latest, now, timeZone)}</p>
-      ) : null}
       {status === 'stale' ? (
         <p className="tldrtab__stale">
-          The text changed since this deck was saved. Fix flagged lines or regenerate (one AI call) — the live page keeps its
+          Some lines in the deck are no longer in the article. Remove or replace the flagged lines — the live page keeps its
           published deck until you publish.
         </p>
       ) : null}
@@ -348,25 +327,6 @@ export function TldrTab(props: TldrTabProps) {
         <p className="admin-hint">
           The lines below come from the last save (rev {article.currentRevision.number}). Save to pick from your latest text.
         </p>
-      ) : null}
-
-      {failure || (latest?.status === 'failed' && !isRunning) ? (
-        <div className="failcard" role="alert">
-          <p>
-            The AI couldn’t make a deck: {trimStop(failure?.message ?? latest?.errorMessage ?? 'unknown error')}.
-          </p>
-          <p>
-            <button
-              type="button"
-              className="admin-btn admin-btn--small"
-              onClick={() => void generate()}
-              disabled={inFlight || noEligible || !aiAvailable}
-            >
-              Try again
-            </button>{' '}
-            <span className="admin-muted">or pick lines yourself from the article on the right.</span>
-          </p>
-        </div>
       ) : null}
 
       {notice ? (
@@ -383,8 +343,8 @@ export function TldrTab(props: TldrTabProps) {
           </h2>
           {deck.lines.length === 0 ? (
             <p className="tldrtab__empty">
-              No deck yet. The AI scores every sentence of the saved article for relevance and puts the top 4–8 in the deck, word
-              for word. One call, usually well under a cent.
+              No deck yet. Tick lines from the article on the right, or add pictures below — then order them here. Each line is shown word
+              for word.
             </p>
           ) : (
             <DeckList
@@ -395,38 +355,62 @@ export function TldrTab(props: TldrTabProps) {
               onEditImage={(sid, patch) => setDeck((prev) => ({ ...prev, lines: editImage(prev.lines, sid, patch) }))}
             />
           )}
-          <p className="tldrtab__addimg">
-            <input
-              ref={fileInput}
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              multiple
-              hidden
-              data-testid="deck-image-input"
-              onChange={(e) => void addImages(e.target.files)}
-            />
-            <button
-              type="button"
-              className="admin-btn admin-btn--small"
-              onClick={() => fileInput.current?.click()}
-              disabled={uploading || inFlight || busy !== null}
-              aria-busy={uploading}
-            >
-              {uploading ? 'Uploading…' : 'Add image'}
-            </button>{' '}
-            <span className="admin-hint">PNG, JPEG, WebP or GIF. Add a caption and alt text under each picture.</span>
-          </p>
+
+          <div className="tldrtab__images">
+            <h3 className="tldrtab__sub">Add a picture</h3>
+            {articleImages.length > 0 ? (
+              <ul className="imgpick" aria-label="Images in this article">
+                {articleImages.map((img) => {
+                  const sid = `img:${img.assetId}`;
+                  const added = inDeck.has(sid);
+                  return (
+                    <li key={img.assetId} className="imgpick__item">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- admin thumbnail of an uploaded image */}
+                      <img className="imgpick__thumb" src={img.url} alt="" width={96} />
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--small"
+                        disabled={added || inFlight || busy !== null}
+                        onClick={() => setDeck((prev) => ({ ...prev, lines: addImage(prev.lines, imageLine({ id: img.assetId, key: img.key, url: img.url, mimeType: 'image/png', bytes: 0, width: img.width, height: img.height }, img.alt)) }))}
+                        aria-label={added ? 'Already in the deck' : 'Add this image to the deck'}
+                      >
+                        {added ? 'In deck' : 'Add'}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+            <p className="tldrtab__addimg">
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                hidden
+                data-testid="deck-image-input"
+                onChange={(e) => void addImages(e.target.files)}
+              />
+              <button
+                type="button"
+                className="admin-btn admin-btn--small"
+                onClick={() => fileInput.current?.click()}
+                disabled={uploading || inFlight || busy !== null}
+                aria-busy={uploading}
+              >
+                {uploading ? 'Uploading…' : 'Upload a new image'}
+              </button>{' '}
+              <span className="admin-hint">
+                {articleImages.length > 0 ? 'Or pick one the article already shows, above. ' : ''}PNG, JPEG, WebP or GIF; add a caption and alt text under each.
+              </span>
+            </p>
+          </div>
         </section>
         <section className="tldrtab__col" aria-labelledby={`lines-h-${articleId}`}>
           <h2 className="tldrtab__h" id={`lines-h-${articleId}`}>
             Article lines <span className="admin-faint">({sentences.length})</span>
           </h2>
-          <SentencePicker
-            sentences={sentences}
-            chosen={chosen}
-            onToggle={toggle}
-            disabled={inFlight || busy !== null}
-          />
+          <SentencePicker sentences={sentences} chosen={chosen} onToggle={toggle} disabled={inFlight || busy !== null} />
         </section>
       </div>
 
@@ -443,11 +427,6 @@ export function TldrTab(props: TldrTabProps) {
         >
           Preview deck
         </button>
-        {latest?.status === 'succeeded' && latest.picks && latest.picks.length > 0 ? (
-          <button type="button" className="admin-btn admin-btn--ghost" onClick={resetToJev} disabled={inFlight || busy !== null}>
-            Reset to the AI’s picks
-          </button>
-        ) : null}
         {deck.lines.length > 0 || hasDraft ? (
           <button type="button" className="admin-btn admin-btn--ghost" onClick={() => void clearDeck()} disabled={inFlight || busy !== null}>
             {busy === 'clear' ? 'Clearing…' : 'Clear deck'}
@@ -455,6 +434,61 @@ export function TldrTab(props: TldrTabProps) {
         ) : null}
         {saveHint ? <span className="admin-hint">{saveHint}</span> : null}
       </div>
+
+      {/* SMA-52: building the deck by hand is the default; the AI is an optional add-on down here */}
+      <section className="tldrtab__ai" aria-labelledby={`ai-h-${articleId}`}>
+        <h2 className="tldrtab__h" id={`ai-h-${articleId}`}>
+          Fill the deck with AI <span className="admin-faint">(optional)</span>
+        </h2>
+        <p className="admin-hint">
+          The AI reads the saved article and puts its strongest lines in the deck, replacing what is there. One call, usually well under a cent.
+        </p>
+        {!aiAvailable ? (
+          <p className="stub" role="note" data-testid="ai-no-provider">
+            <span className="stub__label">No AI provider set up</span> — add an endpoint, model and API key in{' '}
+            <a href="/admin/site#ai">Site → AI provider</a> to use this.
+          </p>
+        ) : null}
+        <div className="tldrtab__aiactions">
+          <button
+            type="button"
+            className="admin-btn"
+            onClick={() => void generate()}
+            disabled={inFlight || busy !== null || noEligible || !aiAvailable}
+            aria-busy={inFlight}
+            title={
+              !aiAvailable ? 'No AI provider set up' : noEligible ? 'The saved article has no sentences of 5+ words for the AI' : undefined
+            }
+          >
+            {inFlight ? <span className="spinner" aria-hidden="true" /> : null}
+            {generateLabel}
+          </button>
+          {latest?.status === 'succeeded' && latest.picks && latest.picks.length > 0 ? (
+            <button type="button" className="admin-btn admin-btn--ghost" onClick={resetToJev} disabled={inFlight || busy !== null}>
+              Reset to the AI’s picks
+            </button>
+          ) : null}
+        </div>
+        {latest && latest.status === 'succeeded' && !failure ? (
+          <p className="tldrtab__meta mono">{generationMeta(latest, now, timeZone)}</p>
+        ) : null}
+        {failure || (latest?.status === 'failed' && !isRunning) ? (
+          <div className="failcard" role="alert">
+            <p>The AI couldn’t make a deck: {trimStop(failure?.message ?? latest?.errorMessage ?? 'unknown error')}.</p>
+            <p>
+              <button
+                type="button"
+                className="admin-btn admin-btn--small"
+                onClick={() => void generate()}
+                disabled={inFlight || noEligible || !aiAvailable}
+              >
+                Try again
+              </button>{' '}
+              <span className="admin-muted">or build the deck yourself above.</span>
+            </p>
+          </div>
+        ) : null}
+      </section>
 
       {previewing ? (
         <DeckPreview

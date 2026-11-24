@@ -11,7 +11,7 @@ import { confirmLeave, LEAVE_EDITOR_CONFIRM, PublishBar } from '@/components/adm
 import { AudioUploader, CONFIRM_REMOVE, UNSAVED_TEXT_HINT } from '@/components/admin/listen/AudioUploader';
 import { FormatChips } from '@/components/admin/FormatChips';
 import { DeckList } from '@/components/admin/tldr/DeckList';
-import { groupByHeading, NO_SCORES_TITLE, SentencePicker } from '@/components/admin/tldr/SentencePicker';
+import { groupByHeading, SentencePicker } from '@/components/admin/tldr/SentencePicker';
 import type { ArticleDetailDto, ArticleListItemDto, FormatChipDto, ListenStateDto, SentenceDto } from '@/lib/api/dto';
 
 const CHIPS: FormatChipDto[] = [
@@ -77,7 +77,7 @@ function metaLines(html: string): string[] {
 }
 
 describe('DeckList', () => {
-  it('numbers lines, shows source + relevance (no reasons) and flags vanished lines with labelled controls', () => {
+  it('numbers lines, shows who added each line (no relevance, no reasons) and flags vanished lines with labelled controls', () => {
     const html = renderToStaticMarkup(
       <DeckList
         lines={[
@@ -92,9 +92,8 @@ describe('DeckList', () => {
     );
 
     expect(html).toContain('>01<');
-    expect(metaLines(html)).toEqual(['AI · relevance 0.82', 'Added by you', 'Added by you · relevance 0.41', 'AI']);
-    expect(html).toContain('<span class="tldr-rel mono">relevance 0.82</span>');
-    expect(html).not.toMatch(/reason|Jev/i);
+    expect(metaLines(html)).toEqual(['AI', 'Added by you', 'Added by you', 'AI']);
+    expect(html).not.toMatch(/reason|Jev|relevance/i); // SMA-52: no scores anywhere in the deck
     expect(html).toContain('No longer in the article');
     expect(html).toContain('aria-label="Move line 1 up"');
     expect(html).toContain('aria-label="Remove line 2"');
@@ -293,39 +292,15 @@ describe('SentencePicker', () => {
     );
   }
 
-  it('defaults to By relevance when scores exist: one flat list, highest first, unscored last, each with score and section', () => {
+  it('SMA-52: lists the lines in article order under their heading paths, with no sort switch and no relevance', () => {
     const html = render(SCORED);
 
-    expect(html).toContain('role="radiogroup" aria-label="Sort article lines"');
-    expect(html).toMatch(/aria-checked="true"[^>]*data-order="relevance"/);
-    expect(rowSids(html)).toEqual(['s1', 's3', 's0', 's2']);
-    expect(html).not.toContain('<fieldset');
-    expect(html).toContain('relevance 0.95');
-    expect(html).toContain('<span class="picker__sec">Intro</span>');
-    expect(html).toContain('<span class="picker__sec">Detail</span>');
-    expect(html).not.toContain(NO_SCORES_TITLE);
-    expect(html).toMatch(/class="picker__line is-on" data-sid="s1"/);
-  });
-
-  it('In article order: the grouped list under heading paths, each row with its relevance label', () => {
-    const html = render(SCORED, { initialOrder: 'article' });
-
-    expect(html).toMatch(/aria-checked="true"[^>]*data-order="article"/);
     expect(rowSids(html)).toEqual(['s0', 's1', 's2', 's3']);
+    expect(html).toContain('<legend class="picker__head">Intro</legend>');
     expect(html).toContain('<legend class="picker__head">Part one</legend>');
     expect(html).toContain('<legend class="picker__head">Part one › Detail</legend>');
-    expect(html).toContain('relevance 0.60');
-    expect(html).not.toContain('picker__sec');
-  });
-
-  it('with no scores: article order, the switch disabled with "No scores yet — generate with AI", no relevance labels', () => {
-    const html = render(SCORED.map((x) => ({ ...x, relevance: null })), { initialOrder: 'relevance' });
-
-    expect(rowSids(html)).toEqual(['s0', 's1', 's2', 's3']);
-    expect(html).toMatch(/aria-checked="true"[^>]*data-order="article"/);
-    expect(html).toContain(`title="${NO_SCORES_TITLE}"`);
-    expect((html.match(/role="radio"[^>]*disabled=""/g) ?? []).length).toBe(2);
-    expect(html).not.toContain('tldr-rel');
+    expect(html).not.toMatch(/radiogroup|relevance|tldr-rel|picker__sec/);
+    expect(html).toMatch(/class="picker__line is-on" data-sid="s1"/);
   });
 
   it('shows the empty state when the saved article has no sentences', () => {

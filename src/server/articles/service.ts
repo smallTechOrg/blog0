@@ -35,6 +35,7 @@ import {
   takenSlugs,
   userNames,
 } from './repo';
+import { rebaseDeckOnRevision } from './deck-rebase';
 import type { CreateArticleBody, UpdateArticleBody } from './schemas';
 import { slugify, uniqueSlug } from './slug';
 import { buildArticleDetail, buildChips, renderRevision, toListItem } from './views';
@@ -234,6 +235,7 @@ export async function updateArticle(
       if (contentChanged) {
         const rev = await insertRevision(tx, { siteId: ctx.siteId, articleId: row.id, userId: ctx.user.id, content });
         patch.currentRevisionId = rev.id;
+        await rebaseDeckOnRevision(tx, ctx.siteId, row.id, rev);
       }
       if (Object.keys(patch).length > 0) {
         await tx.update(article).set(patch).where(and(eq(article.id, row.id), eq(article.siteId, ctx.siteId)));

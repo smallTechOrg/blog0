@@ -32,9 +32,11 @@ export interface ArticleViewProps {
   initialMode?: ArticleInitialMode;
   /** The site record's wordmark — the brand in every outgoing share text (spec/capabilities/paragraph-share.md). */
   brand?: string;
+  /** SMA-51: the desk editor for this article; set only for a signed-in author/admin. */
+  editHref?: string;
 }
 
-export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK_BRAND }: ArticleViewProps) {
+export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK_BRAND, editHref }: ArticleViewProps) {
   const router = useRouter();
   const [mode, setMode] = useState<'read' | 'listen'>(initialMode === 'listen' && a.listen != null ? 'listen' : 'read');
   /* the deck is part of the address: /p/<slug>/tldr opens it, closing returns to /p/<slug> */
@@ -95,6 +97,7 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
           brand={brand}
           times={{ read: 0, tldr: a.times.tldr ?? 1, listen: null }}
           slideshow
+          editHref={editHref}
           onClose={() => router.push('/')}
         />
       </main>
@@ -107,6 +110,7 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
         <ModeBar
           mode={listening ? 'listen' : 'read'}
           title={a.title}
+          editHref={editHref}
           onClose={() => {
             if (listening) setMode('read');
             else router.push('/');
@@ -150,6 +154,7 @@ export function ArticleView({ article: a, initialMode = 'read', brand = FALLBACK
             meta={a.publishedLabel + ' · ' + a.times.read + ' min read'}
             shareLink={a.deck.shareUrl}
             brand={brand}
+            editHref={editHref}
             times={{ read: a.times.read, tldr: a.times.tldr, listen: a.times.listen }}
             onClose={() => setDeck(false)}
             onRead={() => {
